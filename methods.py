@@ -24,8 +24,9 @@ voters = np.concatenate(([0.0], beta_weights.create_voters(n_part), [1.0]))
 grid_size = len(voters)
 voters2d = create_voters2d(voters)
 distance = calculate_distance(voters2d, CANDIDATES)
-cardinal_dist = np.argsort(distance, axis=1).argsort()
-_rank_prefs = np.argsort(cardinal_dist, axis=1).reshape(grid_size, grid_size, N_CANDIDATES)
+cardinal_dist = np.argsort(distance, axis=1).argsort().astype(np.uint8)
+_rank_prefs = np.argsort(cardinal_dist, axis=1).reshape(
+    grid_size, grid_size, N_CANDIDATES).astype(np.uint8)
 n_voters = grid_size * grid_size
 prefs_flat = _rank_prefs.reshape(n_voters, N_CANDIDATES)
 prefs_indicator = np.eye(N_CANDIDATES, dtype=weights.dtype)[prefs_flat]
@@ -258,14 +259,16 @@ def winners_pixels(method: Callable[[], np.ndarray]) -> np.ndarray:
     print(f"Time taken: {time.perf_counter() - start_time} seconds")
     return winners
 
-if not os.path.exists('winners'):
-    os.makedirs('winners')
 
-np.save('winners/fptp.npy', winners_pixels(first_past_the_post))
-np.save('winners/borda.npy', winners_pixels(borda_count))
-np.save('winners/black.npy', winners_pixels(black))
-np.save('winners/irv.npy', winners_pixels(instant_runoff))
-np.save('winners/schulze.npy', winners_pixels(schulze))
-np.save('winners/baldwin.npy', winners_pixels(baldwin))
-np.save('winners/approval.npy', winners_pixels(lambda: approval_naive(threshold=0.5)))
-np.save('winners/condorcet_failure.npy', winners_pixels(condorcet_failure))
+if __name__ == "__main__":
+    if not os.path.exists('winners'):
+        os.makedirs('winners')
+
+    np.save('winners/fptp.npy', winners_pixels(first_past_the_post))
+    np.save('winners/borda.npy', winners_pixels(borda_count))
+    np.save('winners/black.npy', winners_pixels(black))
+    np.save('winners/irv.npy', winners_pixels(instant_runoff))
+    np.save('winners/schulze.npy', winners_pixels(schulze))
+    np.save('winners/baldwin.npy', winners_pixels(baldwin))
+    np.save('winners/approval.npy', winners_pixels(lambda: approval_naive(threshold=0.5)))
+    np.save('winners/condorcet_failure.npy', winners_pixels(condorcet_failure))
