@@ -252,6 +252,92 @@ def condorcet_failure() -> np.ndarray:
   has_condorcet, winner = _condorcet_winner()
   return np.where(has_condorcet, winner, N_CANDIDATES)
 
+def descending_solid_coalitions() -> np.ndarray:
+    """Return the DSC winner for every pixel."""
+    ranks = cardinal_dist.reshape(grid_size, grid_size, N_CANDIDATES)
+    candidate_ids = np.arange(N_CANDIDATES)
+    n_coalitions = 1 << N_CANDIDATES
+    coalition_scores = np.zeros(
+        (PIXELS, PIXELS, n_coalitions),
+        dtype=weights.dtype,
+    )
+
+    for coalition in range(1, n_coalitions):
+        members = ((coalition >> candidate_ids) & 1).astype(bool)
+        inside = candidate_ids[members]
+        outside = candidate_ids[~members]
+
+        if outside.size == 0:
+            solid = np.ones((grid_size, grid_size), dtype=bool)
+        else:
+            highest_inside = ranks[..., inside].max(axis=-1)
+            lowest_outside = ranks[..., outside].min(axis=-1)
+            solid = highest_inside < lowest_outside
+
+        coalition_scores[..., coalition] = aggregate(
+            solid[..., np.newaxis].astype(weights.dtype)
+        )[..., 0]
+
+    coalition_order = np.argsort(-coalition_scores, axis=-1, kind="stable")
+    eligible = np.ones((PIXELS, PIXELS, N_CANDIDATES), dtype=bool)
+
+    for position in range(n_coalitions - 1):
+        coalition = coalition_order[..., position]
+        coalition_members = (
+            (coalition[..., np.newaxis] >> candidate_ids) & 1
+        ).astype(bool)
+        remaining = eligible & coalition_members
+        valid = remaining.any(axis=-1)
+        eligible = np.where(valid[..., np.newaxis], remaining, eligible)
+
+        if np.all(eligible.sum(axis=-1) == 1):
+            break
+
+    return eligible.argmax(axis=-1)
+
+def descending_acquiescing_coalitions() -> np.ndarray:
+    """Return the DAC winner for every pixel."""
+    ranks = cardinal_dist.reshape(grid_size, grid_size, N_CANDIDATES)
+    candidate_ids = np.arange(N_CANDIDATES)
+    n_coalitions = 1 << N_CANDIDATES
+    coalition_scores = np.zeros(
+        (PIXELS, PIXELS, n_coalitions),
+        dtype=weights.dtype,
+    )
+
+    for coalition in range(1, n_coalitions):
+        members = ((coalition >> candidate_ids) & 1).astype(bool)
+        inside = candidate_ids[members]
+        outside = candidate_ids[~members]
+
+        if outside.size == 0:
+            acquiescing = np.ones((grid_size, grid_size), dtype=bool)
+        else:
+            highest_inside = ranks[..., inside].min(axis=-1)
+            lowest_outside = ranks[..., outside].min(axis=-1)
+            acquiescing = highest_inside < lowest_outside
+
+        coalition_scores[..., coalition] = aggregate(
+            acquiescing[..., np.newaxis].astype(weights.dtype)
+        )[..., 0]
+
+    coalition_order = np.argsort(-coalition_scores, axis=-1, kind="stable")
+    eligible = np.ones((PIXELS, PIXELS, N_CANDIDATES), dtype=bool)
+
+    for position in range(n_coalitions - 1):
+        coalition = coalition_order[..., position]
+        coalition_members = (
+            (coalition[..., np.newaxis] >> candidate_ids) & 1
+        ).astype(bool)
+        remaining = eligible & coalition_members
+        valid = remaining.any(axis=-1)
+        eligible = np.where(valid[..., np.newaxis], remaining, eligible)
+
+        if np.all(eligible.sum(axis=-1) == 1):
+            break
+
+    return eligible.argmax(axis=-1)
+
 def winners_pixels(method: Callable[[], np.ndarray]) -> np.ndarray:
     """Returns the winners of the election, shape (PIXELS, PIXELS)"""
     start_time = time.perf_counter()
@@ -272,3 +358,5 @@ if __name__ == "__main__":
     np.save('winners/baldwin.npy', winners_pixels(baldwin))
     np.save('winners/approval.npy', winners_pixels(lambda: approval_naive(threshold=0.5)))
     np.save('winners/condorcet_failure.npy', winners_pixels(condorcet_failure))
+    np.save('winners/dsc.npy', winners_pixels(descending_solid_coalitions))
+    np.save('winners/dac.npy', winners_pixels(descending_acquiescing_coalitions))
