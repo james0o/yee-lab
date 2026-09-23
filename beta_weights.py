@@ -1,8 +1,16 @@
 import numpy as np
 import scipy.stats as stats
 from scipy.optimize import root
-import os
-from const import PIXELS, DISTANCE, N_PART
+from pathlib import Path
+
+from cache import (
+    DEFAULT_CACHE_ROOT,
+    metadata,
+    params_path,
+    read_metadata,
+    weights_path,
+)
+from const import DISTANCE, N_PART, PIXELS
 
 def create_voters(n_part):
     voters = np.arange(1 / n_part / 2, 1, 1 / n_part)
@@ -53,35 +61,107 @@ def create_weights_with_mass_points(median, w1, D_target, X0):
     a_sol, b_sol = sol.x[0], sol.x[1]
     return (a_sol, b_sol)
 
-def generate_weights(pixels: int, n_part: int) -> None:
+def generate_params(
+    pixels: int,
+    distance: float = DISTANCE,
+    cache_root: Path = DEFAULT_CACHE_ROOT,
+) -> np.ndarray:
     medians = create_medians(pixels)
     N_medians = len(medians)
     X0 = [1.0, 1.0]
-    weights = np.empty((N_medians, n_part + 2), dtype=np.float64)
     params = np.empty((N_medians, 2), dtype=np.float64)
     for i, m in enumerate(medians):
         w1 = activation_function(m)
-        (a, b) = create_weights_with_mass_points(m, w1, DISTANCE, X0)
+        (a, b) = create_weights_with_mass_points(m, w1, distance, X0)
         X0 = [a, b]
         params[i] = (a, b)
-        weights[i] = cdf_with_points(n_part, (a, b), w1)
-   
-    params = np.concatenate((np.flip(params), params), axis=0)
+
+    mirrored_params = np.flip(params, axis=0)[:, ::-1]
+    params = np.concatenate((mirrored_params, params), axis=0)
+    path = params_path(pixels, distance, cache_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        path,
+        params=params,
+        metadata=np.array(
+            metadata("params", pixels=int(pixels), distance=float(distance))
+        ),
+    )
+    return params
+
+
+def load_params(
+    pixels: int,
+    distance: float = DISTANCE,
+    cache_root: Path = DEFAULT_CACHE_ROOT,
+) -> np.ndarray:
+    path = params_path(pixels, distance, cache_root)
+    if not path.exists():
+        return generate_params(pixels, distance, cache_root)
+    with np.load(path) as archive:
+        saved_metadata = read_metadata(archive)
+        if saved_metadata != {
+            "cache_version": 1,
+            "kind": "params",
+            "pixels": int(pixels),
+            "distance": float(distance),
+        }:
+            return generate_params(pixels, distance, cache_root)
+        return archive["params"]
+
+
+def generate_weights(
+    pixels: int,
+    n_part: int,
+    distance: float = DISTANCE,
+    cache_root: Path = DEFAULT_CACHE_ROOT,
+) -> np.ndarray:
+    params = load_params(pixels, distance, cache_root)
+    medians = create_medians(pixels)
+    weights = np.empty((len(medians), n_part + 2), dtype=np.float64)
+    for i, m in enumerate(medians):
+        w1 = activation_function(m)
+        weights[i] = cdf_with_points(n_part, params[pixels // 2 + i], w1)
+
     weights = np.concatenate((np.flip(weights), weights), axis=0)
+    path = weights_path(pixels, n_part, distance, cache_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        path,
+        weights=weights,
+        metadata=np.array(
+            metadata(
+                "weights",
+                pixels=int(pixels),
+                n_part=int(n_part),
+                distance=float(distance),
+            )
+        ),
+    )
+    return weights
 
-    if not os.path.exists('params'):
-        os.makedirs('params')
-    if not os.path.exists('weights'):
-        os.makedirs('weights')
 
-    np.savez(f'params/P{pixels}_N{n_part}', params=params)
-    np.savez(f'weights/P{pixels}_N{n_part}', weights=weights)
-
-def load_weights(n_part: int, pixels: int = PIXELS) -> np.ndarray:
-    if not os.path.exists(f'weights/P{pixels}_N{n_part}.npz'):
-        generate_weights(pixels, n_part)
-    return np.load(f'weights/P{pixels}_N{n_part}.npz')["weights"]
+def load_weights(
+    n_part: int,
+    pixels: int = PIXELS,
+    distance: float = DISTANCE,
+    cache_root: Path = DEFAULT_CACHE_ROOT,
+) -> np.ndarray:
+    path = weights_path(pixels, n_part, distance, cache_root)
+    if not path.exists():
+        return generate_weights(pixels, n_part, distance, cache_root)
+    with np.load(path) as archive:
+        saved_metadata = read_metadata(archive)
+        if saved_metadata != {
+            "cache_version": 1,
+            "kind": "weights",
+            "pixels": int(pixels),
+            "n_part": int(n_part),
+            "distance": float(distance),
+        }:
+            return generate_weights(pixels, n_part, distance, cache_root)
+        return archive["weights"]
 
 if __name__ == "__main__":
-    generate_weights(pixels=PIXELS, n_part=N_PART)
+    generate_weights(pixels=PIXELS, n_part=N_PART, distance=DISTANCE)
 

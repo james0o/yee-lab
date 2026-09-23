@@ -3,17 +3,20 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
-import os, time
-from const import CANDIDATES, N_CANDIDATES
-import methods
+import argparse
+import time
+from pathlib import Path
 
-CANDIDATE_COLORS = list(plt.cm.tab20.colors[:N_CANDIDATES])
+from const import CANDIDATES, DISTANCE, N_PART, PIXELS
+from methods import ElectionConfig, run_all
+
 NO_CONDORCET_COLOR = "#c8c8c8"
 
-def plot_yeediagram(data: np.ndarray, title: str) -> None:
+def plot_yeediagram(data: np.ndarray, candidates: np.ndarray, title: str) -> None:
     n_colors = int(data.max()) + 1
-    colors = CANDIDATE_COLORS[:n_colors]
-    if n_colors > N_CANDIDATES:
+    candidate_colors = list(plt.cm.tab20.colors[:len(candidates)])
+    colors = candidate_colors[:n_colors]
+    if n_colors > len(candidates):
         colors.append(NO_CONDORCET_COLOR)
     cmap = ListedColormap(colors)
     fig, ax = plt.subplots()
@@ -26,11 +29,11 @@ def plot_yeediagram(data: np.ndarray, title: str) -> None:
         extent=(0, 1, 0, 1),
         aspect="equal",
     )
-    for i, (x, y) in enumerate(CANDIDATES):
+    for i, (x, y) in enumerate(candidates):
         ax.scatter(
         x,
         y,
-        c=[CANDIDATE_COLORS[i]],
+        c=[candidate_colors[i]],
         s=40,
         edgecolors="#000000",
         linewidths=0.6,
@@ -46,16 +49,31 @@ def plot_yeediagram(data: np.ndarray, title: str) -> None:
     fig.savefig(f"plots/{title}.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-def main():
+def main(argv: list[str] | None = None):
     """Create Yee diagram (as PNG) for each voting method."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pixels", type=int, default=PIXELS)
+    parser.add_argument("--n-part", type=int, default=N_PART)
+    parser.add_argument("--distance", type=float, default=DISTANCE)
+    parser.add_argument("--cache-root", type=Path, default=Path("cache"))
+    args = parser.parse_args(argv)
 
-    if not os.path.exists('plots'):
-        os.makedirs('plots')
+    plots_path = Path("plots")
+    plots_path.mkdir(parents=True, exist_ok=True)
 
     start_time = time.time()
-    for methods in os.listdir("winners"):
-        method_name = methods.replace(".npy", "")  # Remove the .npy extension
-        plot_yeediagram(np.load(f"winners/{methods}"), method_name)
+    candidates = np.asarray(CANDIDATES, dtype=np.float64)
+    results = run_all(
+        ElectionConfig(
+            pixels=args.pixels,
+            n_part=args.n_part,
+            distance=args.distance,
+            candidates=candidates,
+            cache_root=args.cache_root,
+        )
+    )
+    for method_name, winners in results.items():
+        plot_yeediagram(winners, candidates, method_name)
     end_time = time.time()
     print(f"Time taken to generate all plots: {end_time - start_time:.2f} seconds")
     

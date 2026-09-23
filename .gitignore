@@ -6,10 +6,13 @@ dist/
 wheels/
 *.egg-info
 
+*plan*.md
+
 # Virtual environments
 .venv
 
-tests/*
+tests/__pycache__/
+.pytest_cache/
 
 # Jupyter notebooks
 *ipynb
@@ -19,3 +22,4 @@ winners/*
 weights/*
 params/*
 plots/*
+cache/*

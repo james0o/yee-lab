@@ -1,18 +1,31 @@
 import numpy as np
 from scipy.spatial.distance import cdist
-from const import PIXELS, N_PART, CANDIDATES, N_CANDIDATES
+from cache import candidate_hash, metadata, read_metadata, winners_path
+from dataclasses import dataclass, field
+from pathlib import Path
+from const import PIXELS as DEFAULT_PIXELS, N_PART as DEFAULT_N_PART
+from const import CANDIDATES as DEFAULT_CANDIDATES, DISTANCE as DEFAULT_DISTANCE
 from typing import Callable
 import beta_weights
-import time, argparse, os
+import time
 from beta_weights import load_weights
 
-args = argparse.ArgumentParser()
-args.add_argument("--n_part", type=int, default=N_PART)
-args.add_argument("--pixels", type=int, default=PIXELS)
-args = args.parse_args()
 
-weights = load_weights(args.n_part)
-n_part = args.n_part
+@dataclass(frozen=True)
+class ElectionConfig:
+    pixels: int = DEFAULT_PIXELS
+    n_part: int = DEFAULT_N_PART
+    distance: float = DEFAULT_DISTANCE
+    candidates: np.ndarray = field(
+        default_factory=lambda: DEFAULT_CANDIDATES.copy()
+    )
+    cache_root: Path = Path("cache")
+
+
+PIXELS = DEFAULT_PIXELS
+N_PART = DEFAULT_N_PART
+CANDIDATES = DEFAULT_CANDIDATES
+N_CANDIDATES = CANDIDATES.shape[0]
 
 def create_voters2d(voters) -> np.ndarray:
     return np.column_stack((np.repeat(voters, len(voters)), np.tile(voters, len(voters))))
@@ -20,21 +33,49 @@ def create_voters2d(voters) -> np.ndarray:
 def calculate_distance(voters2d, candidates) -> np.ndarray:
     return cdist(voters2d, candidates, metric='euclidean')
 
-voters = np.concatenate(([0.0], beta_weights.create_voters(n_part), [1.0]))
-grid_size = len(voters)
-voters2d = create_voters2d(voters)
-distance = calculate_distance(voters2d, CANDIDATES)
-cardinal_dist = np.argsort(distance, axis=1).argsort().astype(np.uint8)
-_rank_prefs = np.argsort(cardinal_dist, axis=1).reshape(
-    grid_size, grid_size, N_CANDIDATES).astype(np.uint8)
-n_voters = grid_size * grid_size
-prefs_flat = _rank_prefs.reshape(n_voters, N_CANDIDATES)
-prefs_indicator = np.eye(N_CANDIDATES, dtype=weights.dtype)[prefs_flat]
-_i_idx = np.repeat(np.arange(grid_size), grid_size)
-_j_idx = np.tile(np.arange(grid_size), grid_size)
-_voter_weights = (
-    weights[:, _i_idx].T[:, :, None] * weights[:, _j_idx].T[:, None, :]
-)
+def configure(config: ElectionConfig) -> None:
+    """Configure the module-level voting state for one election model."""
+    global CANDIDATES, N_CANDIDATES, PIXELS, N_PART
+    global weights, n_part, grid_size, voters2d, distance, target_distance, cache_root
+    global cardinal_dist, _rank_prefs, n_voters, prefs_flat, prefs_indicator
+    global _i_idx, _j_idx, _voter_weights
+
+    candidates = np.asarray(config.candidates, dtype=np.float64)
+    if candidates.ndim != 2 or candidates.shape[1] != 2:
+        raise ValueError("candidates must have shape (n_candidates, 2)")
+    if config.pixels < 1 or config.n_part < 1:
+        raise ValueError("pixels and n_part must be positive")
+
+    PIXELS = config.pixels
+    N_PART = config.n_part
+    target_distance = float(config.distance)
+    cache_root = Path(config.cache_root)
+    CANDIDATES = np.ascontiguousarray(candidates)
+    N_CANDIDATES = CANDIDATES.shape[0]
+    weights = load_weights(
+        n_part=N_PART,
+        pixels=PIXELS,
+        distance=config.distance,
+        cache_root=config.cache_root,
+    )
+    n_part = N_PART
+    voters = np.concatenate(([0.0], beta_weights.create_voters(n_part), [1.0]))
+    grid_size = len(voters)
+    voters2d = create_voters2d(voters)
+    distance = calculate_distance(voters2d, CANDIDATES)
+    cardinal_dist = np.argsort(distance, axis=1).argsort().astype(np.uint8)
+    _rank_prefs = np.argsort(cardinal_dist, axis=1).reshape(
+        grid_size, grid_size, N_CANDIDATES
+    ).astype(np.uint8)
+    n_voters = grid_size * grid_size
+    prefs_flat = _rank_prefs.reshape(n_voters, N_CANDIDATES)
+    prefs_indicator = np.eye(N_CANDIDATES, dtype=weights.dtype)[prefs_flat]
+    _i_idx = np.repeat(np.arange(grid_size), grid_size)
+    _j_idx = np.tile(np.arange(grid_size), grid_size)
+    _voter_weights = (
+        weights[:, _i_idx].T[:, :, None] * weights[:, _j_idx].T[:, None, :]
+    )
+
 
 def aggregate(
     voter_scores: np.ndarray,
@@ -720,30 +761,104 @@ def winners_pixels(method: Callable[[], np.ndarray]) -> np.ndarray:
     return winners
 
 
+def save_winner(method_name: str, winners: np.ndarray) -> Path:
+    """Save a winner array under a cache identity including its candidates."""
+    path = winners_path(
+        pixels=PIXELS,
+        n_part=N_PART,
+        distance=target_distance,
+        candidates=CANDIDATES,
+        method=method_name,
+        cache_root=cache_root,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        path,
+        winners=winners,
+        candidates=CANDIDATES,
+        metadata=np.array(
+            metadata(
+                "winners",
+                pixels=int(PIXELS),
+                n_part=int(N_PART),
+                distance=target_distance,
+                candidate_hash=candidate_hash(CANDIDATES),
+                method=method_name,
+            )
+        ),
+    )
+    return path
 
-if not os.path.exists('winners'):
-    os.makedirs('winners')
+def _method_registry() -> dict[str, Callable[[], np.ndarray]]:
+    return {
+        "plurality": plurality,
+        "king_of_the_hill": king_of_the_hill,
+        "chain_runoff": chain_runoff,
+        "koth_chain_runoff": koth_chain_runoff,
+        "acp": adjusted_condorcet_plurality,
+        "anti_plurality": anti_plurality,
+        "borda": borda_count,
+        "black": black,
+        "irv": instant_runoff,
+        "schulze": schulze,
+        "mmpo": mmpo,
+        "baldwin": baldwin,
+        "approval": lambda: approval(threshold=0.5),
+        "score_voting": lambda: score_voting(categories=5),
+        "star_voting": lambda: star_voting(categories=5),
+        "sun": lambda: sun(categories=5),
+        "sun_small": lambda: sun_small(categories=5),
+        "approval_dsc": lambda: approval_dsc(threshold=0.5),
+        "approval_dac": lambda: approval_dac(threshold=0.5),
+        "approval_naive": lambda: approval_naive(threshold=0.5),
+        "condorcet_failure": condorcet_failure,
+        "dsc": descending_solid_coalitions,
+        "dac": descending_acquiescing_coalitions,
+    }
 
-np.save('winners/plurality.npy', winners_pixels(plurality))
-np.save('winners/king_of_the_hill.npy', winners_pixels(king_of_the_hill))
-np.save('winners/chain_runoff.npy', winners_pixels(chain_runoff))
-np.save('winners/koth_chain_runoff.npy', winners_pixels(koth_chain_runoff))
-np.save('winners/acp.npy', winners_pixels(adjusted_condorcet_plurality))
-np.save('winners/anti_plurality.npy', winners_pixels(anti_plurality))
-np.save('winners/borda.npy', winners_pixels(borda_count))
-np.save('winners/black.npy', winners_pixels(black))
-np.save('winners/irv.npy', winners_pixels(instant_runoff))
-np.save('winners/schulze.npy', winners_pixels(schulze))
-np.save('winners/mmpo.npy', winners_pixels(mmpo))
-np.save('winners/baldwin.npy', winners_pixels(baldwin))
-np.save('winners/approval.npy', winners_pixels(lambda: approval(threshold=0.5)))
-np.save('winners/score_voting.npy', winners_pixels(lambda: score_voting(categories=5)))
-np.save('winners/star_voting.npy', winners_pixels(lambda: star_voting(categories=5)))
-np.save('winners/sun.npy', winners_pixels(lambda: sun(categories=5)))
-np.save('winners/sun_small.npy', winners_pixels(lambda: sun_small(categories=5)))
-np.save('winners/approval_dsc.npy', winners_pixels(lambda: approval_dsc(threshold=0.5)))
-np.save('winners/approval_dac.npy', winners_pixels(lambda: approval_dac(threshold=0.5)))
-np.save('winners/approval_naive.npy', winners_pixels(lambda: approval_naive(threshold=0.5)))
-np.save('winners/condorcet_failure.npy', winners_pixels(condorcet_failure))
-np.save('winners/dsc.npy', winners_pixels(descending_solid_coalitions))
-np.save('winners/dac.npy', winners_pixels(descending_acquiescing_coalitions))
+
+def _load_cached_winner(method_name: str) -> np.ndarray | None:
+    path = winners_path(
+        PIXELS,
+        N_PART,
+        target_distance,
+        CANDIDATES,
+        method_name,
+        cache_root,
+    )
+    if not path.exists():
+        return None
+
+    expected = {
+        "cache_version": 1,
+        "kind": "winners",
+        "pixels": int(PIXELS),
+        "n_part": int(N_PART),
+        "distance": target_distance,
+        "candidate_hash": candidate_hash(CANDIDATES),
+        "method": method_name,
+    }
+    try:
+        with np.load(path) as archive:
+            if read_metadata(archive) != expected:
+                return None
+            if not np.array_equal(archive["candidates"], CANDIDATES):
+                return None
+            return archive["winners"]
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+def run_all(config: ElectionConfig) -> dict[str, np.ndarray]:
+    """Compute only missing winner caches for the requested configuration."""
+    configure(config)
+    results: dict[str, np.ndarray] = {}
+    for method_name, method in _method_registry().items():
+        winners = _load_cached_winner(method_name)
+        if winners is None:
+            winners = winners_pixels(method)
+            save_winner(method_name, winners)
+        else:
+            print(f"Using cached {method_name}")
+        results[method_name] = winners
+    return results
