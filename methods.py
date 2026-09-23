@@ -91,10 +91,123 @@ def _round_votes(
 
     return counts
 
-def first_past_the_post() -> np.ndarray:
+def plurality() -> np.ndarray:
     votes = np.argmin(cardinal_dist, axis=1).reshape(grid_size, grid_size)
     voter_scores = votes[..., np.newaxis] == np.arange(N_CANDIDATES)
     return aggregate(voter_scores.astype(weights.dtype)).argmax(axis=2)
+
+def king_of_the_hill() -> np.ndarray:
+    """Return the strongest first-preference challenger to the plurality winner."""
+    first_preferences = np.argmin(cardinal_dist, axis=1).reshape(
+        grid_size, grid_size
+    )
+    first_preference_votes = aggregate(
+        (first_preferences[..., np.newaxis] == np.arange(N_CANDIDATES)).astype(
+            weights.dtype
+        )
+    )
+    plurality_winners = first_preference_votes.argmax(axis=2)
+
+    ranks = cardinal_dist.reshape(grid_size, grid_size, N_CANDIDATES)
+    pairwise = aggregate_pairwise(
+        ranks[..., :, np.newaxis] < ranks[..., np.newaxis, :]
+    )
+    opponent_votes = pairwise[
+        np.arange(PIXELS)[:, np.newaxis],
+        np.arange(PIXELS)[np.newaxis, :],
+        :,
+        plurality_winners,
+    ]
+    majority = opponent_votes > 0.5
+    majority &= np.arange(N_CANDIDATES) != plurality_winners[..., np.newaxis]
+    challenger_votes = np.where(majority, first_preference_votes, -np.inf)
+    challenger = challenger_votes.argmax(axis=2)
+    has_challenger = majority.any(axis=-1)
+    return np.where(has_challenger, challenger, plurality_winners)
+
+def chain_runoff() -> np.ndarray:
+    """Return the first-preference-ranked candidate not beaten by the next one."""
+    first_preferences = np.argmin(cardinal_dist, axis=1).reshape(
+        grid_size, grid_size
+    )
+    first_preference_votes = aggregate(
+        (first_preferences[..., np.newaxis] == np.arange(N_CANDIDATES)).astype(
+            weights.dtype
+        )
+    )
+    order = np.argsort(-first_preference_votes, axis=2, kind="stable")
+
+    ranks = cardinal_dist.reshape(grid_size, grid_size, N_CANDIDATES)
+    pairwise = aggregate_pairwise(
+        ranks[..., :, np.newaxis] < ranks[..., np.newaxis, :]
+    )
+    rows = np.arange(PIXELS)[:, np.newaxis]
+    columns = np.arange(PIXELS)[np.newaxis, :]
+
+    winner = order[..., -1]
+    found = np.zeros((PIXELS, PIXELS), dtype=bool)
+    for position in range(N_CANDIDATES - 1):
+        current = order[..., position]
+        next_candidate = order[..., position + 1]
+        next_votes = pairwise[rows, columns, next_candidate, current]
+        current_votes = pairwise[rows, columns, current, next_candidate]
+        not_beaten = next_votes <= current_votes
+        select = ~found & not_beaten
+        winner = np.where(select, current, winner)
+        found |= select
+
+    return winner
+
+def koth_chain_runoff() -> np.ndarray:
+    """Use a head-to-head runoff between King of the Hill and Chain Runoff."""
+    ranks = cardinal_dist.reshape(grid_size, grid_size, N_CANDIDATES)
+    koth_winners = king_of_the_hill()
+    chain_winners = chain_runoff()
+    pairwise = aggregate_pairwise(
+        ranks[..., :, np.newaxis] < ranks[..., np.newaxis, :]
+    )
+    rows = np.arange(PIXELS)[:, np.newaxis]
+    columns = np.arange(PIXELS)[np.newaxis, :]
+    koth_votes = pairwise[rows, columns, koth_winners, chain_winners]
+    chain_votes = pairwise[rows, columns, chain_winners, koth_winners]
+    return np.where(koth_votes >= chain_votes, koth_winners, chain_winners)
+
+def adjusted_condorcet_plurality() -> np.ndarray:
+    """Return the adjusted Condorcet Plurality winner for every pixel."""
+    ranks = cardinal_dist.reshape(grid_size, grid_size, N_CANDIDATES)
+    plurality_winners = plurality()
+    adjusted_pairwise = np.zeros(
+        (PIXELS, PIXELS, N_CANDIDATES, N_CANDIDATES),
+        dtype=weights.dtype,
+    )
+
+    for first_winner in range(N_CANDIDATES):
+        winner_rank = ranks[..., first_winner]
+        retained = ranks <= winner_rank[..., np.newaxis]
+        adjusted_ranks = np.where(retained, ranks, N_CANDIDATES)
+        pairwise = adjusted_ranks[..., :, np.newaxis] < adjusted_ranks[..., np.newaxis, :]
+        pairwise = aggregate_pairwise(pairwise)
+        selected = plurality_winners == first_winner
+        adjusted_pairwise = np.where(
+            selected[..., np.newaxis, np.newaxis],
+            pairwise,
+            adjusted_pairwise,
+        )
+
+    beats = adjusted_pairwise > np.transpose(adjusted_pairwise, (0, 1, 3, 2))
+    is_condorcet = np.all(
+        beats | np.eye(N_CANDIDATES, dtype=bool)[np.newaxis, np.newaxis],
+        axis=-1,
+    )
+    has_condorcet = is_condorcet.any(axis=-1)
+    condorcet_winner = is_condorcet.argmax(axis=-1)
+    return np.where(has_condorcet, condorcet_winner, plurality_winners)
+
+def anti_plurality() -> np.ndarray:
+    last = np.argmax(cardinal_dist, axis=1).reshape(grid_size, grid_size)
+    voter_scores = last[..., np.newaxis] == np.arange(N_CANDIDATES)
+    last_place_votes = aggregate(voter_scores.astype(weights.dtype))
+    return last_place_votes.argmin(axis=2)
 
 def borda_count() -> np.ndarray:
     voter_scores = (N_CANDIDATES - 1 - cardinal_dist).reshape(grid_size, grid_size, N_CANDIDATES)
@@ -171,6 +284,67 @@ def instant_runoff() -> np.ndarray:
 
     return winners
 
+def _batch_runoff(elimination_sizes: tuple[int, ...]) -> np.ndarray:
+    """Run plurality transfers while eliminating the requested batch sizes."""
+    if sum(elimination_sizes) != N_CANDIDATES - 1:
+        raise ValueError("elimination sizes must sum to N_CANDIDATES - 1")
+
+    winners = np.zeros((PIXELS, PIXELS), dtype=int)
+    block = 100
+    candidate_ids = np.arange(N_CANDIDATES)
+
+    for x0 in range(0, PIXELS, block):
+        x1 = min(PIXELS, x0 + block)
+        for y0 in range(0, PIXELS, block):
+            y1 = min(PIXELS, y0 + block)
+            eliminated = np.zeros((x1 - x0, y1 - y0, N_CANDIDATES), dtype=bool)
+            block_weights = _voter_weights[:, x0:x1, y0:y1]
+
+            for elimination_size in elimination_sizes:
+                standing = ~eliminated
+                round_votes = _round_votes(
+                    _rank_prefs,
+                    standing,
+                    block_weights,
+                    x_slice=slice(x0, x1),
+                    y_slice=slice(y0, y1),
+                )
+                active_votes = np.where(standing, round_votes, np.inf)
+                to_eliminate = np.argsort(active_votes, axis=2)[..., :elimination_size]
+                eliminate = np.zeros_like(standing)
+                eliminate |= np.any(
+                    candidate_ids == to_eliminate[..., np.newaxis],
+                    axis=-2,
+                )
+                eliminated |= eliminate
+
+            winners[x0:x1, y0:y1] = (~eliminated).argmax(axis=2)
+
+    return winners
+
+def _compositions(total: int) -> tuple[tuple[int, ...], ...]:
+    """Return all ordered positive-integer partitions of total."""
+    if total < 0:
+        raise ValueError("total must be non-negative")
+    if total == 0:
+        return ((),)
+    if total == 1:
+        return ((1,),)
+
+    return tuple(
+        (first, *rest)
+        for first in range(1, total + 1)
+        for rest in _compositions(total - first)
+    )
+
+def runoff_one_then_two() -> np.ndarray:
+    """Batch runoff with elimination sequence 1+2."""
+    return _batch_runoff((1, N_CANDIDATES - 2))
+
+def runoff_two_then_one() -> np.ndarray:
+    """Batch runoff with elimination sequence 2+1."""
+    return _batch_runoff((N_CANDIDATES - 2, 1))
+
 def schulze() -> np.ndarray:
     ranks = cardinal_dist.reshape(grid_size, grid_size, N_CANDIDATES)
     pairwise_pref = ranks[..., :, None] < ranks[..., None, :]
@@ -197,6 +371,14 @@ def schulze() -> np.ndarray:
     wins = path_strength >= np.transpose(path_strength, (0, 1, 3, 2))
     win_counts = wins.sum(axis=-1)
     return win_counts.argmax(axis=-1)
+
+def mmpo() -> np.ndarray:
+    """Return the candidate with the smallest greatest pairwise opposition."""
+    ranks = cardinal_dist.reshape(grid_size, grid_size, N_CANDIDATES)
+    pref = ranks[..., :, None] < ranks[..., None, :]
+    pairwise = aggregate_pairwise(pref)
+    opposition = pairwise.max(axis=-2)
+    return opposition.argmin(axis=-1)
 
 
 def baldwin() -> np.ndarray:
@@ -232,6 +414,198 @@ def approval_naive(threshold: float) -> np.ndarray:
     voter_scores = np.where(approval_mask, voter_scores, 0)
     winners = aggregate(voter_scores).argmax(axis=2)
     return winners
+
+def _approval_ballots(threshold: float = 0.5) -> np.ndarray:
+    """Return deterministic approval ballots based on voter-specific distance quantiles."""
+    if not 0 <= threshold <= 1:
+        raise ValueError("threshold must be between 0 and 1")
+
+    quantiles = np.quantile(distance, threshold, axis=1)
+    below = distance < quantiles[:, np.newaxis]
+    equal = distance == quantiles[:, np.newaxis]
+    target_count = threshold * N_CANDIDATES
+    below_count = below.sum(axis=1)
+    equal_count = equal.sum(axis=1)
+    equal_probability = np.divide(
+        target_count - below_count,
+        equal_count,
+        out=np.zeros_like(quantiles),
+        where=equal_count > 0,
+    )
+
+    rng = np.random.default_rng(0)
+    random_ties = rng.random(distance.shape) < equal_probability[:, np.newaxis]
+    return (below | (equal & random_ties)).reshape(
+        grid_size, grid_size, N_CANDIDATES
+    )
+
+def approval(threshold: float = 0.5) -> np.ndarray:
+    """Approve candidates within each voter's distance quantile."""
+    approved = _approval_ballots(threshold)
+    return aggregate(approved.astype(weights.dtype)).argmax(axis=2)
+
+def _score_ballots(categories: int = 5) -> np.ndarray:
+    """Return voter scores based on distance quantiles."""
+    if not isinstance(categories, (int, np.integer)) or categories < 2:
+        raise ValueError("categories must be an integer greater than or equal to 2")
+
+    distance_order = np.argsort(distance, axis=1)
+    ranks = np.argsort(distance_order, axis=1)
+    score = categories - 1 - np.floor(
+        ranks * categories / N_CANDIDATES
+    ).astype(int)
+    score = np.clip(score, 0, categories - 1)
+    return score.reshape(grid_size, grid_size, N_CANDIDATES)
+
+def score_voting(categories: int = 5) -> np.ndarray:
+    """Score candidates by distance quantiles using a configurable score scale."""
+    voter_scores = _score_ballots(categories)
+    return aggregate(voter_scores.astype(weights.dtype)).argmax(axis=2)
+
+def star_voting(categories: int = 5) -> np.ndarray:
+    """Score Then Automatic Runoff using the two highest-scoring candidates."""
+    voter_scores = _score_ballots(categories)
+    total_scores = aggregate(voter_scores.astype(weights.dtype))
+    top_two = np.argsort(-total_scores, axis=2, kind="stable")[..., :2]
+
+    ranks = cardinal_dist.reshape(grid_size, grid_size, N_CANDIDATES)
+    pairwise = aggregate_pairwise(
+        ranks[..., :, np.newaxis] < ranks[..., np.newaxis, :]
+    )
+    rows = np.arange(PIXELS)[:, np.newaxis]
+    columns = np.arange(PIXELS)[np.newaxis, :]
+    first = top_two[..., 0]
+    second = top_two[..., 1]
+    first_votes = pairwise[rows, columns, first, second]
+    second_votes = pairwise[rows, columns, second, first]
+    return np.where(first_votes >= second_votes, first, second)
+
+def sun(categories: int = 5) -> np.ndarray:
+    """Run STAR using only winners from ACP, IRV, KOTH, Chain Runoff, or Plurality."""
+    candidate_ids = np.arange(N_CANDIDATES)
+    possible_winners = np.stack(
+        [
+            adjusted_condorcet_plurality(),
+            instant_runoff(),
+            runoff_one_then_two(),
+            runoff_two_then_one(),
+            king_of_the_hill(),
+            chain_runoff(),
+            plurality(),
+        ],
+        axis=-1,
+    )
+    allowed = (
+        possible_winners[..., np.newaxis] == candidate_ids
+    ).any(axis=-2)
+
+    voter_scores = _score_ballots(categories)
+    total_scores = aggregate(voter_scores.astype(weights.dtype))
+    eligible_scores = np.where(allowed, total_scores, -np.inf)
+    has_runoff = allowed.sum(axis=-1) >= 2
+    top_two = np.argsort(-eligible_scores, axis=2, kind="stable")[..., :2]
+
+    ranks = cardinal_dist.reshape(grid_size, grid_size, N_CANDIDATES)
+    pairwise = aggregate_pairwise(
+        ranks[..., :, np.newaxis] < ranks[..., np.newaxis, :]
+    )
+    rows = np.arange(PIXELS)[:, np.newaxis]
+    columns = np.arange(PIXELS)[np.newaxis, :]
+    first = top_two[..., 0]
+    second = top_two[..., 1]
+    first_votes = pairwise[rows, columns, first, second]
+    second_votes = pairwise[rows, columns, second, first]
+    runoff_winner = np.where(first_votes >= second_votes, first, second)
+    return np.where(has_runoff, runoff_winner, top_two[..., 0])
+
+def sun_small(categories: int = 5) -> np.ndarray:
+    """Run STAR using winners from every sequential batch-runoff variant."""
+    candidate_ids = np.arange(N_CANDIDATES)
+    possible_winners = np.stack(
+        [
+            _batch_runoff(elimination_sizes)
+            for elimination_sizes in _compositions(N_CANDIDATES - 1)
+        ],
+        axis=-1,
+    )
+    allowed = (
+        possible_winners[..., np.newaxis] == candidate_ids
+    ).any(axis=-2)
+
+    voter_scores = _score_ballots(categories)
+    total_scores = aggregate(voter_scores.astype(weights.dtype))
+    eligible_scores = np.where(allowed, total_scores, -np.inf)
+    has_runoff = allowed.sum(axis=-1) >= 2
+    top_two = np.argsort(-eligible_scores, axis=2, kind="stable")[..., :2]
+
+    ranks = cardinal_dist.reshape(grid_size, grid_size, N_CANDIDATES)
+    pairwise = aggregate_pairwise(
+        ranks[..., :, np.newaxis] < ranks[..., np.newaxis, :]
+    )
+    rows = np.arange(PIXELS)[:, np.newaxis]
+    columns = np.arange(PIXELS)[np.newaxis, :]
+    first = top_two[..., 0]
+    second = top_two[..., 1]
+    first_votes = pairwise[rows, columns, first, second]
+    second_votes = pairwise[rows, columns, second, first]
+    runoff_winner = np.where(first_votes >= second_votes, first, second)
+    return np.where(has_runoff, runoff_winner, top_two[..., 0])
+
+def _approval_coalitions(threshold: float, acquiescing: bool) -> np.ndarray:
+    """Run descending coalitions on approval ballots with tied 0/1 scores."""
+    ballots = _approval_ballots(threshold)
+    candidate_ids = np.arange(N_CANDIDATES)
+    n_coalitions = 1 << N_CANDIDATES
+    coalition_scores = np.zeros(
+        (PIXELS, PIXELS, n_coalitions),
+        dtype=weights.dtype,
+    )
+
+    for coalition in range(1, n_coalitions):
+        members = ((coalition >> candidate_ids) & 1).astype(bool)
+        inside = candidate_ids[members]
+        outside = candidate_ids[~members]
+        inside_values = ballots[..., inside]
+        outside_values = ballots[..., outside]
+
+        if outside.size == 0:
+            committed = np.ones((grid_size, grid_size), dtype=bool)
+        elif acquiescing:
+            committed = (
+                inside_values.min(axis=-1) >= outside_values.max(axis=-1)
+            )
+        else:
+            committed = (
+                inside_values.min(axis=-1) > outside_values.max(axis=-1)
+            )
+
+        coalition_scores[..., coalition] = aggregate(
+            committed[..., np.newaxis].astype(weights.dtype)
+        )[..., 0]
+
+    coalition_order = np.argsort(-coalition_scores, axis=-1, kind="stable")
+    eligible = np.ones((PIXELS, PIXELS, N_CANDIDATES), dtype=bool)
+    for position in range(n_coalitions - 1):
+        coalition = coalition_order[..., position]
+        coalition_members = (
+            (coalition[..., np.newaxis] >> candidate_ids) & 1
+        ).astype(bool)
+        remaining = eligible & coalition_members
+        valid = remaining.any(axis=-1)
+        eligible = np.where(valid[..., np.newaxis], remaining, eligible)
+
+        if np.all(eligible.sum(axis=-1) == 1):
+            break
+
+    return eligible.argmax(axis=-1)
+
+def approval_dsc(threshold: float = 0.5) -> np.ndarray:
+    """DSC applied to quantile-based approval ballots."""
+    return _approval_coalitions(threshold, acquiescing=False)
+
+def approval_dac(threshold: float = 0.5) -> np.ndarray:
+    """DAC applied to quantile-based approval ballots with tied approvals."""
+    return _approval_coalitions(threshold, acquiescing=True)
 
 def _condorcet_winner():
   ranks = cardinal_dist.reshape(grid_size, grid_size, N_CANDIDATES)
@@ -313,7 +687,7 @@ def descending_acquiescing_coalitions() -> np.ndarray:
         if outside.size == 0:
             acquiescing = np.ones((grid_size, grid_size), dtype=bool)
         else:
-            highest_inside = ranks[..., inside].min(axis=-1)
+            highest_inside = ranks[..., inside].max(axis=-1)
             lowest_outside = ranks[..., outside].min(axis=-1)
             acquiescing = highest_inside < lowest_outside
 
@@ -346,17 +720,30 @@ def winners_pixels(method: Callable[[], np.ndarray]) -> np.ndarray:
     return winners
 
 
-if __name__ == "__main__":
-    if not os.path.exists('winners'):
-        os.makedirs('winners')
 
-    np.save('winners/fptp.npy', winners_pixels(first_past_the_post))
-    np.save('winners/borda.npy', winners_pixels(borda_count))
-    np.save('winners/black.npy', winners_pixels(black))
-    np.save('winners/irv.npy', winners_pixels(instant_runoff))
-    np.save('winners/schulze.npy', winners_pixels(schulze))
-    np.save('winners/baldwin.npy', winners_pixels(baldwin))
-    np.save('winners/approval.npy', winners_pixels(lambda: approval_naive(threshold=0.5)))
-    np.save('winners/condorcet_failure.npy', winners_pixels(condorcet_failure))
-    np.save('winners/dsc.npy', winners_pixels(descending_solid_coalitions))
-    np.save('winners/dac.npy', winners_pixels(descending_acquiescing_coalitions))
+if not os.path.exists('winners'):
+    os.makedirs('winners')
+
+np.save('winners/plurality.npy', winners_pixels(plurality))
+np.save('winners/king_of_the_hill.npy', winners_pixels(king_of_the_hill))
+np.save('winners/chain_runoff.npy', winners_pixels(chain_runoff))
+np.save('winners/koth_chain_runoff.npy', winners_pixels(koth_chain_runoff))
+np.save('winners/acp.npy', winners_pixels(adjusted_condorcet_plurality))
+np.save('winners/anti_plurality.npy', winners_pixels(anti_plurality))
+np.save('winners/borda.npy', winners_pixels(borda_count))
+np.save('winners/black.npy', winners_pixels(black))
+np.save('winners/irv.npy', winners_pixels(instant_runoff))
+np.save('winners/schulze.npy', winners_pixels(schulze))
+np.save('winners/mmpo.npy', winners_pixels(mmpo))
+np.save('winners/baldwin.npy', winners_pixels(baldwin))
+np.save('winners/approval.npy', winners_pixels(lambda: approval(threshold=0.5)))
+np.save('winners/score_voting.npy', winners_pixels(lambda: score_voting(categories=5)))
+np.save('winners/star_voting.npy', winners_pixels(lambda: star_voting(categories=5)))
+np.save('winners/sun.npy', winners_pixels(lambda: sun(categories=5)))
+np.save('winners/sun_small.npy', winners_pixels(lambda: sun_small(categories=5)))
+np.save('winners/approval_dsc.npy', winners_pixels(lambda: approval_dsc(threshold=0.5)))
+np.save('winners/approval_dac.npy', winners_pixels(lambda: approval_dac(threshold=0.5)))
+np.save('winners/approval_naive.npy', winners_pixels(lambda: approval_naive(threshold=0.5)))
+np.save('winners/condorcet_failure.npy', winners_pixels(condorcet_failure))
+np.save('winners/dsc.npy', winners_pixels(descending_solid_coalitions))
+np.save('winners/dac.npy', winners_pixels(descending_acquiescing_coalitions))

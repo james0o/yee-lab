@@ -1,8 +1,11 @@
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import os, time
 from const import CANDIDATES, N_CANDIDATES
+import methods
 
 CANDIDATE_COLORS = list(plt.cm.tab20.colors[:N_CANDIDATES])
 NO_CONDORCET_COLOR = "#c8c8c8"
@@ -40,7 +43,8 @@ def plot_yeediagram(data: np.ndarray, title: str) -> None:
     ax.set_title(title)
     ax.set_xlabel("x median")
     ax.set_ylabel("y median")
-    plt.savefig(f"plots/{title}.png", dpi=300, bbox_inches="tight")
+    fig.savefig(f"plots/{title}.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 def main():
     """Create Yee diagram (as PNG) for each voting method."""
