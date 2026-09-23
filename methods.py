@@ -1,4 +1,5 @@
 import numpy as np
+import scipy.stats as stats
 from scipy.spatial.distance import cdist
 from cache import candidate_hash, metadata, read_metadata, winners_path
 from dataclasses import dataclass, field
@@ -136,6 +137,36 @@ def plurality() -> np.ndarray:
     votes = np.argmin(cardinal_dist, axis=1).reshape(grid_size, grid_size)
     voter_scores = votes[..., np.newaxis] == np.arange(N_CANDIDATES)
     return aggregate(voter_scores.astype(weights.dtype)).argmax(axis=2)
+
+def right_diagram() -> np.ndarray:
+    """Choose the candidate closest to each point's Beta-distribution median."""
+    params = beta_weights.load_params(PIXELS, target_distance, cache_root)
+    medians = stats.beta.ppf(0.5, params[:, 0], params[:, 1])
+    points = np.stack(np.meshgrid(medians, medians, indexing="ij"), axis=-1)
+    return cdist(points.reshape(-1, 2), CANDIDATES).argmin(axis=1).reshape(
+        PIXELS, PIXELS
+    )
+
+def right_diagram_wms() -> np.ndarray:
+    """Choose the nearest candidate using medians of the Beta mixture."""
+    params = beta_weights.load_params(PIXELS, target_distance, cache_root)
+    medians = (np.arange(PIXELS, dtype=np.float64) + 0.5) / PIXELS
+    point_weights = beta_weights.activation_function(np.maximum(medians, 1 - medians))
+    lower_half = medians < 0.5
+    beta_quantiles = np.where(
+        lower_half,
+        (0.5 - point_weights) / (1 - point_weights),
+        0.5 / (1 - point_weights),
+    )
+    mixture_medians = stats.beta.ppf(
+        beta_quantiles, params[:, 0], params[:, 1]
+    )
+    points = np.stack(
+        np.meshgrid(mixture_medians, mixture_medians, indexing="ij"), axis=-1
+    )
+    return cdist(points.reshape(-1, 2), CANDIDATES).argmin(axis=1).reshape(
+        PIXELS, PIXELS
+    )
 
 def king_of_the_hill() -> np.ndarray:
     """Return the strongest first-preference challenger to the plurality winner."""
@@ -592,62 +623,6 @@ def sun_small(categories: int = 5) -> np.ndarray:
     runoff_winner = np.where(first_votes >= second_votes, first, second)
     return np.where(has_runoff, runoff_winner, top_two[..., 0])
 
-def _approval_coalitions(threshold: float, acquiescing: bool) -> np.ndarray:
-    """Run descending coalitions on approval ballots with tied 0/1 scores."""
-    ballots = _approval_ballots(threshold)
-    candidate_ids = np.arange(N_CANDIDATES)
-    n_coalitions = 1 << N_CANDIDATES
-    coalition_scores = np.zeros(
-        (PIXELS, PIXELS, n_coalitions),
-        dtype=weights.dtype,
-    )
-
-    for coalition in range(1, n_coalitions):
-        members = ((coalition >> candidate_ids) & 1).astype(bool)
-        inside = candidate_ids[members]
-        outside = candidate_ids[~members]
-        inside_values = ballots[..., inside]
-        outside_values = ballots[..., outside]
-
-        if outside.size == 0:
-            committed = np.ones((grid_size, grid_size), dtype=bool)
-        elif acquiescing:
-            committed = (
-                inside_values.min(axis=-1) >= outside_values.max(axis=-1)
-            )
-        else:
-            committed = (
-                inside_values.min(axis=-1) > outside_values.max(axis=-1)
-            )
-
-        coalition_scores[..., coalition] = aggregate(
-            committed[..., np.newaxis].astype(weights.dtype)
-        )[..., 0]
-
-    coalition_order = np.argsort(-coalition_scores, axis=-1, kind="stable")
-    eligible = np.ones((PIXELS, PIXELS, N_CANDIDATES), dtype=bool)
-    for position in range(n_coalitions - 1):
-        coalition = coalition_order[..., position]
-        coalition_members = (
-            (coalition[..., np.newaxis] >> candidate_ids) & 1
-        ).astype(bool)
-        remaining = eligible & coalition_members
-        valid = remaining.any(axis=-1)
-        eligible = np.where(valid[..., np.newaxis], remaining, eligible)
-
-        if np.all(eligible.sum(axis=-1) == 1):
-            break
-
-    return eligible.argmax(axis=-1)
-
-def approval_dsc(threshold: float = 0.5) -> np.ndarray:
-    """DSC applied to quantile-based approval ballots."""
-    return _approval_coalitions(threshold, acquiescing=False)
-
-def approval_dac(threshold: float = 0.5) -> np.ndarray:
-    """DAC applied to quantile-based approval ballots with tied approvals."""
-    return _approval_coalitions(threshold, acquiescing=True)
-
 def _condorcet_winner():
   ranks = cardinal_dist.reshape(grid_size, grid_size, N_CANDIDATES)
   pref = ranks[..., :, None] < ranks[..., None, :]
@@ -792,6 +767,8 @@ def save_winner(method_name: str, winners: np.ndarray) -> Path:
 def _method_registry() -> dict[str, Callable[[], np.ndarray]]:
     return {
         "plurality": plurality,
+        "right_diagram": right_diagram,
+        "right_diagram_wms": right_diagram_wms,
         "king_of_the_hill": king_of_the_hill,
         "chain_runoff": chain_runoff,
         "koth_chain_runoff": koth_chain_runoff,
@@ -808,8 +785,6 @@ def _method_registry() -> dict[str, Callable[[], np.ndarray]]:
         "star_voting": lambda: star_voting(categories=5),
         "sun": lambda: sun(categories=5),
         "sun_small": lambda: sun_small(categories=5),
-        "approval_dsc": lambda: approval_dsc(threshold=0.5),
-        "approval_dac": lambda: approval_dac(threshold=0.5),
         "approval_naive": lambda: approval_naive(threshold=0.5),
         "condorcet_failure": condorcet_failure,
         "dsc": descending_solid_coalitions,
