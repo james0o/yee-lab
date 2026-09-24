@@ -147,27 +147,6 @@ def right_diagram() -> np.ndarray:
         PIXELS, PIXELS
     )
 
-def right_diagram_wms() -> np.ndarray:
-    """Choose the nearest candidate using medians of the Beta mixture."""
-    params = beta_weights.load_params(PIXELS, target_distance, cache_root)
-    medians = (np.arange(PIXELS, dtype=np.float64) + 0.5) / PIXELS
-    point_weights = beta_weights.activation_function(np.maximum(medians, 1 - medians))
-    lower_half = medians < 0.5
-    beta_quantiles = np.where(
-        lower_half,
-        (0.5 - point_weights) / (1 - point_weights),
-        0.5 / (1 - point_weights),
-    )
-    mixture_medians = stats.beta.ppf(
-        beta_quantiles, params[:, 0], params[:, 1]
-    )
-    points = np.stack(
-        np.meshgrid(mixture_medians, mixture_medians, indexing="ij"), axis=-1
-    )
-    return cdist(points.reshape(-1, 2), CANDIDATES).argmin(axis=1).reshape(
-        PIXELS, PIXELS
-    )
-
 def king_of_the_hill() -> np.ndarray:
     """Return the strongest first-preference challenger to the plurality winner."""
     first_preferences = np.argmin(cardinal_dist, axis=1).reshape(
@@ -768,7 +747,6 @@ def _method_registry() -> dict[str, Callable[[], np.ndarray]]:
     return {
         "plurality": plurality,
         "right_diagram": right_diagram,
-        "right_diagram_wms": right_diagram_wms,
         "king_of_the_hill": king_of_the_hill,
         "chain_runoff": chain_runoff,
         "koth_chain_runoff": koth_chain_runoff,

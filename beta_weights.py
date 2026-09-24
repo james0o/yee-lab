@@ -21,26 +21,24 @@ def cdf_interval(voters, a, b):
     upper = stats.beta.cdf(x=voters + 1 / len(voters) / 2, a=a, b=b)
     return upper - lower
 
-def cdf_with_points(n_part, beta_params, w1):
+def cdf_for_beta(n_part, beta_params):
     a, b = beta_params
     voters = create_voters(n_part)
-    dist = np.concatenate([[0], cdf_interval(voters, a, b), [w1]])
-    rescale = dist/dist.sum()
-    return rescale
+    half_interval = 1 / (2 * n_part)
+    return np.concatenate(
+        [
+            [stats.beta.cdf(half_interval, a, b)],
+            cdf_interval(voters, a, b),
+            [1 - stats.beta.cdf(1 - half_interval, a, b)],
+        ]
+    )
 
 def create_medians(n):
     return np.arange(0.5+1/n/2, 1, 1/n)
 
-def activation_function(median, soft_threshold = 5, sharpness = 5):
-    m_trans = (median - 0.5) / 0.5
-    return 0.5 / (1 + np.exp(-sharpness * (m_trans - soft_threshold)))
-
-def create_weights_with_mass_points(median, w1, D_target, X0):
+def create_weights(median, D_target, X0):
     assert median > 0.5, "Median must be greater than 0.5"
 
-    w0 = 0
-    wd = 1 - w1
-   
     def system_of_equations(x):
         a, b = x[0], x[1]
 
@@ -50,10 +48,9 @@ def create_weights_with_mass_points(median, w1, D_target, X0):
         cdf_ab = stats.beta.cdf(x=median, a=a, b=b)
         cdf_a1b = stats.beta.cdf(x=median, a=a + 1, b=b)
        
-        eq1 = w0 + wd * cdf_ab - 0.5
+        eq1 = cdf_ab - 0.5
         ex = a / (a + b)
-        eq2 = (w0 * median + w1 * (1 - median) +
-               wd * (median * (2*cdf_ab-1) + ex * (1 - 2 * cdf_a1b)) - D_target)
+        eq2 = ex * (1 - 2 * cdf_a1b) - D_target
            
         return [eq1, eq2]
 
@@ -71,8 +68,7 @@ def generate_params(
     X0 = [1.0, 1.0]
     params = np.empty((N_medians, 2), dtype=np.float64)
     for i, m in enumerate(medians):
-        w1 = activation_function(m)
-        (a, b) = create_weights_with_mass_points(m, w1, distance, X0)
+        (a, b) = create_weights(m, distance, X0)
         X0 = [a, b]
         params[i] = (a, b)
 
@@ -119,9 +115,8 @@ def generate_weights(
     params = load_params(pixels, distance, cache_root)
     medians = create_medians(pixels)
     weights = np.empty((len(medians), n_part + 2), dtype=np.float64)
-    for i, m in enumerate(medians):
-        w1 = activation_function(m)
-        weights[i] = cdf_with_points(n_part, params[pixels // 2 + i], w1)
+    for i, _ in enumerate(medians):
+        weights[i] = cdf_for_beta(n_part, params[pixels // 2 + i])
 
     weights = np.concatenate((np.flip(weights), weights), axis=0)
     path = weights_path(pixels, n_part, distance, cache_root)

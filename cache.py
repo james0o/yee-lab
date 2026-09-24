@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 DEFAULT_CACHE_ROOT = Path("cache")
 
 
