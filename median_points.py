@@ -1,4 +1,24 @@
+"""Previous beta_params.py was conceptually inconsistent: it solved for a and b using the median and deviation of the continuous beta distribution, but then discretized that distribution into fixed-width bins. The discretized representation could therefore no longer preserve the requested median exactly.
+The new approach uses adaptive partitioning. It starts with [0, 1], computes the beta distribution median, and splits the interval into [0, median] and [median, 1]. Each subinterval is then recursively split at its conditional beta median. A new split is accepted only when it is at least min_split_distance away from both boundaries of the current interval. The weight of each final interval is computed from the beta CDF difference between its boundaries. This guarantees that the main median is explicitly represented while avoiding unnecessarily close split points.
+"""
 
+#podivej se na @median_points.py 
+#ten vysvetule proc je  spante 
+#beta_weights.py
+#
+#@median_points.py 
+#postupne nahradi (v budoucnu)
+#beta_weights.py
+#
+#N_PART je depricated
+#misto ni min_split_distance
+#misto DISTANCE dej DEVIATION v @const.py 
+#
+#vubec tet neres main.py, valididation.py, ani @methods.py 
+#jen uprav @median_points.py 
+#ano v budoucnu se to musi uplneprekopat jak se to genneruje
+
+#TODO
 
 import numpy as np
 import scipy.stats as stats
