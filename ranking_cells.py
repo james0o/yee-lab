@@ -29,7 +29,7 @@ from scipy.optimize import root
 from scipy.special import betainc, betaincinv
 
 from cache import DEFAULT_CACHE_ROOT, candidate_hash, metadata, read_metadata
-from const import CANDIDATES, DISTANCE, PIXELS
+from const import CANDIDATES, DEVIATION, PIXELS
 
 QUAD_NODES = 24
 EPS = 1e-12
@@ -51,7 +51,7 @@ def _solve_beta(median, deviation, x0):
     return sol.x
 
 
-def beta_params(pixels, deviation=DISTANCE):
+def beta_params(pixels, deviation=DEVIATION):
     """Parameters (a, b) for pixel medians (k + 1/2) / pixels, shape (pixels, 2)."""
     medians = (np.arange(pixels) + 0.5) / pixels
     params = np.empty((pixels, 2), dtype=np.float64)
@@ -223,7 +223,7 @@ def rankings_path(pixels, deviation, candidates, quad_nodes, cache_root=DEFAULT_
 def load_ranking_probabilities(
     candidates=CANDIDATES,
     pixels=PIXELS,
-    deviation=DISTANCE,
+    deviation=DEVIATION,
     quad_nodes=QUAD_NODES,
     cache_root=DEFAULT_CACHE_ROOT,
 ):

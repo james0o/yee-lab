@@ -1,8 +1,7 @@
 import numpy as np
 
 PIXELS = 200
-DISTANCE = 0.3
-N_PART =  64
+DEVIATION = 0.3
 CANDIDATES = np.array([
     [0.6,0.35],
     [0.25,0.4],
