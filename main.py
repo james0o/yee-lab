@@ -28,6 +28,10 @@ from ranking_cells import (
 
 PLOTS = Path("plots")
 console = Console()
+app = typer.Typer(
+    add_completion=False,
+    context_settings={"help_option_names": ["-h", "--help"]},
+)
 
 
 def plot_yee_diagram(winners: np.ndarray, candidates: np.ndarray, title: str) -> Path:
@@ -85,6 +89,7 @@ def _generate_with_progress(pixels: int, deviation: float):
         )
 
 
+@app.command()
 def main(
     pixels: int = typer.Option(PIXELS, "--pixels", "-p", help="Pixels per axis."),
     deviation: float = typer.Option(
@@ -135,4 +140,4 @@ def main(
 
 
 if __name__ == "__main__":
-    typer.run(main)
+    app()
