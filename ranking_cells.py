@@ -181,29 +181,37 @@ def _edge_integral(s, e, a, b, nodes, weights):
 
 # ---------------------------------------------------------------- Probabilities
 
-def compute_ranking_probabilities(candidates, params, quad_nodes=QUAD_NODES):
-    """Returns (rankings (R, C), probabilities (pixels, pixels, R))."""
+def compute_ranking_probabilities(candidates, params, quad_nodes=QUAD_NODES, progress=None):
+    """Returns (rankings (R, C), probabilities (pixels, pixels, R)).
+
+    progress: optional callable(done, total), called after each edge integral.
+    """
     polygons, rankings = ranking_cells(candidates)
     a, b = params[:, 0], params[:, 1]
     nodes, weights = np.polynomial.legendre.leggauss(quad_nodes)
 
-    edge_cache = {}
-
     def key(p):
         return (round(float(p[0]), 9), round(float(p[1]), 9))
 
-    probs = np.zeros((len(params), len(params), len(polygons)))
+    # edge -> (start, end, [(cell, sign), ...]); each edge is shared by up to two cells
+    edges = {}
     for r, poly in enumerate(polygons):
         for k in range(len(poly)):
             s, e = poly[k], poly[(k + 1) % len(poly)]
             ks, ke = key(s), key(e)
             forward = ks < ke
             edge_key = (ks, ke) if forward else (ke, ks)
-            if edge_key not in edge_cache:
-                start, end = (s, e) if forward else (e, s)
-                edge_cache[edge_key] = _edge_integral(start, end, a, b, nodes, weights)
-            integral = edge_cache[edge_key]
-            probs[..., r] += integral if forward else -integral
+            if edge_key not in edges:
+                edges[edge_key] = ((s, e) if forward else (e, s)) + ([],)
+            edges[edge_key][2].append((r, 1.0 if forward else -1.0))
+
+    probs = np.zeros((len(params), len(params), len(polygons)))
+    for done, (start, end, uses) in enumerate(edges.values(), start=1):
+        integral = _edge_integral(start, end, a, b, nodes, weights)
+        for r, sign in uses:
+            probs[..., r] += sign * integral
+        if progress is not None:
+            progress(done, len(edges))
 
     # Guard against duplicate rankings from sliver cells (should not happen).
     unique, inverse = np.unique(rankings, axis=0, return_inverse=True)
@@ -220,6 +228,36 @@ def rankings_path(pixels, deviation, candidates, quad_nodes, cache_root=DEFAULT_
     return Path(cache_root) / "rankings" / name
 
 
+def _rankings_metadata(pixels, deviation, candidates, quad_nodes):
+    return metadata(
+        "rankings",
+        pixels=int(pixels),
+        deviation=float(deviation),
+        quad_nodes=int(quad_nodes),
+        candidate_hash=candidate_hash(candidates),
+    )
+
+
+def read_cached_ranking_probabilities(
+    candidates=CANDIDATES,
+    pixels=PIXELS,
+    deviation=DEVIATION,
+    quad_nodes=QUAD_NODES,
+    cache_root=DEFAULT_CACHE_ROOT,
+):
+    """(rankings, probabilities) from the cache, or None if not cached."""
+    candidates = np.asarray(candidates, dtype=np.float64)
+    path = rankings_path(pixels, deviation, candidates, quad_nodes, cache_root)
+    if not path.exists():
+        return None
+    expected = _rankings_metadata(pixels, deviation, candidates, quad_nodes)
+    with np.load(path) as archive:
+        if read_metadata(archive) == json.loads(expected) and \
+                np.array_equal(archive["candidates"], candidates):
+            return archive["rankings"], archive["probabilities"]
+    return None
+
+
 def load_ranking_probabilities(
     candidates=CANDIDATES,
     pixels=PIXELS,
@@ -232,23 +270,35 @@ def load_ranking_probabilities(
     probabilities[x, y, r] is the share of voters of pixel (x, y) whose ranking
     (best to worst) is rankings[r]. Pixel index x follows the x axis.
     """
+    cached = read_cached_ranking_probabilities(
+        candidates, pixels, deviation, quad_nodes, cache_root
+    )
+    if cached is not None:
+        return cached
+    return generate_ranking_probabilities(
+        candidates, pixels, deviation, quad_nodes, cache_root
+    )
+
+
+def generate_ranking_probabilities(
+    candidates=CANDIDATES,
+    pixels=PIXELS,
+    deviation=DEVIATION,
+    quad_nodes=QUAD_NODES,
+    cache_root=DEFAULT_CACHE_ROOT,
+    progress=None,
+):
+    """Compute (rankings, probabilities) and save them to the cache.
+
+    progress: optional callable(done, total), see compute_ranking_probabilities.
+    """
     candidates = np.asarray(candidates, dtype=np.float64)
     path = rankings_path(pixels, deviation, candidates, quad_nodes, cache_root)
-    expected = metadata(
-        "rankings",
-        pixels=int(pixels),
-        deviation=float(deviation),
-        quad_nodes=int(quad_nodes),
-        candidate_hash=candidate_hash(candidates),
-    )
-    if path.exists():
-        with np.load(path) as archive:
-            if read_metadata(archive) == json.loads(expected) and \
-                    np.array_equal(archive["candidates"], candidates):
-                return archive["rankings"], archive["probabilities"]
-
+    expected = _rankings_metadata(pixels, deviation, candidates, quad_nodes)
     params = beta_params(pixels, deviation)
-    rankings, probs = compute_ranking_probabilities(candidates, params, quad_nodes)
+    rankings, probs = compute_ranking_probabilities(
+        candidates, params, quad_nodes, progress
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         path,
