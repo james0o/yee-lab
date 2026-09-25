@@ -1,6 +1,6 @@
 import numpy as np
 
-PIXELS = 500
+PIXELS = 1000
 DEVIATION = 0.3
 CANDIDATES = np.array([
     [0.6,0.35],
