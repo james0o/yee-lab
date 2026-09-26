@@ -1,4 +1,4 @@
-"""Exact ranking probabilities for every pixel (no voter discretization).
+"""Ranking probabilities for every pixel (no voter discretization).
 
 Voters of a pixel are distributed as X ~ Beta(a_x, b_x), Y ~ Beta(a_y, b_y)
 (independent), where (a, b) are chosen so that the median is the pixel centre and the
@@ -20,18 +20,27 @@ u = F(x), i.e. -int G(l(F^-1(u))) du. On an edge that touches y = 0 or y = 1 the
 equivalent form omega' = F(x) g(y) dy (omega' = omega + d(F G)) is integrated
 with v = G(y) instead, which moves the singular point away from the integrand.
 Every edge integral is shared by two cells (with opposite sign), so it is computed once.
+
+Each edge integral costs O(pixels^2) Beta CDF evaluations. The probabilities are
+smooth in the pixel median (only the winners jump), so they are computed exactly
+on NODES x NODES Chebyshev-Lobatto points in logit(median) and interpolated to
+the pixels (barycentric formula). The points cluster towards 0 and 1, where the
+Beta parameters change fastest; the error decreases exponentially with NODES.
 """
 
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 from pathlib import Path
 from scipy.optimize import root
-from scipy.special import betainc, betaincinv
+from scipy.special import betainc, betaincinv, expit, logit
 
 from cache import DEFAULT_CACHE_ROOT, candidate_hash, metadata, read_metadata
 from const import CANDIDATES, DEVIATION, PIXELS
 
 QUAD_NODES = 24
+NODES = 49
 EPS = 1e-12
 
 # ---------------------------------------------------------------- Beta parameters
@@ -51,19 +60,83 @@ def _solve_beta(median, deviation, x0):
     return sol.x
 
 
+def pixel_medians(pixels):
+    """Medians (k + 1/2) / pixels, the pixel centres."""
+    return (np.arange(pixels) + 0.5) / pixels
+
+
+def beta_params_at(medians, deviation=DEVIATION):
+    """Parameters (a, b) for each median, shape (len(medians), 2)."""
+    medians = np.asarray(medians, dtype=np.float64)
+    upper, inverse = np.unique(np.maximum(medians, 1 - medians), return_inverse=True)
+    solved = np.empty((len(upper), 2), dtype=np.float64)
+    x0 = [1.0, 1.0]
+    for k, median in enumerate(upper):  # continuation from 1/2 outwards
+        x0 = _solve_beta(median, deviation, x0)
+        solved[k] = x0
+    params = solved[inverse]
+    # Beta(a, b) mirrored around 1/2 is Beta(b, a).
+    lower = medians < 0.5
+    params[lower] = params[lower, ::-1]
+    return params
+
+
 def beta_params(pixels, deviation=DEVIATION):
     """Parameters (a, b) for pixel medians (k + 1/2) / pixels, shape (pixels, 2)."""
-    medians = (np.arange(pixels) + 0.5) / pixels
-    params = np.empty((pixels, 2), dtype=np.float64)
-    x0 = [1.0, 1.0]
-    upper = np.flatnonzero(medians >= 0.5)
-    for k in upper:
-        x0 = _solve_beta(medians[k], deviation, x0)
-        params[k] = x0
-    # Beta(a, b) mirrored around 1/2 is Beta(b, a).
-    lower = np.flatnonzero(medians < 0.5)
-    params[lower] = params[pixels - 1 - lower][:, ::-1]
-    return params
+    return beta_params_at(pixel_medians(pixels), deviation)
+
+# ---------------------------------------------------------------- Interpolation
+
+def effective_nodes(pixels, nodes):
+    """Nodes per axis actually used; 0 means exact at every pixel, which is
+    also used when interpolation would not save work (nodes >= pixels)."""
+    if nodes < 0 or nodes == 1:
+        raise ValueError("nodes must be 0 (exact) or at least 2")
+    return 0 if nodes >= pixels else nodes
+
+
+def node_medians(pixels, nodes=NODES):
+    """Medians at which probabilities are computed exactly: `nodes`
+    Chebyshev-Lobatto points in logit(median) spanning the pixel medians,
+    or the pixel medians themselves if effective_nodes(...) is 0."""
+    nodes = effective_nodes(pixels, nodes)
+    if nodes == 0:
+        return pixel_medians(pixels)
+    t = np.sin(np.pi * (2 * np.arange(nodes) - (nodes - 1)) / (2 * (nodes - 1)))
+    return expit(-logit(0.5 / pixels) * t)
+
+
+def _interpolation_matrix(nodes, targets):
+    """L (targets, nodes) with f(targets) ~ L @ f(nodes) for Chebyshev-Lobatto
+    `nodes` (barycentric formula, weights (-1)^k halved at both ends)."""
+    weights = (-1.0) ** np.arange(len(nodes))
+    weights[[0, -1]] *= 0.5
+    diff = targets[:, None] - nodes[None, :]
+    hit = diff == 0
+    diff[hit] = 1.0
+    matrix = weights / diff
+    matrix /= matrix.sum(axis=1, keepdims=True)
+    rows = hit.any(axis=1)
+    matrix[rows] = hit[rows]
+    return matrix
+
+
+def interpolate_to_pixels(probs, medians, pixels):
+    """Probabilities (pixels, pixels, R) from probabilities (N, N, R) at `medians`.
+
+    The result is float32: it is the largest array by far and only feeds the
+    voting methods, where float32 halves memory and time. Its rounding (~1e-7)
+    can only flip pixels whose winning margin is that small.
+    """
+    targets = pixel_medians(pixels)
+    if np.array_equal(medians, targets):
+        return probs.astype(np.float32)
+    matrix = _interpolation_matrix(logit(medians), logit(targets))
+    # columns[i, q, r] = sum_j matrix[q, j] probs[i, j, r]; small, so kept in float64
+    columns = (matrix @ probs).reshape(len(medians), -1).astype(np.float32)
+    # one (pixels, N) @ (N, pixels * R) product for the large result
+    probs = (matrix.astype(np.float32) @ columns).reshape(pixels, pixels, -1)
+    return np.clip(probs, 0.0, 1.0, out=probs)
 
 # ---------------------------------------------------------------- Arrangement
 
@@ -206,12 +279,21 @@ def compute_ranking_probabilities(candidates, params, quad_nodes=QUAD_NODES, pro
             edges[edge_key][2].append((r, 1.0 if forward else -1.0))
 
     probs = np.zeros((len(params), len(params), len(polygons)))
-    for done, (start, end, uses) in enumerate(edges.values(), start=1):
+    lock = threading.Lock()
+
+    def integrate(start, end, uses):
         integral = _edge_integral(start, end, a, b, nodes, weights)
-        for r, sign in uses:
-            probs[..., r] += sign * integral
-        if progress is not None:
-            progress(done, len(edges))
+        with lock:
+            for r, sign in uses:
+                probs[..., r] += sign * integral
+
+    # betainc / betaincinv release the GIL, so edges are integrated in parallel.
+    with ThreadPoolExecutor() as pool:
+        futures = [pool.submit(integrate, *edge) for edge in edges.values()]
+        for done, future in enumerate(as_completed(futures), start=1):
+            future.result()
+            if progress is not None:
+                progress(done, len(edges))
 
     # Guard against duplicate rankings from sliver cells (should not happen).
     unique, inverse = np.unique(rankings, axis=0, return_inverse=True)
@@ -222,18 +304,20 @@ def compute_ranking_probabilities(candidates, params, quad_nodes=QUAD_NODES, pro
     return rankings, np.clip(probs, 0.0, 1.0)
 
 
-def rankings_path(pixels, deviation, candidates, quad_nodes, cache_root=DEFAULT_CACHE_ROOT):
+def rankings_path(pixels, deviation, candidates, quad_nodes, nodes, cache_root=DEFAULT_CACHE_ROOT):
     token = format(float(deviation), ".12g").replace("-", "m").replace(".", "p")
-    name = f"P{pixels}_D{token}_Q{quad_nodes}_C{candidate_hash(candidates)}.npz"
+    name = (f"P{pixels}_D{token}_Q{quad_nodes}_N{effective_nodes(pixels, nodes)}"
+            f"_C{candidate_hash(candidates)}.npz")
     return Path(cache_root) / "rankings" / name
 
 
-def _rankings_metadata(pixels, deviation, candidates, quad_nodes):
+def _rankings_metadata(pixels, deviation, candidates, quad_nodes, nodes):
     return metadata(
         "rankings",
         pixels=int(pixels),
         deviation=float(deviation),
         quad_nodes=int(quad_nodes),
+        nodes=effective_nodes(pixels, nodes),
         candidate_hash=candidate_hash(candidates),
     )
 
@@ -242,19 +326,23 @@ def read_cached_ranking_probabilities(
     candidates=CANDIDATES,
     pixels=PIXELS,
     deviation=DEVIATION,
+    nodes=NODES,
     quad_nodes=QUAD_NODES,
     cache_root=DEFAULT_CACHE_ROOT,
 ):
     """(rankings, probabilities) from the cache, or None if not cached."""
     candidates = np.asarray(candidates, dtype=np.float64)
-    path = rankings_path(pixels, deviation, candidates, quad_nodes, cache_root)
+    path = rankings_path(pixels, deviation, candidates, quad_nodes, nodes, cache_root)
     if not path.exists():
         return None
-    expected = _rankings_metadata(pixels, deviation, candidates, quad_nodes)
+    expected = _rankings_metadata(pixels, deviation, candidates, quad_nodes, nodes)
     with np.load(path) as archive:
         if read_metadata(archive) == json.loads(expected) and \
                 np.array_equal(archive["candidates"], candidates):
-            return archive["rankings"], archive["probabilities"]
+            probs = interpolate_to_pixels(
+                archive["node_probabilities"], archive["medians"], pixels
+            )
+            return archive["rankings"], probs
     return None
 
 
@@ -262,6 +350,7 @@ def load_ranking_probabilities(
     candidates=CANDIDATES,
     pixels=PIXELS,
     deviation=DEVIATION,
+    nodes=NODES,
     quad_nodes=QUAD_NODES,
     cache_root=DEFAULT_CACHE_ROOT,
 ):
@@ -271,12 +360,12 @@ def load_ranking_probabilities(
     (best to worst) is rankings[r]. Pixel index x follows the x axis.
     """
     cached = read_cached_ranking_probabilities(
-        candidates, pixels, deviation, quad_nodes, cache_root
+        candidates, pixels, deviation, nodes, quad_nodes, cache_root
     )
     if cached is not None:
         return cached
     return generate_ranking_probabilities(
-        candidates, pixels, deviation, quad_nodes, cache_root
+        candidates, pixels, deviation, nodes, quad_nodes, cache_root
     )
 
 
@@ -284,18 +373,22 @@ def generate_ranking_probabilities(
     candidates=CANDIDATES,
     pixels=PIXELS,
     deviation=DEVIATION,
+    nodes=NODES,
     quad_nodes=QUAD_NODES,
     cache_root=DEFAULT_CACHE_ROOT,
     progress=None,
 ):
     """Compute (rankings, probabilities) and save them to the cache.
 
+    Only the probabilities at the node medians are saved; they are interpolated
+    to the pixels on every load.
     progress: optional callable(done, total), see compute_ranking_probabilities.
     """
     candidates = np.asarray(candidates, dtype=np.float64)
-    path = rankings_path(pixels, deviation, candidates, quad_nodes, cache_root)
-    expected = _rankings_metadata(pixels, deviation, candidates, quad_nodes)
-    params = beta_params(pixels, deviation)
+    path = rankings_path(pixels, deviation, candidates, quad_nodes, nodes, cache_root)
+    expected = _rankings_metadata(pixels, deviation, candidates, quad_nodes, nodes)
+    medians = node_medians(pixels, nodes)
+    params = beta_params_at(medians, deviation)
     rankings, probs = compute_ranking_probabilities(
         candidates, params, quad_nodes, progress
     )
@@ -303,12 +396,13 @@ def generate_ranking_probabilities(
     np.savez(
         path,
         rankings=rankings,
-        probabilities=probs,
+        node_probabilities=probs,
+        medians=medians,
         params=params,
         candidates=candidates,
         metadata=np.array(expected),
     )
-    return rankings, probs
+    return rankings, interpolate_to_pixels(probs, medians, pixels)
 
 # ---------------------------------------------------------------- Validation
 

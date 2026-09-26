@@ -26,7 +26,7 @@ def ideal(
     return nearest.reshape(pixels, pixels)
 
 
-def _transfer_matrices(rankings: np.ndarray) -> np.ndarray:
+def _transfer_matrices(rankings: np.ndarray, dtype: np.dtype) -> np.ndarray:
     """T[s, r, c] = 1 if c is the highest ranked candidate of ballot r that is
     not in the eliminated set s (bit c of s set = c eliminated). Shape (2^C, R, C)."""
     n_ballots, n_candidates = rankings.shape
@@ -34,14 +34,14 @@ def _transfer_matrices(rankings: np.ndarray) -> np.ndarray:
     eliminated = ((states[:, None] >> np.arange(n_candidates)) & 1).astype(bool)
     alive = ~eliminated[:, rankings]
     choice = rankings[np.arange(n_ballots), alive.argmax(axis=-1)]
-    return np.eye(n_candidates)[choice]
+    return np.eye(n_candidates, dtype=dtype)[choice]
 
 
 def _votes_by_state(
     probs: np.ndarray, state: np.ndarray, transfer: np.ndarray
 ) -> np.ndarray:
     """First choice votes among remaining candidates; state: (pixels, pixels) bitmask."""
-    votes = np.empty((*probs.shape[:2], transfer.shape[-1]))
+    votes = np.empty((*probs.shape[:2], transfer.shape[-1]), dtype=probs.dtype)
     for s in np.unique(state):
         mask = state == s
         votes[mask] = probs[mask] @ transfer[s]
@@ -50,7 +50,7 @@ def _votes_by_state(
 
 def fptp(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
     """First past the post."""
-    first = np.eye(rankings.shape[1])[rankings[:, 0]]
+    first = np.eye(rankings.shape[1], dtype=probs.dtype)[rankings[:, 0]]
     return (probs @ first).argmax(axis=-1)
 
 
@@ -62,7 +62,7 @@ def irv(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
     """
     n_candidates = rankings.shape[1]
     candidate_bits = 1 << np.arange(n_candidates)
-    transfer = _transfer_matrices(rankings)
+    transfer = _transfer_matrices(rankings, probs.dtype)
     state = np.zeros(probs.shape[:2], dtype=np.int64)
     for _ in range(n_candidates - 1):
         votes = _votes_by_state(probs, state, transfer)
@@ -75,7 +75,7 @@ def borda(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
     """Borda count: a ballot gives C-1 points to its first choice, C-2 to its
     second, ..., 0 to its last."""
     n_ballots, n_candidates = rankings.shape
-    points = np.empty((n_ballots, n_candidates))
+    points = np.empty((n_ballots, n_candidates), dtype=probs.dtype)
     points[np.arange(n_ballots)[:, None], rankings] = np.arange(n_candidates)[::-1]
     return (probs @ points).argmax(axis=-1)
 

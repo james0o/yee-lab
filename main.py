@@ -22,6 +22,8 @@ from rich.progress import (
 from const import CANDIDATES, DEVIATION, PIXELS
 from methods import METHODS
 from ranking_cells import (
+    NODES,
+    effective_nodes,
     generate_ranking_probabilities,
     read_cached_ranking_probabilities,
 )
@@ -67,7 +69,7 @@ def plot_yee_diagram(winners: np.ndarray, candidates: np.ndarray, title: str) ->
     return path
 
 
-def _generate_with_progress(pixels: int, deviation: float):
+def _generate_with_progress(pixels: int, deviation: float, nodes: int):
     with Progress(
         SpinnerColumn(),
         TextColumn("[bold]{task.description}"),
@@ -79,13 +81,15 @@ def _generate_with_progress(pixels: int, deviation: float):
         TimeRemainingColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task(f"generating rankings ({pixels}x{pixels})", total=None)
+        nodes = effective_nodes(pixels, nodes)
+        grid = f"{nodes}x{nodes} nodes" if nodes else f"{pixels}x{pixels} exact"
+        task = progress.add_task(f"generating rankings ({grid})", total=None)
 
         def update(done: int, total: int) -> None:
             progress.update(task, completed=done, total=total)
 
         return generate_ranking_probabilities(
-            CANDIDATES, pixels, deviation, progress=update
+            CANDIDATES, pixels, deviation, nodes, progress=update
         )
 
 
@@ -94,6 +98,13 @@ def main(
     pixels: int = typer.Option(PIXELS, "--pixels", "-p", help="Pixels per axis."),
     deviation: float = typer.Option(
         DEVIATION, "--deviation", "-d", help="Mean absolute deviation from the median."
+    ),
+    nodes: int = typer.Option(
+        NODES,
+        "--nodes",
+        "-n",
+        help="Chebyshev nodes per axis where probabilities are computed exactly "
+        "and then interpolated to the pixels; 0 = exact at every pixel.",
     ),
     methods: list[str] = typer.Option(
         list(METHODS),
@@ -113,14 +124,18 @@ def main(
             f"unknown method(s) {', '.join(unknown)}; choose from {', '.join(METHODS)}",
             param_hint="--method",
         )
+    try:
+        effective_nodes(pixels, nodes)
+    except ValueError as error:
+        raise typer.BadParameter(str(error), param_hint="--nodes") from error
 
     start = time.perf_counter()
     profile = None
     if not regenerate:
-        profile = read_cached_ranking_probabilities(CANDIDATES, pixels, deviation)
+        profile = read_cached_ranking_probabilities(CANDIDATES, pixels, deviation, nodes)
     step = "load"
     if profile is None:
-        profile = _generate_with_progress(pixels, deviation)
+        profile = _generate_with_progress(pixels, deviation, nodes)
         step = "generate"
     rankings, probs = profile
     console.print(f"[bold]{step:<9}[/bold] {time.perf_counter() - start:.4f} s")

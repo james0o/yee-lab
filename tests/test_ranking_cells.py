@@ -3,7 +3,8 @@
 Beta parameters: median and mean absolute deviation are verified by independent
 numerical integration. Ranking probabilities are verified against closed forms
 (bisectors parallel to an axis reduce to a Beta CDF, and the median splits
-voters exactly in half) and against Monte Carlo sampling.
+voters exactly in half) and against Monte Carlo sampling. Interpolation from
+Chebyshev nodes is checked against the exact probabilities at every pixel.
 """
 
 import numpy as np
@@ -12,7 +13,15 @@ from scipy.integrate import quad
 from scipy.special import beta as beta_fn, betainc
 
 from const import CANDIDATES
-from ranking_cells import beta_params, compute_ranking_probabilities, ranking_cells
+from ranking_cells import (
+    NODES,
+    beta_params,
+    beta_params_at,
+    compute_ranking_probabilities,
+    interpolate_to_pixels,
+    node_medians,
+    ranking_cells,
+)
 
 PIXELS = 21  # odd, so the middle pixel has median exactly 0.5
 MIDDLE = PIXELS // 2
@@ -27,6 +36,14 @@ A, B, C, D = range(4)
 @pytest.fixture(scope="module")
 def params():
     return beta_params(PIXELS, DEVIATION)
+
+
+@pytest.fixture(scope="module", params=["pixels", "nodes"])
+def solved(request):
+    """(medians, params) at the pixel medians and at the Chebyshev nodes of a
+    large grid, which reach much closer to 0 and 1."""
+    medians = MEDIANS if request.param == "pixels" else node_medians(1000, NODES)
+    return medians, beta_params_at(medians, DEVIATION)
 
 
 @pytest.fixture(scope="module")
@@ -48,14 +65,16 @@ def _prefers(rankings, probs, first, second):
 
 # ---------------------------------------------------------------- Beta parameters
 
-def test_params_have_requested_median(params):
+def test_params_have_requested_median(solved):
+    medians, params = solved
     a, b = params[:, 0], params[:, 1]
-    np.testing.assert_allclose(betainc(a, b, MEDIANS), 0.5, atol=1e-12)
+    np.testing.assert_allclose(betainc(a, b, medians), 0.5, atol=1e-12)
 
 
-def test_params_have_requested_deviation(params):
+def test_params_have_requested_deviation(solved):
     """E|X - m| by quadrature with the Beta singularities as algebraic weights."""
-    for m, (a, b) in zip(MEDIANS, params):
+    medians, params = solved
+    for m, (a, b) in zip(medians, params):
         norm = beta_fn(a, b)
         # [0, m]: (m - x) (1 - x)^(b-1) with weight x^(a-1)
         left, _ = quad(lambda x: (m - x) * (1 - x) ** (b - 1), 0, m,
@@ -66,7 +85,8 @@ def test_params_have_requested_deviation(params):
         assert (left + right) / norm == pytest.approx(DEVIATION, abs=1e-9)
 
 
-def test_params_are_mirror_symmetric(params):
+def test_params_are_mirror_symmetric(solved):
+    _, params = solved
     np.testing.assert_allclose(params, params[::-1, ::-1], rtol=1e-10)
 
 
@@ -153,3 +173,29 @@ def test_matches_monte_carlo(profile, pixel, params, request):
     exact = probs[i, j]
     sigma = np.sqrt(exact * (1 - exact) / samples)
     assert np.all(np.abs(empirical - exact) <= 5 * sigma + 1e-6)
+
+
+# ---------------------------------------------------------------- Interpolation
+
+def test_interpolation_matches_exact():
+    pixels = 60
+    exact = compute_ranking_probabilities(CANDIDATES, beta_params(pixels, DEVIATION))
+    medians = node_medians(pixels, 33)
+    rankings, probs = compute_ranking_probabilities(
+        CANDIDATES, beta_params_at(medians, DEVIATION)
+    )
+    np.testing.assert_array_equal(rankings, exact[0])
+    interpolated = interpolate_to_pixels(probs, medians, pixels)
+    np.testing.assert_allclose(interpolated, exact[1], atol=2e-5)
+    assert interpolated.dtype == np.float32
+    np.testing.assert_allclose(interpolated.sum(axis=-1), 1.0, atol=1e-6)
+
+
+def test_node_medians_span_pixel_medians():
+    medians = node_medians(200, NODES)
+    assert len(medians) == NODES
+    assert medians[0] == pytest.approx(0.5 / 200, rel=1e-12)
+    assert medians[-1] == pytest.approx(1 - 0.5 / 200, rel=1e-12)
+    assert np.all(np.diff(medians) > 0)
+    np.testing.assert_array_equal(node_medians(PIXELS, 0), MEDIANS)
+    np.testing.assert_array_equal(node_medians(PIXELS, PIXELS + 5), MEDIANS)
