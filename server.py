@@ -6,13 +6,14 @@ The page itself is ui/index.html; this file only answers its requests.
 
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal, get_args
 
 import numpy as np
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+import normal
 from const import CANDIDATES, DEVIATION
 from methods import METHODS, ideal
 from ranking_cells import (
@@ -27,6 +28,7 @@ PIXELS = 300
 MAX_CANDIDATES = 8  # probabilities take ~0.5 s for 5 candidates, ~4 s for 8
 
 Coordinate = Annotated[float, Field(ge=0, le=1)]
+Distribution = Literal["beta", "normal"]
 
 app = FastAPI()
 
@@ -36,6 +38,7 @@ class DiagramRequest(BaseModel):
         min_length=2, max_length=MAX_CANDIDATES
     )
     method: Annotated[str, Field(pattern=f"^({'|'.join(METHODS)})$")]
+    distribution: Distribution = "beta"
 
 
 @lru_cache(maxsize=1)
@@ -45,9 +48,13 @@ def _beta_params():
 
 
 @lru_cache(maxsize=4)
-def _ranking_probabilities(candidates: tuple[tuple[float, float], ...]):
+def _ranking_probabilities(
+    candidates: tuple[tuple[float, float], ...], distribution: Distribution
+):
     """Kept in memory, not in cache/: nearly every dragged position is new.
     The lru_cache makes switching methods without moving a candidate instant."""
+    if distribution == "normal":
+        return normal.ranking_probabilities(np.array(candidates), PIXELS, DEVIATION, NODES)
     medians, params = _beta_params()
     rankings, probs = compute_ranking_probabilities(np.array(candidates), params)
     return rankings, interpolate_to_pixels(probs, medians, PIXELS)
@@ -57,6 +64,7 @@ def _ranking_probabilities(candidates: tuple[tuple[float, float], ...]):
 def config():
     return {
         "methods": list(METHODS),
+        "distributions": list(get_args(Distribution)),
         "candidates": CANDIDATES.tolist(),
         "max_candidates": MAX_CANDIDATES,
     }
@@ -65,7 +73,7 @@ def config():
 @app.post("/api/diagram")
 def diagram(request: DiagramRequest):
     candidates = tuple(request.candidates)
-    rankings, probs = _ranking_probabilities(candidates)
+    rankings, probs = _ranking_probabilities(candidates, request.distribution)
     method = METHODS[request.method]
     if method is ideal:  # the only method that needs positions, not just rankings
         method = partial(ideal, candidates=np.array(candidates))

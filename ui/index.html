@@ -8,7 +8,8 @@
     body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; color: #222; background: #fff; }
     h1 { font-size: 1.4rem; font-weight: 600; }
     canvas { display: block; width: 100%; aspect-ratio: 1; border: 1px solid #222; cursor: crosshair; touch-action: none; }
-    #methods { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0 .5rem; }
+    .choices { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 1rem 0 .5rem; }
+    .choices span { font-size: .9rem; color: #666; }
     button { font: inherit; padding: .4rem .9rem; border: 1px solid #222; border-radius: 4px; background: #fff; cursor: pointer; }
     button.active { background: #222; color: #fff; }
     p { margin: .25rem 0; font-size: .9rem; color: #666; }
@@ -17,7 +18,8 @@
 <body>
   <h1>Yee diagram</h1>
   <canvas id="square" width="1000" height="1000"></canvas>
-  <div id="methods"></div>
+  <div class="choices" id="distributions"><span>Voters:</span></div>
+  <div class="choices" id="methods"></div>
   <p>Drag a candidate to move it · click empty space to add one · right-click to remove</p>
   <p id="message">Pick a method.</p>
 
@@ -33,10 +35,12 @@
     const ctx = canvas.getContext("2d");
     const message = document.getElementById("message");
     const methods = document.getElementById("methods");
+    const distributions = document.getElementById("distributions");
 
     let candidates = [];  // [[x, y], ...] in the unit square, y pointing up
     let maxCandidates = 0;
     let method = null;    // name of the selected method
+    let distribution = null;  // name of the selected voter distribution
     let diagram = null;   // last computed diagram as an image, or null
     let dragged = -1;     // index of the candidate being dragged
     let requestId = 0;    // answers to older requests are ignored
@@ -89,7 +93,7 @@
         const response = await fetch("/api/diagram", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ candidates, method }),
+          body: JSON.stringify({ candidates, method, distribution }),
         });
         if (!response.ok) throw new Error(await response.text());
         const { pixels, winners } = await response.json();
@@ -100,7 +104,7 @@
         if (id !== requestId) return;  // candidates changed meanwhile, a newer answer is coming
         diagram = bitmap;
         draw();
-        message.textContent = `${method} · ${candidates.length} candidates · ${Math.round(performance.now() - start)} ms`;
+        message.textContent = `${method} · ${distribution} voters · ${candidates.length} candidates · ${Math.round(performance.now() - start)} ms`;
       } catch (error) {
         if (id === requestId) message.textContent = `Error: ${error.message}`;
       }
@@ -146,20 +150,28 @@
       compute();
     });
 
-    // Start: default candidates and method names come from the backend.
+    // A row of buttons of which one is active; picking one recomputes the diagram.
+    function choices(row, names, pick) {
+      for (const name of names) {
+        const button = document.createElement("button");
+        button.textContent = name;
+        button.addEventListener("click", () => {
+          pick(name);
+          for (const b of row.querySelectorAll("button")) b.classList.toggle("active", b === button);
+          compute();
+        });
+        row.append(button);
+      }
+    }
+
+    // Start: default candidates, distributions and method names come from the backend.
     const config = await (await fetch("/api/config")).json();
     candidates = config.candidates;
     maxCandidates = config.max_candidates;
-    for (const name of config.methods) {
-      const button = document.createElement("button");
-      button.textContent = name;
-      button.addEventListener("click", () => {
-        method = name;
-        for (const b of methods.children) b.classList.toggle("active", b === button);
-        compute();
-      });
-      methods.append(button);
-    }
+    choices(distributions, config.distributions, name => distribution = name);
+    choices(methods, config.methods, name => method = name);
+    distribution = config.distributions[0];
+    distributions.querySelector("button").classList.add("active");
     draw();
   </script>
 </body>

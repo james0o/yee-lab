@@ -1,5 +1,6 @@
 import time
 from pathlib import Path
+from typing import Literal
 
 import matplotlib
 matplotlib.use("Agg")
@@ -19,16 +20,15 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
+import normal
+import ranking_cells
 from const import CANDIDATES, DEVIATION, PIXELS
 from methods import CYCLE, METHODS
-from ranking_cells import (
-    NODES,
-    effective_nodes,
-    generate_ranking_probabilities,
-    read_cached_ranking_probabilities,
-)
+from ranking_cells import NODES, effective_nodes
 
 PLOTS = Path("plots")
+# modules with the same read_cached_ / generate_ranking_probabilities functions
+DISTRIBUTIONS = {"beta": ranking_cells, "normal": normal}
 console = Console()
 app = typer.Typer(
     add_completion=False,
@@ -71,7 +71,7 @@ def plot_yee_diagram(winners: np.ndarray, candidates: np.ndarray, title: str) ->
     return path
 
 
-def _generate_with_progress(pixels: int, deviation: float, nodes: int):
+def _generate_with_progress(model, pixels: int, deviation: float, nodes: int):
     with Progress(
         SpinnerColumn(),
         TextColumn("[bold]{task.description}"),
@@ -90,7 +90,7 @@ def _generate_with_progress(pixels: int, deviation: float, nodes: int):
         def update(done: int, total: int) -> None:
             progress.update(task, completed=done, total=total)
 
-        return generate_ranking_probabilities(
+        return model.generate_ranking_probabilities(
             CANDIDATES, pixels, deviation, nodes, progress=update
         )
 
@@ -100,6 +100,9 @@ def main(
     pixels: int = typer.Option(PIXELS, "--pixels", "-p", help="Pixels per axis."),
     deviation: float = typer.Option(
         DEVIATION, "--deviation", "-d", help="Mean absolute deviation from the median."
+    ),
+    distribution: Literal["beta", "normal"] = typer.Option(
+        "beta", help="Voter distribution around each pixel."
     ),
     nodes: int = typer.Option(
         NODES,
@@ -119,7 +122,7 @@ def main(
         False, help="Ignore cached rankings and generate them again."
     ),
 ) -> None:
-    """Compute Yee diagrams with Beta-distributed voters."""
+    """Compute Yee diagrams with Beta or normally distributed voters."""
     unknown = [name for name in methods if name not in METHODS]
     if unknown:
         raise typer.BadParameter(
@@ -131,13 +134,14 @@ def main(
     except ValueError as error:
         raise typer.BadParameter(str(error), param_hint="--nodes") from error
 
+    model = DISTRIBUTIONS[distribution]
     start = time.perf_counter()
     profile = None
     if not regenerate:
-        profile = read_cached_ranking_probabilities(CANDIDATES, pixels, deviation, nodes)
+        profile = model.read_cached_ranking_probabilities(CANDIDATES, pixels, deviation, nodes)
     step = "load"
     if profile is None:
-        profile = _generate_with_progress(pixels, deviation, nodes)
+        profile = _generate_with_progress(model, pixels, deviation, nodes)
         step = "generate"
     rankings, probs = profile
     console.print(f"[bold]{step:<9}[/bold] {time.perf_counter() - start:.4f} s")
@@ -148,7 +152,7 @@ def main(
             winners = METHODS[name](rankings, probs)
             computed = time.perf_counter()
             if plot:
-                plot_yee_diagram(winners, CANDIDATES, name)
+                plot_yee_diagram(winners, CANDIDATES, f"{name}_{distribution}")
             plotted = time.perf_counter()
         line = f"[bold cyan]{name:<9}[/bold cyan] {computed - start:.4f} s"
         if plot:

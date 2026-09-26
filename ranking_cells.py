@@ -121,8 +121,9 @@ def _interpolation_matrix(nodes, targets):
     return matrix
 
 
-def interpolate_to_pixels(probs, medians, pixels):
-    """Probabilities (pixels, pixels, R) from probabilities (N, N, R) at `medians`.
+def interpolate_to_pixels(probs, medians, pixels, transform=logit):
+    """Probabilities (pixels, pixels, R) from probabilities (N, N, R) at `medians`,
+    which are Chebyshev-Lobatto points in transform(median).
 
     The result is float32: it is the largest array by far and only feeds the
     voting methods, where float32 halves memory and time. Its rounding (~1e-7)
@@ -131,7 +132,7 @@ def interpolate_to_pixels(probs, medians, pixels):
     targets = pixel_medians(pixels)
     if np.array_equal(medians, targets):
         return probs.astype(np.float32)
-    matrix = _interpolation_matrix(logit(medians), logit(targets))
+    matrix = _interpolation_matrix(transform(medians), transform(targets))
     # columns[i, q, r] = sum_j matrix[q, j] probs[i, j, r]; small, so kept in float64
     columns = (matrix @ probs).reshape(len(medians), -1).astype(np.float32)
     # one (pixels, N) @ (N, pixels * R) product for the large result

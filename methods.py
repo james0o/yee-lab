@@ -17,7 +17,8 @@ def ideal(
 ) -> np.ndarray:
     """Reference diagram: the median voter [x, y] of each pixel votes alone for
     the nearest candidate. The median of pixel (i, j) is its centre
-    ((i + 1/2) / pixels, (j + 1/2) / pixels) by construction of the Beta parameters.
+    ((i + 1/2) / pixels, (j + 1/2) / pixels) by construction of the Beta parameters
+    (and the mean of the normal distribution, where every Condorcet method gives this).
     """
     pixels = probs.shape[0]
     medians = (np.arange(pixels) + 0.5) / pixels
