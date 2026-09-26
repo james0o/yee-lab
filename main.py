@@ -20,7 +20,7 @@ from rich.progress import (
 )
 
 from const import CANDIDATES, DEVIATION, PIXELS
-from methods import METHODS
+from methods import CYCLE, METHODS
 from ranking_cells import (
     NODES,
     effective_nodes,
@@ -38,12 +38,14 @@ app = typer.Typer(
 
 def plot_yee_diagram(winners: np.ndarray, candidates: np.ndarray, title: str) -> Path:
     colors = list(plt.cm.tab20.colors[: len(candidates)])
+    # CYCLE gets the extra last colour, black
+    winners = np.where(winners == CYCLE, len(candidates), winners)
     fig, ax = plt.subplots()
     ax.imshow(
         winners.T,
-        cmap=ListedColormap(colors),
+        cmap=ListedColormap(colors + ["#000000"]),
         vmin=0,
-        vmax=len(candidates) - 1,
+        vmax=len(candidates),
         origin="lower",
         extent=(0, 1, 0, 1),
         interpolation="nearest",

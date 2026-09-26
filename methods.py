@@ -100,10 +100,23 @@ def schulze(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
     return (p >= np.swapaxes(p, -1, -2)).all(axis=-1).argmax(axis=-1)
 
 
+CYCLE = -1
+
+
+def condorcet_cycle(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
+    """Condorcet winner (beats every other candidate head to head), or CYCLE
+    where there is none, i.e. the pairwise majorities form a cycle."""
+    d = _pairwise_preferences(rankings, probs)
+    wins = (d > np.swapaxes(d, -1, -2)).sum(axis=-1)
+    has_winner = wins.max(axis=-1) == rankings.shape[1] - 1
+    return np.where(has_winner, wins.argmax(axis=-1), CYCLE)
+
+
 METHODS = {
     "ideal": ideal,
     "fptp": fptp,
     "irv": irv,
     "borda": borda,
     "schulze": schulze,
+    "condorcet_cycle": condorcet_cycle,
 }
