@@ -107,7 +107,7 @@ $(a, b)$ change quickly, and even for a single median close to $0$ or $1$.
 
 === Other spread rules (`spread`) <sec-spreads>
 
-The rule of condition 2 is chosen with `spread` (`--spread` in `main.py`, _Beta spread_
+The rule of condition 2 is chosen with `spread` (`--spread` in `plot.py`, _Beta spread_
 in the web UI). Chapter 3 records how the rules below were found; this section
 describes the code. All rules agree at the centre pixel. There $a = b = a_0$, and the
 mean absolute deviation of a symmetric Beta has a closed form,

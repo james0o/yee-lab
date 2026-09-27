@@ -1,6 +1,6 @@
 """Web UI for Yee diagrams.
 
-Run `uv run fastapi dev server.py` and open http://127.0.0.1:8000.
+Run `uv run fastapi dev main.py` and open http://127.0.0.1:8000.
 The page itself is ui/index.html; this file only answers its requests.
 """
 
