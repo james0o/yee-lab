@@ -4,24 +4,40 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Yee diagram</title>
+  <!-- KaTeX 0.18.9 (MIT), bundled in ui/vendor so the page also works offline -->
+  <link rel="stylesheet" href="vendor/katex/katex.min.css">
+  <script src="vendor/katex/katex.min.js"></script>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; color: #222; background: #fff; }
+    body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; color: #222; background: #fff; }
     h1 { font-size: 1.4rem; font-weight: 600; }
+    /* diagram on the left, controls on the right; stacked on narrow screens */
+    .layout { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 2rem; }
+    .diagram { flex: 1 1 420px; max-width: 640px; }
+    .controls { flex: 1 1 300px; }
     canvas { display: block; width: 100%; aspect-ratio: 1; border: 1px solid #222; cursor: crosshair; touch-action: none; }
-    .choices { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 1rem 0 .5rem; }
-    .choices span { font-size: .9rem; color: #666; }
+    .choices { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 0 0 1rem; }
+    .choices > span { font-size: .9rem; color: #666; }  /* row labels only, not KaTeX spans */
     button { font: inherit; padding: .4rem .9rem; border: 1px solid #222; border-radius: 4px; background: #fff; cursor: pointer; }
     button.active { background: #222; color: #fff; }
+    button:disabled { opacity: .35; cursor: default; }
     p { margin: .25rem 0; font-size: .9rem; color: #666; }
+    .katex { font-size: 1.05em; }
   </style>
 </head>
 <body>
   <h1>Yee diagram</h1>
-  <canvas id="square" width="1000" height="1000"></canvas>
-  <div class="choices" id="distributions"><span>Voters:</span></div>
-  <div class="choices" id="methods"></div>
-  <p>Drag a candidate to move it · click empty space to add one · right-click to remove</p>
-  <p id="message">Pick a method.</p>
+  <div class="layout">
+    <div class="diagram">
+      <canvas id="square" width="1000" height="1000"></canvas>
+    </div>
+    <div class="controls">
+      <div class="choices" id="distributions"><span>Voters:</span></div>
+      <div class="choices" id="spreads"><span>Beta spread fixed:</span></div>
+      <div class="choices" id="methods"></div>
+      <p>Drag a candidate to move it · click empty space to add one · right-click to remove</p>
+      <p id="message">Pick a method.</p>
+    </div>
+  </div>
 
   <script type="module">
     // matplotlib's tab20, the colours main.py uses, so the UI matches plots/
@@ -36,11 +52,14 @@
     const message = document.getElementById("message");
     const methods = document.getElementById("methods");
     const distributions = document.getElementById("distributions");
+    const spreads = document.getElementById("spreads");
 
     let candidates = [];  // [[x, y], ...] in the unit square, y pointing up
     let maxCandidates = 0;
     let method = null;    // name of the selected method
     let distribution = null;  // name of the selected voter distribution
+    let spread = null;    // name of the selected Beta spread rule
+    let spreadInfo = {};  // spread name -> {label, tex, description} from the backend
     let diagram = null;   // last computed diagram as an image, or null
     let dragged = -1;     // index of the candidate being dragged
     let requestId = 0;    // answers to older requests are ignored
@@ -93,7 +112,7 @@
         const response = await fetch("/api/diagram", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ candidates, method, distribution }),
+          body: JSON.stringify({ candidates, method, distribution, spread }),
         });
         if (!response.ok) throw new Error(await response.text());
         const { pixels, winners } = await response.json();
@@ -104,7 +123,14 @@
         if (id !== requestId) return;  // candidates changed meanwhile, a newer answer is coming
         diagram = bitmap;
         draw();
-        message.textContent = `${method} · ${distribution} voters · ${candidates.length} candidates · ${Math.round(performance.now() - start)} ms`;
+        const tail = ` · ${candidates.length} candidates · ${Math.round(performance.now() - start)} ms`;
+        if (distribution === "beta") {
+          const formula = document.createElement("span");
+          typeset(formula, spreadInfo[spread]);
+          message.replaceChildren(`${method} · beta voters, `, formula, tail);
+        } else {
+          message.textContent = `${method} · ${distribution} voters${tail}`;
+        }
       } catch (error) {
         if (id === requestId) message.textContent = `Error: ${error.message}`;
       }
@@ -150,11 +176,23 @@
       compute();
     });
 
+    // Typeset a {label, tex} option with KaTeX, or show the plain label if it fails.
+    function typeset(element, { label, tex }) {
+      try {
+        katex.render(tex, element, { throwOnError: true });
+      } catch {
+        element.textContent = label;
+      }
+    }
+
     // A row of buttons of which one is active; picking one recomputes the diagram.
-    function choices(row, names, pick) {
-      for (const name of names) {
+    // options: [{name, label, tex, description}], all but name optional.
+    function choices(row, options, pick) {
+      for (const { name, label = name, tex, description = "" } of options) {
         const button = document.createElement("button");
-        button.textContent = name;
+        if (tex) typeset(button, { label, tex });
+        else button.textContent = label;
+        button.title = description;
         button.addEventListener("click", () => {
           pick(name);
           for (const b of row.querySelectorAll("button")) b.classList.toggle("active", b === button);
@@ -163,15 +201,26 @@
         row.append(button);
       }
     }
+    const named = names => names.map(name => ({ name }));
+
+    // The spread rules only apply to Beta voters.
+    function updateSpreads() {
+      for (const button of spreads.querySelectorAll("button")) button.disabled = distribution !== "beta";
+    }
 
     // Start: default candidates, distributions and method names come from the backend.
     const config = await (await fetch("/api/config")).json();
     candidates = config.candidates;
     maxCandidates = config.max_candidates;
-    choices(distributions, config.distributions, name => distribution = name);
-    choices(methods, config.methods, name => method = name);
+    spreadInfo = Object.fromEntries(config.spreads.map(info => [info.name, info]));
+    choices(distributions, named(config.distributions), name => { distribution = name; updateSpreads(); });
+    choices(spreads, config.spreads, name => spread = name);
+    choices(methods, named(config.methods), name => method = name);
     distribution = config.distributions[0];
     distributions.querySelector("button").classList.add("active");
+    spread = config.spreads[0].name;
+    spreads.querySelector("button").classList.add("active");
+    updateSpreads();
     draw();
   </script>
 </body>
