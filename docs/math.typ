@@ -61,6 +61,8 @@ political space. Parameters $(a, b)$ are chosen per coordinate so that
 Condition 2 keeps the "spread" of every pixel the same, independently of where the
 pixel lies. Near the edges of the square this forces $a < 1$ or $b < 1$, so the density
 is singular (infinite) at $0$ or $1$; much of the later numerics is shaped by this.
+Condition 2 is the default spread rule; @sec-spreads describes three others that agree
+with it at the centre pixel and let the spread shrink towards the edges.
 
 We write $f, F$ for the pdf and CDF of $X$ and $g, G$ for those of $Y$. The CDF of
 $Beta(a, b)$ is the regularised incomplete beta function $I_x (a, b)$
@@ -97,9 +99,75 @@ Levenberg–Marquardt (`scipy.optimize.root(method="lm")`).
 If $X tilde Beta(a, b)$ then $1 - X tilde Beta(b, a)$. A median $m < 1/2$ is therefore
 the mirror of median $1 - m$ with $(a, b)$ swapped, so only the medians
 $max(m, 1 - m) >= 1/2$ are solved. They are solved in increasing order, starting from
-$(1, 1)$ (the uniform distribution, median $1/2$) and using each solution as the initial
-guess for the next median. This continuation keeps the solver on the correct branch
-even far from the centre, where $(a, b)$ change quickly.
+the exact solution $(a_0, a_0)$ at median $1/2$ (@eq-centre) and using each solution as
+the initial guess for the next median. Where two consecutive medians are more than
+$0.25$ apart in $logit(m)$, intermediate medians are solved on the way. This
+continuation keeps the solver on the correct branch even far from the centre, where
+$(a, b)$ change quickly, and even for a single median close to $0$ or $1$.
+
+=== Other spread rules (`spread`) <sec-spreads>
+
+The rule of condition 2 is chosen with `spread` (`--spread` in `main.py`, _Beta spread_
+in the web UI). Chapter 3 records how the rules below were found; this section
+describes the code. All rules agree at the centre pixel. There $a = b = a_0$, and the
+mean absolute deviation of a symmetric Beta has a closed form,
+
+$ E|X - 1/2| = 2^(-2 a_0) / (a_0 B(a_0, a_0)) = d, $ <eq-centre>
+
+which decreases from $1/2$ ($a_0 -> 0$) to $0$ ($a_0 -> oo$), so $0 < d < 1/2$ is
+required. It is solved for $a_0$ by bracketing (`centre_shape`); $d = 0.3$ gives
+$a_0 = 0.602$. The rules differ in what they keep equal for the other medians:
+
+#align(center, table(
+  columns: 3,
+  align: (left, left, left),
+  stroke: none,
+  table.hline(),
+  [`spread`], [fixed for every median], [solver],
+  table.hline(stroke: 0.5pt),
+  [`mean_abs` (default, legacy)], [$E|X - m| = d$, @eq-mad], [@eq-median–@eq-mad, continuation],
+  [`rms`], [$sqrt(E(X - m)^2) = s = 1 / (2 sqrt(2 a_0 + 1))$], [bracketing over $log kappa$],
+  [`tapered`], [$a + b = kappa(m) = 2 a_0 (4 m (1 - m))^tau$, $tau = 0.2$ (`TAPER`)], [bracketing],
+  table.hline(),
+))
+
+Here $s$ is the standard deviation of $Beta(a_0, a_0)$, and
+$E(X - m)^2 = "Var" X + (mu - m)^2$ is explicit in $(a, b)$. Neither `rms` nor
+`tapered` needs continuation. For a given $kappa = a + b$ the median of
+$Beta(kappa - b, b)$ decreases from $1$ to $1/2$ as $b$ grows from $0$ to
+$kappa slash 2$, so @eq-median has exactly one root, found by bracketing $b$
+(`_b_for_median`). `tapered` passes its $kappa(m)$ directly. For `rms` the RMS distance
+decreases along this family as $kappa$ grows, so an outer bracketing search over
+$log kappa$, starting from the solution at the previous median, finds $s$ (`_solve_rms`).
+
+- `mean_abs` is the original rule. It stays the default so that older results and
+  Chapter 2 can be reproduced, but near the edges it pushes the far half of the voters
+  away (@sec-skew), which bends borders and causes the round IRV edge.
+- `rms` is the rule with the clearest interpretation: the root mean square distance of
+  the voters from the median is the same for every pixel.
+- `tapered` is the result of an optimisation (@sec-search-bench). It behaves very much like
+  `rms` and keeps Condorcet borders a little straighter at the same number of cycles.
+  Only within about $10^(-5)$ of an edge, which no practical pixel grid reaches, does
+  $kappa$ become so small that the spread grows again.
+
+With $d = 0.3$ every rule has $E|X - 1/2| = 0.300$ and $P(X < 0.1) = 0.175$ at the
+centre; towards the edge (`docs/figures.py`):
+
+#align(center, table(
+  columns: 7,
+  align: (left, right, right, right, right, right, right),
+  stroke: none,
+  table.hline(),
+  [], table.cell(colspan: 3)[$E|X - m|$ at median], table.cell(colspan: 3)[$P(X < 0.1)$ at median],
+  [`spread`], [0.70], [0.90], [0.98], [0.70], [0.90], [0.98],
+  table.hline(stroke: 0.5pt),
+  [`mean_abs`], [0.300], [0.300], [0.300], [0.121], [0.146], [0.192],
+  [`rms`], [0.283], [0.229], [0.186], [0.095], [0.051], [0.049],
+  [`tapered`], [0.286], [0.237], [0.197], [0.099], [0.059], [0.059],
+  table.hline(),
+))
+
+Chapter 2 uses the default rule `mean_abs` throughout.
 
 == Ranking cells (`ranking_cells`)
 
@@ -396,8 +464,8 @@ $sqrt(p(1-p) slash M) lt.eq 1/(2 sqrt(M)) approx 3.5 dot 10^(-4)$.
 
 == Summary of the pipeline
 
-+ For each node median solve @eq-median–@eq-mad for $(a, b)$ (with mirror symmetry and
-  continuation).
++ For each node median solve @eq-median and the spread rule for $(a, b)$ (@eq-mad with
+  continuation by default, @sec-spreads; mirror symmetry for all rules).
 + Build the arrangement of the $binom(C, 2)$ bisectors in the unit square; each cell
   has one ranking.
 + For every distinct cell edge, compute $integral omega$ for all pairs of node parameters
@@ -897,6 +965,10 @@ In short: *curved* FPTP and IRV borders are generic (ties between masses of poly
 while the *hooks and bends near the edges* are a property of the Beta model with a
 fixed deviation, the same property that distorts the Condorcet diagrams.
 
+_Later finding (@sec-search-causes): the round IRV edge is indeed caused by the fixed
+deviation, but the FPTP flare at the left edge is not. It stays when the spread is
+allowed to shrink near the edges, and only fades with a smaller spread overall._
+
 == Summary
 
 - Normal voters are symmetric about the pixel centre, so pairwise majorities follow
@@ -912,3 +984,227 @@ fixed deviation, the same property that distorts the Condorcet diagrams.
 - At $d = 0.3$ the Beta is U-shaped everywhere, and near the edges the fixed deviation
   pushes the other half of the voters away: the blur changes shape across the square.
   This produces the round IRV edge and the FPTP hooks at the walls of the square.
+
+#pagebreak()
+
+= Searching for a better spread rule <ch-search>
+
+This chapter keeps the questions, experiments and dead ends in the order they came up,
+not only the final result. Unless stated otherwise the
+numbers use the default candidates A–E, $d = 0.3$ and $300 times 300$ pixels. The
+benchmark scripts were run outside the repository; `docs/figures.py` reproduces
+@fig-spread-rules and the tables of @sec-spreads.
+
+== Which curves come from the fixed deviation? <sec-search-causes>
+
+*Question.* Do the round edges exist because every pixel has the same mean absolute
+deviation $E|X - m| = d$?
+
+*Finding.* Partly. Three kinds of curvature have different causes:
+
+- Rounded corners where Voronoi cells meet (FPTP, IRV) appear in every model with
+  spread, the normal one included: they are the blur of @sec-round-edges.
+- The round IRV edge of D (@fig-irv-round) comes from the fixed deviation. It
+  disappears as soon as the spread may shrink near the edges.
+- The FPTP flare of B at the left edge (@fig-fptp-edge) does not. It stays with the
+  other rules below and only fades with a smaller spread. This corrects the last
+  paragraph of @sec-round-edges. The flare comes mostly from the far half of the voters
+  crowding into the strip next to the edge, which any wide Beta does.
+
+#align(center, table(
+  columns: 5,
+  align: (left, right, right, center, right),
+  stroke: none,
+  table.hline(),
+  [voter model], [cycle pixels], [Schulze $!=$ Voronoi], [round IRV edge], [B|E rise, last 0.075],
+  table.hline(stroke: 0.5pt),
+  [Beta, fixed $E|X - m|$], [2.06 %], [20.2 %], [yes], [0.097],
+  [Beta, fixed RMS from median], [1.23 %], [14.2 %], [no], [0.083],
+  [Beta, fixed $a + b = 1.2$], [1.21 %], [13.2 %], [no], [0.090],
+  [Beta, fixed $a + b = 4$ ($d approx 0.19$)], [0.03 %], [3.6 %], [no], [0.030],
+  [normal clamped to the square], [0.10 %], [7.9 %], [no], [0.023],
+  [normal], [0], [0], [no], [0.030],
+  table.hline(),
+))
+
+The Beta rows except $a + b = 4$ share the centre pixel $Beta(0.602, 0.602)$. The last
+column is how far the border between B and E rises as the pixel column moves from
+$x = 0.08$ to $x = 0.005$.
+
+== Other spread measures and the clamped normal
+
+*Question.* Would another measure of spread, for example the median absolute
+deviation, avoid the problem?
+
+*A bound for every distribution.* For any distribution on $[0, 1]$ with median $m$
+close to $1$, the upper half lies within $1 - m$ of the median and can supply almost
+none of the spread; the lower half has to supply it. For the mean absolute deviation
+
+$ E[m - X | X < m] >= 2 d - (1 - m), $
+
+so the mean distance of the far half doubles. For $(E|X - m|^p)^(1/p)$ the far half
+must grow by the factor $2^(1/p)$: $2$ for $p = 1$, $1.41$ for the RMS, $1.26$ for
+$p = 3$. No other family of distributions on $[0, 1]$ can avoid this push while
+keeping the median and a fixed $E|X - m|$.
+
+*Median absolute deviation.* For every Beta, $"median"|X - m| < min(m, 1 - m)$: the
+near half lies entirely within that distance. A fixed median absolute deviation is
+therefore impossible within $d$ of every edge.
+
+*Clamped normal.* Normal voters moved onto the edge when they would leave the square
+(point masses on the edges) have neither the round edge nor the flare, but they are
+not a Beta, their deviation shrinks near the edges, and almost no cycles remain
+(table above).
+
+== Every rule is a curve $a + b = kappa(m)$
+
+With the median fixed, a Beta has one free parameter left, $kappa = a + b$, so every
+spread rule is just a curve $kappa(m)$ through $kappa(1/2) = 2 a_0$. Rules tried
+(each matched to the centre pixel), with $kappa$ and a curvature score on the default
+candidates. The score is the largest distance of each pairwise majority border
+$pi_(i j) = 1/2$ from its chord, averaged over the ten pairs (units of the square; $0$
+for normal voters):
+
+#align(center, table(
+  columns: 6,
+  align: (left, right, right, right, right, right),
+  stroke: none,
+  table.hline(),
+  [rule], [$kappa(0.7)$], [$kappa(0.9)$], [$kappa(0.98)$], [bend], [cycle pixels],
+  table.hline(stroke: 0.5pt),
+  [$E|X - m|$ ($L_1$)], [1.012], [0.554], [0.307], [0.046], [2.06 %],
+  [$L_(1.5)$ from median], [1.096], [0.807], [0.557], [0.015], [1.55 %],
+  [RMS ($L_2$)], [1.197], [1.062], [0.799], [0.009], [1.23 %],
+  [$L_3$ from median], [1.430], [1.546], [1.250], [0.010], [0.82 %],
+  [$L_4$ from median], [1.684], [1.990], [1.667], [0.011], [0.59 %],
+  [fixed $a + b$], [1.204], [1.204], [1.204], [0.024], [1.21 %],
+  [SD about the mean], [1.086], [0.779], [0.557], [0.015], [1.59 %],
+  [far-side mean distance], [1.826], [1.624], [1.045], [0.012], [0.43 %],
+  [far-side RMS], [2.112], [2.078], [1.514], [0.010], [0.31 %],
+  [far-side median distance], [1.444], [1.096], [0.622], [0.026], [0.75 %],
+  [SD of $logit(X)$], [1.320], [2.262], [8.106], [0.038], [0.98 %],
+  table.hline(),
+))
+
+"Far-side" measures use only the half of the voters towards the centre of the square.
+Too little decrease of $kappa$ (fixed $a + b$) and too much ($L_1$) both bend borders;
+$p$ between 2 and 3 is a sweet spot, with RMS keeping the most cycles there.
+
+== Benchmark at equal numbers of cycles <sec-search-bench>
+
+Comparing rules at the same $d$ mixes the rule with the amount of spread: cycles and
+bend both grow with $d$. The benchmark therefore swept $d in {0.2, 0.25, 0.3, 0.35, 0.4}$
+for every rule and compared bend at the same share of cycle pixels, interpolating in
+$d$. Pairwise majorities need one bisector each, so the pairwise shares were computed
+per pair; the score is the chord distance of the _visible_ Condorcet borders (where
+both candidates beat all others). Candidates: 3–6 per layout, uniform in
+$[0.1, 0.9]^2$.
+
+Round 1 (24 layouts) at the cycle level of RMS at $d = 0.3$, bend relative to RMS:
+$L_1$ 2.41, $L_(1.5)$ 0.84, $L_(2.25)$ 1.10, $L_(2.5)$ 1.21, $L_3$ 1.35, fixed $a + b$
+2.83, far-side RMS 1.84, RMS of $arcsin sqrt(X)$ 2.00, and two direct curves
+$kappa = 2 a_0 (4 m (1 - m))^tau$: $tau = 0.1$ 1.92, $tau = 0.2$ *0.60*.
+
+Round 2 checked the winners on 30 new layouts, with 95 % bootstrap intervals over
+layouts (bend relative to RMS; three cycle levels, those of RMS at $d = 0.25, 0.3, 0.35$):
+
+#align(center, table(
+  columns: 4,
+  align: (left, right, right, right),
+  stroke: none,
+  table.hline(),
+  [rule], [$d = 0.25$ level], [$d = 0.3$ level], [$d = 0.35$ level],
+  table.hline(stroke: 0.5pt),
+  [$tau = 0.2$], [0.66 [0.62, 0.70]], [0.63 [0.59, 0.70]], [0.56 [0.49, 0.65]],
+  [$tau = 0.25$], [0.76 [0.67, 0.87]], [0.90 [0.75, 1.07]], [1.03 [0.81, 1.28]],
+  [$tau = 0.3$], [1.52], [1.97], [2.14],
+  [$tau = 0.4$], [3.55], [4.49], [4.30],
+  [$tau = 0.5$], [5.94], [7.25], [6.80],
+  [$L_(1.75)$], [1.01 [0.96, 1.05]], [0.92 [0.88, 0.98]], [0.77 [0.73, 0.80]],
+  [$L_(1.5)$], [1.14 [1.05, 1.24]], [0.94 [0.83, 1.08]], [0.67 [0.60, 0.77]],
+  table.hline(),
+))
+
+The whole pairwise borders (visible or not) gave the same picture: $tau = 0.2$ at
+0.79, 0.79 and 0.52 of RMS. In absolute terms the gain is small: at $d = 0.3$ visible
+borders bend by 1.5 pixels on average with RMS and 1.0 with $tau = 0.2$ (90th
+percentile 3.1 and 2.0 pixels; the single worst border 4.9 and 7.7 pixels). On the
+default candidates both rules keep the IRV diagram free of the round edge
+(@fig-spread-rules), and the FPTP flare is the same (0.083 and 0.080).
+
+#figure(
+  image("figures/spread_rules.png", width: 100%),
+  caption: [The three spread rules of @sec-spreads on the default candidates,
+    $d = 0.3$. Only `mean_abs` has the round IRV edge. Black: no Condorcet winner.],
+) <fig-spread-rules>
+
+== Why the tapered rule works
+
+*What keeps a border straight.* The border between $c_i$ and $c_j$ is where the median
+of the projected voters $nu dot X$ equals the bisector value. That median sits at a
+distance from $nu dot m$, the pull of the pixel towards the centre, and the border is
+straight when the pull changes linearly along it.
+
+*Borders close to an axis (exact).* For a small tilt $epsilon$,
+$F_(X + epsilon Y)(t) = E[F_X (t - epsilon Y)] = F_X (t) - epsilon f_X (t) E[Y] + O(epsilon^2)$,
+so
+
+$ "median"(X + epsilon Y) = "median"(X) + epsilon E[Y] + O(epsilon^2), $
+
+and the pull is $epsilon (E[Y] - "median"(Y))$. Such borders are straight exactly when
+mean minus median grows in proportion to the distance of the median from the centre.
+No small-spread assumption is needed (checked numerically). The pull divided by
+$m - 1/2$ (constant means straight):
+
+#align(center, table(
+  columns: 6,
+  align: (left, right, right, right, right, right),
+  stroke: none,
+  table.hline(),
+  [rule], [$m = 0.6$], [0.7], [0.8], [0.9], [0.98],
+  table.hline(stroke: 0.5pt),
+  [fixed $a + b$], [0.40], [0.39], [0.38], [0.35], [0.27],
+  [RMS], [0.40], [0.40], [0.39], [0.37], [0.35],
+  [tapered, $tau = 0.2$], [0.40], [0.40], [0.40], [0.39], [0.37],
+  [tapered, $tau = 0.25$], [0.40], [0.41], [0.41], [0.41], [0.40],
+  [$E|X - m|$], [0.41], [0.44], [0.48], [0.54], [0.59],
+  table.hline(),
+))
+
+With fixed $a + b$ the far tail thins out near an edge, the mean catches up with the
+median and the pull stalls. With fixed $E|X - m|$ the far half is pushed away and the
+pull accelerates. Shrinking $a + b$ by a small power of $4 m (1 - m)$ sits in between.
+
+*Diagonal borders.* At $45 degree$ both coordinates are skewed at once. Exact border
+shapes bend one way for fixed $a + b$ and the other way for fixed $E|X - m|$, confirming
+the two failure modes, but the balance point moves with position: near the centre a
+smaller $tau$ is straighter, towards the corners $tau approx 0.2$–$0.25$. Near-axis
+borders prefer $0.25$, diagonal ones near the centre less, and the benchmark puts the
+compromise at $0.2$. Above $0.25$ both kinds bend the wrong way, which is why the
+optimum is sharp. The textbook skewness approximation of the median is off by about a
+factor of two at $d = 0.3$, so the exponent itself is empirical.
+
+*Why cycles survive.* Straightness depends on how the pull changes with the position
+of the pixel, cycles on how it changes with the direction $nu$. Projections of two
+skewed coordinates in different directions do not share one effective centre, so the
+three borders of three candidates can each be straight and still miss each other.
+
+*Interpretation.* $kappa = a + b$ is the concentration of the Beta:
+$"Var" X = mu (1 - mu) slash (kappa + 1)$, and $mu (1 - mu)$ is the largest variance
+any distribution on $[0, 1]$ with mean $mu$ can have. So $1 slash (kappa + 1)$ is the
+share of its room that a pixel's electorate uses, and $4 m (1 - m)$ measures the room
+around the median (1 at the centre, 0 at an edge). The tapered rule lets electorates
+near an edge use a little more of their room (45 % at the centre, 50 % at $m = 0.9$,
+58 % at $m = 0.98$), so the dissenters towards the centre stay just thick enough.
+
+== Decisions
+
+- *`rms`* was added as the rule with the clearest meaning.
+- *`tapered`*, $tau = 0.2$, was added as the result of the optimisation. It has very
+  much the same behaviour as `rms`.
+- *`mean_abs`* stays as the legacy default for reproducibility.
+- *Fixed $a + b$* was implemented, then removed: it bends borders the other way and
+  adds nothing that `rms` and `tapered` do not do better.
+- The `mean_abs` solver now starts its continuation at the exact centre solution
+  @eq-centre with bounded steps; before, a single median far from $1/2$ could land on
+  a wrong solution.

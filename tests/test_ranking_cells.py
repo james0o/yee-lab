@@ -1,7 +1,8 @@
 """Theoretical checks of ranking_cells.
 
-Beta parameters: median and mean absolute deviation are verified by independent
-numerical integration. Ranking probabilities are verified against closed forms
+Beta parameters: the median and the quantity each spread rule fixes (mean absolute
+deviation, RMS distance from the median, tapered a + b) are verified,
+the moments by independent numerical integration. Ranking probabilities are verified against closed forms
 (bisectors parallel to an axis reduce to a Beta CDF, and the median splits
 voters exactly in half) and against Monte Carlo sampling. Interpolation from
 Chebyshev nodes is checked against the exact probabilities at every pixel.
@@ -15,12 +16,18 @@ from scipy.special import beta as beta_fn, betainc
 from const import CANDIDATES
 from ranking_cells import (
     NODES,
+    SPREADS,
+    TAPER,
     beta_params,
     beta_params_at,
+    centre_shape,
     compute_ranking_probabilities,
+    generate_ranking_probabilities,
     interpolate_to_pixels,
     node_medians,
     ranking_cells,
+    rankings_path,
+    read_cached_ranking_probabilities,
 )
 
 PIXELS = 21  # odd, so the middle pixel has median exactly 0.5
@@ -39,11 +46,16 @@ def params():
 
 
 @pytest.fixture(scope="module", params=["pixels", "nodes"])
-def solved(request):
-    """(medians, params) at the pixel medians and at the Chebyshev nodes of a
-    large grid, which reach much closer to 0 and 1."""
-    medians = MEDIANS if request.param == "pixels" else node_medians(1000, NODES)
-    return medians, beta_params_at(medians, DEVIATION)
+def medians(request):
+    """The pixel medians, and the Chebyshev nodes of a large grid, which reach
+    much closer to 0 and 1."""
+    return MEDIANS if request.param == "pixels" else node_medians(1000, NODES)
+
+
+@pytest.fixture(scope="module", params=SPREADS)
+def solved(request, medians):
+    """(spread, medians, params) for every spread rule."""
+    return request.param, medians, beta_params_at(medians, DEVIATION, request.param)
 
 
 @pytest.fixture(scope="module")
@@ -65,29 +77,89 @@ def _prefers(rankings, probs, first, second):
 
 # ---------------------------------------------------------------- Beta parameters
 
+def _moment(m, a, b, power):
+    """E|X - m|^power for X ~ Beta(a, b), by quadrature with the Beta
+    singularities as algebraic weights."""
+    # [0, m]: (m - x)^power (1 - x)^(b-1) with weight x^(a-1)
+    left, _ = quad(lambda x: (m - x) ** power * (1 - x) ** (b - 1), 0, m,
+                   weight="alg", wvar=(a - 1, 0))
+    # [m, 1]: (x - m)^power x^(a-1) with weight (1 - x)^(b-1)
+    right, _ = quad(lambda x: (x - m) ** power * x ** (a - 1), m, 1,
+                    weight="alg", wvar=(0, b - 1))
+    return (left + right) / beta_fn(a, b)
+
+
 def test_params_have_requested_median(solved):
-    medians, params = solved
+    _, medians, params = solved
     a, b = params[:, 0], params[:, 1]
     np.testing.assert_allclose(betainc(a, b, medians), 0.5, atol=1e-12)
 
 
-def test_params_have_requested_deviation(solved):
-    """E|X - m| by quadrature with the Beta singularities as algebraic weights."""
-    medians, params = solved
+@pytest.mark.parametrize("deviation", [0.05, 0.1, DEVIATION, 0.45])
+def test_centre_shape_has_requested_deviation(deviation):
+    a0 = centre_shape(deviation)
+    assert _moment(0.5, a0, a0, 1) == pytest.approx(deviation, rel=1e-9)
+
+
+def test_spreads_agree_at_the_centre():
+    """Every rule gives the centre pixel Beta(a0, a0) with E|X - 1/2| = deviation."""
+    a0 = centre_shape(DEVIATION)
+    for spread in SPREADS:
+        np.testing.assert_allclose(
+            beta_params_at([0.5], DEVIATION, spread), [[a0, a0]], rtol=1e-9
+        )
+
+
+def test_params_keep_their_spread(solved):
+    """The quantity fixed by each rule is the same for every median."""
+    spread, medians, params = solved
+    a0 = centre_shape(DEVIATION)
+    if spread == "tapered":
+        np.testing.assert_allclose(
+            params.sum(axis=1), 2 * a0 * (4 * medians * (1 - medians)) ** TAPER, rtol=1e-12
+        )
+        return
+    power, target = {"mean_abs": (1, DEVIATION), "rms": (2, 1 / (4 * (2 * a0 + 1)))}[spread]
     for m, (a, b) in zip(medians, params):
-        norm = beta_fn(a, b)
-        # [0, m]: (m - x) (1 - x)^(b-1) with weight x^(a-1)
-        left, _ = quad(lambda x: (m - x) * (1 - x) ** (b - 1), 0, m,
-                       weight="alg", wvar=(a - 1, 0))
-        # [m, 1]: (x - m) x^(a-1) with weight (1 - x)^(b-1)
-        right, _ = quad(lambda x: (x - m) * x ** (a - 1), m, 1,
-                        weight="alg", wvar=(0, b - 1))
-        assert (left + right) / norm == pytest.approx(DEVIATION, abs=1e-9)
+        assert _moment(m, a, b, power) == pytest.approx(target, abs=1e-9)
 
 
 def test_params_are_mirror_symmetric(solved):
-    _, params = solved
+    _, _, params = solved
     np.testing.assert_allclose(params, params[::-1, ::-1], rtol=1e-10)
+
+
+@pytest.mark.parametrize("spread", SPREADS)
+@pytest.mark.parametrize("median", [0.02, 0.9, 0.9995])
+def test_single_median_is_solved(spread, median):
+    """A lone median far from 1/2 gets the same parameters as in a full sweep."""
+    sweep = np.linspace(median, 0.5, 400)
+    np.testing.assert_allclose(
+        beta_params_at([median], DEVIATION, spread), beta_params_at(sweep, DEVIATION, spread)[:1],
+        rtol=1e-8,
+    )
+
+
+def test_only_mean_abs_keeps_deviation_near_walls():
+    """Near a wall the other rules let E|X - m| shrink (docs/math.typ)."""
+    for spread in SPREADS:
+        (a, b), = beta_params_at([0.98], DEVIATION, spread)
+        deviation = _moment(0.98, a, b, 1)
+        if spread == "mean_abs":
+            assert deviation == pytest.approx(DEVIATION, abs=1e-9)
+        else:
+            assert deviation < 0.25
+
+
+@pytest.mark.parametrize("deviation", [0, 0.5, -0.1])
+def test_rejects_impossible_deviation(deviation):
+    with pytest.raises(ValueError):
+        beta_params_at(MEDIANS, deviation)
+
+
+def test_rejects_unknown_spread():
+    with pytest.raises(ValueError):
+        beta_params_at(MEDIANS, DEVIATION, "median_abs")
 
 
 # ---------------------------------------------------------------- Cells
@@ -175,14 +247,55 @@ def test_matches_monte_carlo(profile, pixel, params, request):
     assert np.all(np.abs(empirical - exact) <= 5 * sigma + 1e-6)
 
 
+@pytest.mark.parametrize("spread", [s for s in SPREADS if s != "mean_abs"])
+def test_other_spreads_match_monte_carlo(spread):
+    """Corner and edge pixels, where the new rules differ most from mean_abs."""
+    params = beta_params(PIXELS, DEVIATION, spread)
+    rankings, probs = compute_ranking_probabilities(CANDIDATES, params)
+    n = len(CANDIDATES)
+    codes = rankings.astype(np.int64) @ n ** np.arange(n)
+    samples = 1_000_000
+    for i, j in [(0, PIXELS - 1), (PIXELS - 1, MIDDLE), (4, 17)]:
+        rng = np.random.default_rng(i * PIXELS + j)
+        x = rng.beta(params[i, 0], params[i, 1], samples)
+        y = rng.beta(params[j, 0], params[j, 1], samples)
+        dist = np.hypot(x[:, None] - CANDIDATES[:, 0], y[:, None] - CANDIDATES[:, 1])
+        sample_codes = np.argsort(dist, axis=1) @ n ** np.arange(n)
+        empirical = (sample_codes[:, None] == codes[None, :]).mean(axis=0)
+        exact = probs[i, j]
+        sigma = np.sqrt(exact * (1 - exact) / samples)
+        assert np.all(np.abs(empirical - exact) <= 5 * sigma + 1e-6)
+
+
+# ---------------------------------------------------------------- Cache
+
+def test_cache_keeps_spreads_apart(tmp_path):
+    pixels, nodes = 12, 7
+    paths = {rankings_path(pixels, DEVIATION, s, CANDIDATES, 24, nodes, tmp_path) for s in SPREADS}
+    assert len(paths) == len(SPREADS)
+    generated = generate_ranking_probabilities(
+        CANDIDATES, pixels, DEVIATION, nodes, cache_root=tmp_path, spread="rms"
+    )
+    cached = read_cached_ranking_probabilities(
+        CANDIDATES, pixels, DEVIATION, nodes, cache_root=tmp_path, spread="rms"
+    )
+    np.testing.assert_array_equal(cached[0], generated[0])
+    np.testing.assert_array_equal(cached[1], generated[1])
+    for spread in ("mean_abs", "tapered"):
+        assert read_cached_ranking_probabilities(
+            CANDIDATES, pixels, DEVIATION, nodes, cache_root=tmp_path, spread=spread
+        ) is None
+
+
 # ---------------------------------------------------------------- Interpolation
 
-def test_interpolation_matches_exact():
+@pytest.mark.parametrize("spread", SPREADS)
+def test_interpolation_matches_exact(spread):
     pixels = 60
-    exact = compute_ranking_probabilities(CANDIDATES, beta_params(pixels, DEVIATION))
+    exact = compute_ranking_probabilities(CANDIDATES, beta_params(pixels, DEVIATION, spread))
     medians = node_medians(pixels, 33)
     rankings, probs = compute_ranking_probabilities(
-        CANDIDATES, beta_params_at(medians, DEVIATION)
+        CANDIDATES, beta_params_at(medians, DEVIATION, spread)
     )
     np.testing.assert_array_equal(rankings, exact[0])
     interpolated = interpolate_to_pixels(probs, medians, pixels)

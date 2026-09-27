@@ -24,7 +24,7 @@ import normal
 import ranking_cells
 from const import CANDIDATES, DEVIATION, PIXELS
 from methods import CYCLE, METHODS
-from ranking_cells import NODES, effective_nodes
+from ranking_cells import NODES, SPREAD, Spread, effective_nodes
 
 PLOTS = Path("plots")
 # modules with the same read_cached_ / generate_ranking_probabilities functions
@@ -71,7 +71,7 @@ def plot_yee_diagram(winners: np.ndarray, candidates: np.ndarray, title: str) ->
     return path
 
 
-def _generate_with_progress(model, pixels: int, deviation: float, nodes: int):
+def _generate_with_progress(model, pixels: int, deviation: float, nodes: int, **options):
     with Progress(
         SpinnerColumn(),
         TextColumn("[bold]{task.description}"),
@@ -91,7 +91,7 @@ def _generate_with_progress(model, pixels: int, deviation: float, nodes: int):
             progress.update(task, completed=done, total=total)
 
         return model.generate_ranking_probabilities(
-            CANDIDATES, pixels, deviation, nodes, progress=update
+            CANDIDATES, pixels, deviation, nodes, progress=update, **options
         )
 
 
@@ -99,10 +99,20 @@ def _generate_with_progress(model, pixels: int, deviation: float, nodes: int):
 def main(
     pixels: int = typer.Option(PIXELS, "--pixels", "-p", help="Pixels per axis."),
     deviation: float = typer.Option(
-        DEVIATION, "--deviation", "-d", help="Mean absolute deviation from the median."
+        DEVIATION,
+        "--deviation",
+        "-d",
+        help="Mean absolute deviation from the median at the centre pixel "
+        "(everywhere for normal voters and for --spread mean_abs).",
     ),
     distribution: Literal["beta", "normal"] = typer.Option(
         "beta", help="Voter distribution around each pixel."
+    ),
+    spread: Spread = typer.Option(
+        SPREAD,
+        help="Beta only: what stays the same for every pixel. mean_abs (legacy): E|X - m|; "
+        "rms: sqrt(E (X - m)^2); tapered: (a + b) times (4m(1 - m))^0.2. "
+        "All agree at the centre pixel.",
     ),
     nodes: int = typer.Option(
         NODES,
@@ -135,13 +145,17 @@ def main(
         raise typer.BadParameter(str(error), param_hint="--nodes") from error
 
     model = DISTRIBUTIONS[distribution]
+    options = {"spread": spread} if distribution == "beta" else {}
+    label = f"beta_{spread}" if distribution == "beta" else distribution
     start = time.perf_counter()
     profile = None
     if not regenerate:
-        profile = model.read_cached_ranking_probabilities(CANDIDATES, pixels, deviation, nodes)
+        profile = model.read_cached_ranking_probabilities(
+            CANDIDATES, pixels, deviation, nodes, **options
+        )
     step = "load"
     if profile is None:
-        profile = _generate_with_progress(model, pixels, deviation, nodes)
+        profile = _generate_with_progress(model, pixels, deviation, nodes, **options)
         step = "generate"
     rankings, probs = profile
     console.print(f"[bold]{step:<9}[/bold] {time.perf_counter() - start:.4f} s")
@@ -152,7 +166,7 @@ def main(
             winners = METHODS[name](rankings, probs)
             computed = time.perf_counter()
             if plot:
-                plot_yee_diagram(winners, CANDIDATES, f"{name}_{distribution}")
+                plot_yee_diagram(winners, CANDIDATES, f"{name}_{label}")
             plotted = time.perf_counter()
         line = f"[bold cyan]{name:<9}[/bold cyan] {computed - start:.4f} s"
         if plot:

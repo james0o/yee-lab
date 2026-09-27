@@ -61,7 +61,7 @@ def first_choice_shares(rankings, probs, alive):
 
 
 UPPER = np.linspace(0.5, 0.9985, 400)
-# solved as one sweep: beta_params_at needs the continuation from 1/2 outwards
+# one sweep of medians, looked up by beta_marginal
 UPPER_PARAMS = ranking_cells.beta_params_at(UPPER, DEVIATION)
 
 
@@ -159,6 +159,40 @@ def beta_shapes():
         a, b = dist.args
         print(f"  median {m}: a {a:.3f} b {b:.3f} mean {dist.mean():.3f} "
               f"P(X<0.1) {dist.cdf(0.1):.2f} P(X>0.9) {dist.sf(0.9):.2f}")
+
+
+def spread_shapes():
+    """Beta marginals near a wall under the three spread rules (Chapter 1)."""
+    a0 = ranking_cells.centre_shape(DEVIATION)
+    print(f"spread rules, deviation {DEVIATION}: a0 {a0:.3f}, "
+          f"centre RMS {0.5 / np.sqrt(2 * a0 + 1):.3f}")
+    medians = [0.5, 0.7, 0.9, 0.98]
+    for spread in ranking_cells.SPREADS:
+        params = ranking_cells.beta_params_at(medians, DEVIATION, spread)
+        for m, (a, b) in zip(medians, params):
+            deviation = a / (a + b) * (1 - 2 * betainc(a + 1, b, m))  # median m
+            print(f"  {spread:13s} median {m}: a {a:.3f} b {b:.3f} "
+                  f"E|X-m| {deviation:.3f} P(X<0.1) {betainc(a, b, 0.1):.3f}")
+
+
+def spread_rules():
+    """FPTP, IRV and Condorcet winner for each spread rule, default candidates (Chapter 3)."""
+    fig, axes = plt.subplots(len(ranking_cells.SPREADS), 3, figsize=(10, 3.4 * len(ranking_cells.SPREADS)))
+    medians = ranking_cells.node_medians(PIXELS)
+    tie = _ties()
+    for row, spread in enumerate(ranking_cells.SPREADS):
+        rankings, probs = ranking_cells.compute_ranking_probabilities(
+            CANDIDATES, ranking_cells.beta_params_at(medians, DEVIATION, spread))
+        probs = ranking_cells.interpolate_to_pixels(probs, medians, PIXELS)
+        voronoi, cyc, sch = ideal(rankings, probs), condorcet_cycle(rankings, probs), schulze(rankings, probs)
+        print(f"{spread}: cycles {np.mean((cyc == CYCLE) & ~tie):.2%}, "
+              f"Schulze != Voronoi {np.mean((sch != voronoi) & ~tie):.2%}")
+        for col, (label, winners) in enumerate([("FPTP", fptp(rankings, probs)), ("IRV", irv(rankings, probs)),
+                                                ("Condorcet winner", cyc)]):
+            show(axes[row, col], winners, f"{spread}: {label}")
+    fig.tight_layout()
+    fig.savefig(FIGURES / "spread_rules.png", dpi=130)
+    plt.close(fig)
 
 
 def pull_example(samples=4_000_000, seed=0):
@@ -344,6 +378,8 @@ if __name__ == "__main__":
     FIGURES.mkdir(exist_ok=True)
     profiles = {name: profile(name) for name in MODELS}
     beta_shapes()
+    spread_shapes()
+    spread_rules()
     pull_example()
     compare(profiles)
     irv_round(profiles)

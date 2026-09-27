@@ -28,6 +28,15 @@ Depending on number of pixel in diagram (in your case $n=1000$) for all $m=\frac
 
 At the end we just create cartesian product of all $\alpha_i, \beta_i$ so we have squre $n\times n$.
 
+### Spread rules
+The second equation is one of three spread rules (`--spread` in the CLI, *Beta spread* in the UI). All give the centre pixel the same distribution, $\text{Beta}(a_0, a_0)$ with $\mathbb{E}|X - \tfrac12| = D$, and differ in what stays the same towards the edges:
+
+- `mean_abs` (default, legacy): $\mathbb{E}|X - m| = D$ for every pixel, the equation above. Near the edges it pushes the voters on the far side of the median away, which bends borders.
+- `rms`: $\sqrt{\mathbb{E}(X - m)^2}$ equals that of the centre pixel.
+- `tapered`: $\alpha + \beta = 2a_0\,(4m(1-m))^{0.2}$. The exponent is the result of an optimisation for straight Condorcet borders; the rule behaves very much like `rms`.
+
+`rms` and `tapered` keep Condorcet cycles without the round edges of `mean_abs`. How they were found is described in chapter 3 of `docs/math.pdf`.
+
 ## Normal distribution
 `--distribution normal` (and *Voters: normal* in the UI) uses the original model instead, implemented in `normal.py`: voters in point $[x, y] \sim \mathcal{N}((x, y), \sigma^2 I)$, not limited to the unit square, with $\sigma = D\sqrt{\pi/2}$ so that $\mathbb{E}[|X - x|] = D$ as for the beta distribution. Cell probabilities are exact (Owen's T function), no quadrature.
 

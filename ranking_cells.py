@@ -1,8 +1,16 @@
 """Ranking probabilities for every pixel (no voter discretization).
 
 Voters of a pixel are distributed as X ~ Beta(a_x, b_x), Y ~ Beta(a_y, b_y)
-(independent), where (a, b) are chosen so that the median is the pixel centre and the
-mean absolute deviation from the median is `deviation`.
+(independent), where (a, b) are chosen so that the median is the pixel centre. The
+spread rule (`spread`) fixes one more quantity for every pixel:
+
+    "mean_abs"  E|X - m| = deviation (legacy: pushes voters away near the walls)
+    "rms"       sqrt(E (X - m)^2) is the same as at the centre pixel
+    "tapered"   a + b is the centre value times (4 m (1 - m))^TAPER, TAPER = 0.2
+
+All give the same centre pixel, Beta(a0, a0) with E|X - 1/2| = deviation.
+Near the walls only "mean_abs" keeps the spread fixed, which pushes the voters on
+the far side of the median away (docs/math.typ).
 
 A voter's strict ranking of the candidates changes only when the voter crosses
 the perpendicular bisector of some pair of candidates. The bisectors cut the unit
@@ -31,10 +39,12 @@ Beta parameters change fastest; the error decreases exponentially with NODES.
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import numpy as np
 from pathlib import Path
-from scipy.optimize import root
-from scipy.special import betainc, betaincinv, expit, logit
+from typing import Literal, get_args
+
+import numpy as np
+from scipy.optimize import brentq, root
+from scipy.special import betainc, betaincinv, betaln, expit, logit
 
 from cache import DEFAULT_CACHE_ROOT, candidate_hash, metadata, read_metadata
 from const import CANDIDATES, DEVIATION, PIXELS
@@ -43,7 +53,29 @@ QUAD_NODES = 24
 NODES = 49
 EPS = 1e-12
 
+Spread = Literal["mean_abs", "rms", "tapered"]
+SPREADS = get_args(Spread)
+SPREAD: Spread = "mean_abs"
+CONTINUATION_STEP = 0.25  # largest step in logit(median) of the mean_abs solver
+# Exponent of the "tapered" rule, found by optimisation: it gave the straightest
+# Condorcet borders at equal numbers of cycle pixels in a benchmark (docs/math.typ).
+TAPER = 0.2
+
 # ---------------------------------------------------------------- Beta parameters
+
+def centre_shape(deviation):
+    """a0 of the symmetric Beta(a0, a0) with E|X - 1/2| = `deviation`.
+
+    E|X - 1/2| = 2^(-2 a0) / (a0 B(a0, a0)) decreases from 1/2 (a0 -> 0) to 0.
+    """
+    if not 0 < deviation < 0.5:
+        raise ValueError("deviation must be between 0 and 1/2")
+    log_deviation = np.log(deviation)
+    return brentq(
+        lambda a: -2 * a * np.log(2) - np.log(a) - betaln(a, a) - log_deviation,
+        1e-12, 1e12, xtol=1e-15,
+    )
+
 
 def _solve_beta(median, deviation, x0):
     """(a, b) with Beta median `median` and E|X - median| = `deviation`."""
@@ -60,30 +92,105 @@ def _solve_beta(median, deviation, x0):
     return sol.x
 
 
+def _b_for_median(kappa, median):
+    """b of Beta(kappa - b, b) with median `median` >= 1/2. For a fixed a + b the
+    median decreases as b grows, from 1 (b -> 0) to 1/2 (b = kappa / 2)."""
+    if median == 0.5:
+        return kappa / 2
+    return brentq(lambda b: betainc(kappa - b, b, median) - 0.5,
+                  1e-12 * kappa, kappa / 2, xtol=1e-15)
+
+
+def _rms_from_median(a, b, median):
+    """sqrt(E (X - median)^2) = sqrt(Var X + (E X - median)^2)."""
+    mean = a / (a + b)
+    variance = a * b / ((a + b) ** 2 * (a + b + 1))
+    return np.sqrt(variance + (mean - median) ** 2)
+
+
+def _solve_rms(upper, a0):
+    """(a, b) for the increasing medians `upper` >= 1/2 whose RMS distance from the
+    median equals that of the centre pixel Beta(a0, a0).
+
+    Along the Beta distributions with a given median, the RMS distance decreases as
+    a + b grows. It is solved over log(a + b), bracketing outwards from the solution
+    at the previous median.
+    """
+    target = np.log(_rms_from_median(a0, a0, 0.5))
+    solved, log_kappa = [], np.log(2 * a0)
+
+    def excess(t, median):
+        kappa = np.exp(t)
+        b = _b_for_median(kappa, median)
+        return np.log(_rms_from_median(kappa - b, b, median)) - target
+
+    for median in upper:
+        f0, step = excess(log_kappa, median), 0.05
+        while f0 != 0:
+            lower, higher = log_kappa - step, log_kappa + step
+            if np.sign(excess(lower, median)) != np.sign(f0):
+                log_kappa = brentq(excess, lower, log_kappa, args=(median,), xtol=1e-14)
+                break
+            if np.sign(excess(higher, median)) != np.sign(f0):
+                log_kappa = brentq(excess, log_kappa, higher, args=(median,), xtol=1e-14)
+                break
+            step *= 2
+            if step > 40:
+                raise RuntimeError(f"no Beta with median {median} and this RMS distance")
+        kappa = np.exp(log_kappa)
+        b = _b_for_median(kappa, median)
+        solved.append((kappa - b, b))
+    return np.array(solved, dtype=np.float64)
+
+
+def _upper_params(upper, deviation, spread):
+    """(a, b) for the increasing medians `upper` >= 1/2, shape (len(upper), 2)."""
+    if spread not in SPREADS:
+        raise ValueError(f"unknown spread {spread!r}; choose from {', '.join(SPREADS)}")
+    a0 = centre_shape(deviation)
+    if spread == "mean_abs":
+        # Continuation from the centre, Beta(a0, a0), outwards, with steps of at
+        # most CONTINUATION_STEP in logit(median) so the solver stays on its branch.
+        solved = np.empty((len(upper), 2), dtype=np.float64)
+        x0, z0 = [a0, a0], 0.0
+        for k, median in enumerate(upper):
+            z = logit(median)
+            steps = int(np.ceil((z - z0) / CONTINUATION_STEP))
+            for t in np.linspace(z0, z, steps + 1)[1:-1]:
+                x0 = _solve_beta(expit(t), deviation, x0)
+            x0 = _solve_beta(median, deviation, x0)
+            solved[k], z0 = x0, z
+        return solved
+    if spread == "tapered":
+        # 4 m (1 - m) is 1 at the centre and falls to 0 at the walls. Only within
+        # ~1e-5 of a wall does a + b get so small that the spread grows again.
+        kappa = 2 * a0 * (4 * upper * (1 - upper)) ** TAPER
+        b = np.array([_b_for_median(k, median) for k, median in zip(kappa, upper)])
+        return np.column_stack([kappa - b, b])
+    return _solve_rms(upper, a0)
+
+
 def pixel_medians(pixels):
     """Medians (k + 1/2) / pixels, the pixel centres."""
     return (np.arange(pixels) + 0.5) / pixels
 
 
-def beta_params_at(medians, deviation=DEVIATION):
+def beta_params_at(medians, deviation=DEVIATION, spread=SPREAD):
     """Parameters (a, b) for each median, shape (len(medians), 2)."""
+    if not 0 < deviation < 0.5:
+        raise ValueError("deviation must be between 0 and 1/2")
     medians = np.asarray(medians, dtype=np.float64)
     upper, inverse = np.unique(np.maximum(medians, 1 - medians), return_inverse=True)
-    solved = np.empty((len(upper), 2), dtype=np.float64)
-    x0 = [1.0, 1.0]
-    for k, median in enumerate(upper):  # continuation from 1/2 outwards
-        x0 = _solve_beta(median, deviation, x0)
-        solved[k] = x0
-    params = solved[inverse]
+    params = _upper_params(upper, deviation, spread)[inverse]
     # Beta(a, b) mirrored around 1/2 is Beta(b, a).
     lower = medians < 0.5
     params[lower] = params[lower, ::-1]
     return params
 
 
-def beta_params(pixels, deviation=DEVIATION):
+def beta_params(pixels, deviation=DEVIATION, spread=SPREAD):
     """Parameters (a, b) for pixel medians (k + 1/2) / pixels, shape (pixels, 2)."""
-    return beta_params_at(pixel_medians(pixels), deviation)
+    return beta_params_at(pixel_medians(pixels), deviation, spread)
 
 # ---------------------------------------------------------------- Interpolation
 
@@ -305,18 +412,24 @@ def compute_ranking_probabilities(candidates, params, quad_nodes=QUAD_NODES, pro
     return rankings, np.clip(probs, 0.0, 1.0)
 
 
-def rankings_path(pixels, deviation, candidates, quad_nodes, nodes, cache_root=DEFAULT_CACHE_ROOT):
-    token = format(float(deviation), ".12g").replace("-", "m").replace(".", "p")
-    name = (f"P{pixels}_D{token}_Q{quad_nodes}_N{effective_nodes(pixels, nodes)}"
+def _token(value):
+    return format(float(value), ".12g").replace("-", "m").replace(".", "p")
+
+
+def rankings_path(pixels, deviation, spread, candidates, quad_nodes, nodes,
+                  cache_root=DEFAULT_CACHE_ROOT):
+    name = (f"P{pixels}_D{_token(deviation)}_S{spread}_Q{quad_nodes}_N{effective_nodes(pixels, nodes)}"
             f"_C{candidate_hash(candidates)}.npz")
     return Path(cache_root) / "rankings" / name
 
 
-def _rankings_metadata(pixels, deviation, candidates, quad_nodes, nodes):
+def _rankings_metadata(pixels, deviation, spread, candidates, quad_nodes, nodes):
     return metadata(
         "rankings",
         pixels=int(pixels),
         deviation=float(deviation),
+        spread=spread,
+        **({"taper": TAPER} if spread == "tapered" else {}),
         quad_nodes=int(quad_nodes),
         nodes=effective_nodes(pixels, nodes),
         candidate_hash=candidate_hash(candidates),
@@ -330,13 +443,14 @@ def read_cached_ranking_probabilities(
     nodes=NODES,
     quad_nodes=QUAD_NODES,
     cache_root=DEFAULT_CACHE_ROOT,
+    spread=SPREAD,
 ):
     """(rankings, probabilities) from the cache, or None if not cached."""
     candidates = np.asarray(candidates, dtype=np.float64)
-    path = rankings_path(pixels, deviation, candidates, quad_nodes, nodes, cache_root)
+    path = rankings_path(pixels, deviation, spread, candidates, quad_nodes, nodes, cache_root)
     if not path.exists():
         return None
-    expected = _rankings_metadata(pixels, deviation, candidates, quad_nodes, nodes)
+    expected = _rankings_metadata(pixels, deviation, spread, candidates, quad_nodes, nodes)
     with np.load(path) as archive:
         if read_metadata(archive) == json.loads(expected) and \
                 np.array_equal(archive["candidates"], candidates):
@@ -354,6 +468,7 @@ def load_ranking_probabilities(
     nodes=NODES,
     quad_nodes=QUAD_NODES,
     cache_root=DEFAULT_CACHE_ROOT,
+    spread=SPREAD,
 ):
     """Cached (rankings (R, C), probabilities (pixels, pixels, R)).
 
@@ -361,12 +476,12 @@ def load_ranking_probabilities(
     (best to worst) is rankings[r]. Pixel index x follows the x axis.
     """
     cached = read_cached_ranking_probabilities(
-        candidates, pixels, deviation, nodes, quad_nodes, cache_root
+        candidates, pixels, deviation, nodes, quad_nodes, cache_root, spread
     )
     if cached is not None:
         return cached
     return generate_ranking_probabilities(
-        candidates, pixels, deviation, nodes, quad_nodes, cache_root
+        candidates, pixels, deviation, nodes, quad_nodes, cache_root, spread=spread
     )
 
 
@@ -378,6 +493,7 @@ def generate_ranking_probabilities(
     quad_nodes=QUAD_NODES,
     cache_root=DEFAULT_CACHE_ROOT,
     progress=None,
+    spread=SPREAD,
 ):
     """Compute (rankings, probabilities) and save them to the cache.
 
@@ -386,10 +502,10 @@ def generate_ranking_probabilities(
     progress: optional callable(done, total), see compute_ranking_probabilities.
     """
     candidates = np.asarray(candidates, dtype=np.float64)
-    path = rankings_path(pixels, deviation, candidates, quad_nodes, nodes, cache_root)
-    expected = _rankings_metadata(pixels, deviation, candidates, quad_nodes, nodes)
+    path = rankings_path(pixels, deviation, spread, candidates, quad_nodes, nodes, cache_root)
+    expected = _rankings_metadata(pixels, deviation, spread, candidates, quad_nodes, nodes)
     medians = node_medians(pixels, nodes)
-    params = beta_params_at(medians, deviation)
+    params = beta_params_at(medians, deviation, spread)
     rankings, probs = compute_ranking_probabilities(
         candidates, params, quad_nodes, progress
     )
