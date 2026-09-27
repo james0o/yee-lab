@@ -41,7 +41,7 @@ from pathlib import Path
 import numpy as np
 from scipy.special import owens_t
 
-from cache import DEFAULT_CACHE_ROOT, candidate_hash, metadata, read_metadata
+from cache import DEFAULT_CACHE_ROOT, candidate_hash, metadata, read_metadata, value_token
 from const import CANDIDATES, DEVIATION, PIXELS
 from ranking_cells import (
     NODES,
@@ -139,10 +139,9 @@ def ranking_probabilities(candidates, pixels=PIXELS, deviation=DEVIATION, nodes=
 # ---------------------------------------------------------------- Cache
 
 def rankings_path(pixels, deviation, candidates, nodes, cache_root=DEFAULT_CACHE_ROOT):
-    token = format(float(deviation), ".12g").replace("-", "m").replace(".", "p")
-    name = (f"normal_P{pixels}_D{token}_N{effective_nodes(pixels, nodes)}"
+    name = (f"P{pixels}_D{value_token(deviation)}_N{effective_nodes(pixels, nodes)}"
             f"_C{candidate_hash(candidates)}.npz")
-    return Path(cache_root) / "rankings" / name
+    return Path(cache_root) / "normal" / name
 
 
 def _rankings_metadata(pixels, deviation, candidates, nodes):

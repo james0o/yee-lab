@@ -36,7 +36,9 @@ app = typer.Typer(
 )
 
 
-def plot_yee_diagram(winners: np.ndarray, candidates: np.ndarray, title: str) -> Path:
+def plot_yee_diagram(
+    winners: np.ndarray, candidates: np.ndarray, title: str, path: Path
+) -> Path:
     colors = list(plt.cm.tab20.colors[: len(candidates)])
     # CYCLE gets the extra last colour, black
     winners = np.where(winners == CYCLE, len(candidates), winners)
@@ -64,8 +66,7 @@ def plot_yee_diagram(winners: np.ndarray, candidates: np.ndarray, title: str) ->
     ax.set_title(title)
     ax.set_xlabel("x median")
     ax.set_ylabel("y median")
-    PLOTS.mkdir(exist_ok=True)
-    path = PLOTS / f"{title}.png"
+    path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     return path
@@ -147,6 +148,8 @@ def main(
     model = DISTRIBUTIONS[distribution]
     options = {"spread": spread} if distribution == "beta" else {}
     label = f"beta_{spread}" if distribution == "beta" else distribution
+    # plots/normal/<method>.png, plots/beta/<spread>/<method>.png
+    folder = PLOTS / "beta" / spread if distribution == "beta" else PLOTS / "normal"
     start = time.perf_counter()
     profile = None
     if not regenerate:
@@ -166,7 +169,9 @@ def main(
             winners = METHODS[name](rankings, probs)
             computed = time.perf_counter()
             if plot:
-                plot_yee_diagram(winners, CANDIDATES, f"{name}_{label}")
+                plot_yee_diagram(
+                    winners, CANDIDATES, f"{name}_{label}", folder / f"{name}.png"
+                )
             plotted = time.perf_counter()
         line = f"[bold cyan]{name:<9}[/bold cyan] {computed - start:.4f} s"
         if plot:

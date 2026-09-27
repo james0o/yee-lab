@@ -46,7 +46,7 @@ import numpy as np
 from scipy.optimize import brentq, root
 from scipy.special import betainc, betaincinv, betaln, expit, logit
 
-from cache import DEFAULT_CACHE_ROOT, candidate_hash, metadata, read_metadata
+from cache import DEFAULT_CACHE_ROOT, candidate_hash, metadata, read_metadata, value_token
 from const import CANDIDATES, DEVIATION, PIXELS
 
 QUAD_NODES = 24
@@ -412,15 +412,11 @@ def compute_ranking_probabilities(candidates, params, quad_nodes=QUAD_NODES, pro
     return rankings, np.clip(probs, 0.0, 1.0)
 
 
-def _token(value):
-    return format(float(value), ".12g").replace("-", "m").replace(".", "p")
-
-
 def rankings_path(pixels, deviation, spread, candidates, quad_nodes, nodes,
                   cache_root=DEFAULT_CACHE_ROOT):
-    name = (f"P{pixels}_D{_token(deviation)}_S{spread}_Q{quad_nodes}_N{effective_nodes(pixels, nodes)}"
+    name = (f"P{pixels}_D{value_token(deviation)}_Q{quad_nodes}_N{effective_nodes(pixels, nodes)}"
             f"_C{candidate_hash(candidates)}.npz")
-    return Path(cache_root) / "rankings" / name
+    return Path(cache_root) / "beta" / spread / name
 
 
 def _rankings_metadata(pixels, deviation, spread, candidates, quad_nodes, nodes):
