@@ -1,178 +1,122 @@
-import time
-from pathlib import Path
-from typing import Literal
+"""Web UI for Yee diagrams.
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+Run `uv run fastapi dev server.py` and open http://127.0.0.1:8000.
+The page itself is ui/index.html; this file only answers its requests.
+"""
+
+from functools import lru_cache, partial
+from pathlib import Path
+from typing import Annotated, Literal, get_args
+
 import numpy as np
-from matplotlib.colors import ListedColormap
-import typer
-from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TaskProgressColumn,
-    TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 import normal
-import ranking_cells
-from const import CANDIDATES, DEVIATION, PIXELS
-from methods import CYCLE, METHODS
-from ranking_cells import NODES, SPREAD, Spread, effective_nodes
-
-PLOTS = Path("plots")
-# modules with the same read_cached_ / generate_ranking_probabilities functions
-DISTRIBUTIONS = {"beta": ranking_cells, "normal": normal}
-console = Console()
-app = typer.Typer(
-    add_completion=False,
-    context_settings={"help_option_names": ["-h", "--help"]},
+from const import CANDIDATES, DEVIATION
+from methods import METHODS, ideal
+from ranking_cells import (
+    NODES,
+    SPREAD,
+    SPREADS,
+    TAPER,
+    Spread,
+    beta_params_at,
+    compute_ranking_probabilities,
+    interpolate_to_pixels,
+    node_medians,
 )
 
+PIXELS = 300
+MAX_CANDIDATES = 8  # probabilities take ~0.5 s for 5 candidates, ~4 s for 8
 
-def plot_yee_diagram(winners: np.ndarray, candidates: np.ndarray, title: str) -> Path:
-    colors = list(plt.cm.tab20.colors[: len(candidates)])
-    # CYCLE gets the extra last colour, black
-    winners = np.where(winners == CYCLE, len(candidates), winners)
-    fig, ax = plt.subplots()
-    ax.imshow(
-        winners.T,
-        cmap=ListedColormap(colors + ["#000000"]),
-        vmin=0,
-        vmax=len(candidates),
-        origin="lower",
-        extent=(0, 1, 0, 1),
-        interpolation="nearest",
+Coordinate = Annotated[float, Field(ge=0, le=1)]
+Distribution = Literal["beta", "normal"]
+# Each Beta spread rule: plain label, LaTeX label (typeset by KaTeX in the UI) and
+# tooltip. All rules agree at the centre pixel.
+SPREAD_INFO = {
+    "mean_abs": {
+        "label": "mean |X − m| (legacy)",
+        "tex": r"\operatorname{E}|X-m|\ \text{(legacy)}",
+        "description": "The original rule: every pixel has the same mean distance of its voters "
+        "from the median. Near a wall this pushes the voters on the far side of the median "
+        "away, which bends borders and makes round edges.",
+    },
+    "rms": {
+        "label": "RMS of X − m",
+        "tex": r"\sqrt{\operatorname{E}(X-m)^2}",
+        "description": "Every pixel has the same root mean square distance of its voters from "
+        "the median. A few distant voters are enough near a wall, so the rest stay put.",
+    },
+    "tapered": {
+        "label": f"(a + b) × (4m(1−m))^{TAPER:g}",
+        "tex": rf"(a+b)\,\bigl(4m(1-m)\bigr)^{{{TAPER:g}}}",
+        "description": f"a + b shrinks towards the walls like (4m(1 − m))^{TAPER:g} times its "
+        "centre value. The exponent is the result of an optimisation: it gave the straightest "
+        "Condorcet borders at equal numbers of cycles. It behaves very much like the RMS rule.",
+    },
+}
+assert set(SPREAD_INFO) == set(SPREADS)
+
+app = FastAPI()
+
+
+class DiagramRequest(BaseModel):
+    candidates: list[tuple[Coordinate, Coordinate]] = Field(
+        min_length=2, max_length=MAX_CANDIDATES
     )
-    ax.scatter(
-        candidates[:, 0],
-        candidates[:, 1],
-        c=colors,
-        s=40,
-        edgecolors="#000000",
-        linewidths=0.6,
-        zorder=3,
-    )
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.set_title(title)
-    ax.set_xlabel("x median")
-    ax.set_ylabel("y median")
-    PLOTS.mkdir(exist_ok=True)
-    path = PLOTS / f"{title}.png"
-    fig.savefig(path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-    return path
+    method: Annotated[str, Field(pattern=f"^({'|'.join(METHODS)})$")]
+    distribution: Distribution = "beta"
+    spread: Spread = SPREAD  # Beta only
 
 
-def _generate_with_progress(model, pixels: int, deviation: float, nodes: int, **options):
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[bold]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        TextColumn("eta"),
-        TimeRemainingColumn(),
-        console=console,
-    ) as progress:
-        nodes = effective_nodes(pixels, nodes)
-        grid = f"{nodes}x{nodes} nodes" if nodes else f"{pixels}x{pixels} exact"
-        task = progress.add_task(f"generating rankings ({grid})", total=None)
-
-        def update(done: int, total: int) -> None:
-            progress.update(task, completed=done, total=total)
-
-        return model.generate_ranking_probabilities(
-            CANDIDATES, pixels, deviation, nodes, progress=update, **options
-        )
+@lru_cache(maxsize=None)
+def _beta_params(spread: Spread):
+    medians = node_medians(PIXELS, NODES)
+    return medians, beta_params_at(medians, DEVIATION, spread)
 
 
-@app.command()
-def main(
-    pixels: int = typer.Option(PIXELS, "--pixels", "-p", help="Pixels per axis."),
-    deviation: float = typer.Option(
-        DEVIATION,
-        "--deviation",
-        "-d",
-        help="Mean absolute deviation from the median at the centre pixel "
-        "(everywhere for normal voters and for --spread mean_abs).",
-    ),
-    distribution: Literal["beta", "normal"] = typer.Option(
-        "beta", help="Voter distribution around each pixel."
-    ),
-    spread: Spread = typer.Option(
-        SPREAD,
-        help="Beta only: what stays the same for every pixel. mean_abs (legacy): E|X - m|; "
-        "rms: sqrt(E (X - m)^2); tapered: (a + b) times (4m(1 - m))^0.2. "
-        "All agree at the centre pixel.",
-    ),
-    nodes: int = typer.Option(
-        NODES,
-        "--nodes",
-        "-n",
-        help="Chebyshev nodes per axis where probabilities are computed exactly "
-        "and then interpolated to the pixels; 0 = exact at every pixel.",
-    ),
-    methods: list[str] = typer.Option(
-        list(METHODS),
-        "--method",
-        "-m",
-        help=f"Method to run, repeatable. Available: {', '.join(METHODS)}.",
-    ),
-    plot: bool = typer.Option(True, help="Save a Yee diagram for each method."),
-    regenerate: bool = typer.Option(
-        False, help="Ignore cached rankings and generate them again."
-    ),
-) -> None:
-    """Compute Yee diagrams with Beta or normally distributed voters."""
-    unknown = [name for name in methods if name not in METHODS]
-    if unknown:
-        raise typer.BadParameter(
-            f"unknown method(s) {', '.join(unknown)}; choose from {', '.join(METHODS)}",
-            param_hint="--method",
-        )
-    try:
-        effective_nodes(pixels, nodes)
-    except ValueError as error:
-        raise typer.BadParameter(str(error), param_hint="--nodes") from error
-
-    model = DISTRIBUTIONS[distribution]
-    options = {"spread": spread} if distribution == "beta" else {}
-    label = f"beta_{spread}" if distribution == "beta" else distribution
-    start = time.perf_counter()
-    profile = None
-    if not regenerate:
-        profile = model.read_cached_ranking_probabilities(
-            CANDIDATES, pixels, deviation, nodes, **options
-        )
-    step = "load"
-    if profile is None:
-        profile = _generate_with_progress(model, pixels, deviation, nodes, **options)
-        step = "generate"
-    rankings, probs = profile
-    console.print(f"[bold]{step:<9}[/bold] {time.perf_counter() - start:.4f} s")
-
-    for name in methods:
-        with console.status(f"{name}..."):
-            start = time.perf_counter()
-            winners = METHODS[name](rankings, probs)
-            computed = time.perf_counter()
-            if plot:
-                plot_yee_diagram(winners, CANDIDATES, f"{name}_{label}")
-            plotted = time.perf_counter()
-        line = f"[bold cyan]{name:<9}[/bold cyan] {computed - start:.4f} s"
-        if plot:
-            line += f"  [dim](plot {plotted - computed:.4f} s)[/dim]"
-        console.print(line)
+@lru_cache(maxsize=8)
+def _ranking_probabilities(
+    candidates: tuple[tuple[float, float], ...],
+    distribution: Distribution,
+    spread: Spread | None,
+):
+    """Kept in memory, not in cache/: nearly every dragged position is new.
+    The lru_cache makes switching methods or voter models without moving a
+    candidate instant. `spread` is None for normal voters."""
+    if distribution == "normal":
+        return normal.ranking_probabilities(np.array(candidates), PIXELS, DEVIATION, NODES)
+    medians, params = _beta_params(spread)
+    rankings, probs = compute_ranking_probabilities(np.array(candidates), params)
+    return rankings, interpolate_to_pixels(probs, medians, PIXELS)
 
 
-if __name__ == "__main__":
-    app()
+@app.get("/api/config")
+def config():
+    return {
+        "methods": list(METHODS),
+        "distributions": list(get_args(Distribution)),
+        "spreads": [{"name": name, **info} for name, info in SPREAD_INFO.items()],
+        "candidates": CANDIDATES.tolist(),
+        "max_candidates": MAX_CANDIDATES,
+    }
+
+
+@app.post("/api/diagram")
+def diagram(request: DiagramRequest):
+    candidates = tuple(request.candidates)
+    spread = request.spread if request.distribution == "beta" else None
+    rankings, probs = _ranking_probabilities(candidates, request.distribution, spread)
+    method = METHODS[request.method]
+    if method is ideal:  # the only method that needs positions, not just rankings
+        method = partial(ideal, candidates=np.array(candidates))
+    winners = method(rankings, probs)
+    # winners[i, j] is pixel x = i, y = j; image rows go top to bottom, so row 0 is y = 1.
+    rows = winners.T[::-1]
+    return {"pixels": PIXELS, "winners": rows.ravel().tolist()}
+
+
+# Last, so that /api/... is matched first; "/" serves ui/index.html.
+app.mount("/", StaticFiles(directory=Path(__file__).parent / "ui", html=True))
