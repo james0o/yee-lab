@@ -1,7 +1,8 @@
-"""Figures and numbers of the chapter "Beta versus normal voters" in math.typ.
+"""Figures and numbers of math.typ.
 
 Run from the repository root: `uv run python docs/figures.py`.
-Writes docs/figures/*.png and prints the numbers quoted in the text.
+Writes docs/figures/*.png and prints the numbers quoted in the text. Beta voters use
+the default spread rule (ranking_cells.SPREAD) except where the rules are compared.
 """
 
 import sys
@@ -22,10 +23,20 @@ import normal
 import ranking_cells
 from methods import CYCLE, condorcet_cycle, fptp, irv, schulze, voronoi
 
-# candidates A-E of the chapter
+# candidates A-E of the document
 CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
 PIXELS = 300
 DEVIATION = 0.3
+SPREAD = ranking_cells.SPREAD
+# the spread rules in the order of the document: default first, legacy last
+RULES = ("rms", "tapered", "mean_abs")
+assert set(RULES) == set(ranking_cells.SPREADS) and RULES[0] == SPREAD
+# one line style per rule as well as a colour, so a rule is never told by colour alone
+RULE_STYLE = {
+    "rms": {"color": "#4e79a7", "linestyle": "-"},
+    "tapered": {"color": "#59a14f", "linestyle": "--"},
+    "mean_abs": {"color": "#e15759", "linestyle": ":"},
+}
 NAMES = "ABCDE"
 A, B, C, D, E = range(5)
 # the palette of the cell figure in math.typ, black for Condorcet cycles
@@ -35,11 +46,12 @@ MEDIANS = ranking_cells.pixel_medians(PIXELS)
 MODELS = {"beta": ranking_cells, "normal": normal}
 
 
-def profile(name):
+def profile(name, spread=SPREAD):
     model = MODELS[name]
-    cached = model.read_cached_ranking_probabilities(CANDIDATES, PIXELS, DEVIATION)
+    options = {"spread": spread} if name == "beta" else {}
+    cached = model.read_cached_ranking_probabilities(CANDIDATES, PIXELS, DEVIATION, **options)
     if cached is None:
-        cached = model.generate_ranking_probabilities(CANDIDATES, PIXELS, DEVIATION)
+        cached = model.generate_ranking_probabilities(CANDIDATES, PIXELS, DEVIATION, **options)
     return cached
 
 
@@ -61,136 +73,136 @@ def first_choice_shares(rankings, probs, alive):
     return {c: probs[..., first == c].sum(axis=-1) for c in alive}
 
 
-UPPER = np.linspace(0.5, 0.9985, 400)
-# one sweep of medians, looked up by beta_marginal
-UPPER_PARAMS = ranking_cells.beta_params_at(UPPER, DEVIATION)
-
-
-def beta_marginal(median):
-    """Frozen Beta distribution with the given median."""
-    a, b = UPPER_PARAMS[np.argmin(abs(UPPER - max(median, 1 - median)))]
-    return beta_dist(a, b) if median >= 0.5 else beta_dist(b, a)
-
-
-def compare(profiles):
-    fig, axes = plt.subplots(2, 3, figsize=(10, 6.9))
-    methods = [("IRV", irv), ("Schulze", schulze), ("Condorcet winner", condorcet_cycle)]
-    tie = _ties()
-    for row, name in enumerate(profiles):
-        rankings, probs = profiles[name]
-        nearest = voronoi(CANDIDATES, PIXELS)
-        for col, (label, method) in enumerate(methods):
-            winners = method(rankings, probs)
-            show(axes[row, col], winners, f"{name}: {label}")
-        sch, cyc = schulze(rankings, probs), condorcet_cycle(rankings, probs)
-        print(f"{name}: schulze != Voronoi on {np.sum((sch != nearest) & ~tie)} pixels, "
-              f"cycles {np.sum((cyc == CYCLE) & ~tie)} (of {np.sum(~tie)} without ties); "
-              f"areas Voronoi {[round(np.mean(nearest == c), 3) for c in range(5)]} "
-              f"Schulze {[round(np.mean(sch == c), 3) for c in range(5)]}")
-    fig.tight_layout()
-    fig.savefig(FIGURES / "compare.png", dpi=150)
-    plt.close(fig)
+def beta_marginal(median, spread=SPREAD):
+    """Frozen Beta distribution of one coordinate with the given median."""
+    (a, b), = ranking_cells.beta_params_at([median], DEVIATION, spread)
+    return beta_dist(a, b)
 
 
 def _ties():
     """Pixels whose centre is equidistant (to rounding) from its two nearest candidates."""
     centres = np.stack(np.meshgrid(MEDIANS, MEDIANS, indexing="ij"), axis=-1)
     dist = np.sort(np.linalg.norm(centres[..., None, :] - CANDIDATES, axis=-1), axis=-1)
-    tie = dist[..., 1] - dist[..., 0] < 1e-12
-    print(f"pixels on a bisector (ties): {tie.sum()}")
-    return tie
+    return dist[..., 1] - dist[..., 0] < 1e-12
+
+# ---------------------------------------------------------------- spread rules
+
+def spread_shapes():
+    """Beta marginals towards a wall under each spread rule."""
+    a0 = ranking_cells.centre_shape(DEVIATION)
+    print(f"spread rules, deviation {DEVIATION}: a0 {a0:.3f}, "
+          f"centre RMS {0.5 / np.sqrt(2 * a0 + 1):.3f}, P(X<0.1) {betainc(a0, a0, 0.1):.3f}")
+    for spread in RULES:
+        for m in (0.5, 0.7, 0.9, 0.98):
+            dist = beta_marginal(m, spread)
+            a, b = dist.args
+            mean_abs = a / (a + b) * (1 - 2 * betainc(a + 1, b, m))  # E|X - m|, median m
+            rms = np.sqrt(dist.var() + (dist.mean() - m) ** 2)
+            print(f"  {spread:9s} median {m}: a {a:.3f} b {b:.3f} a+b {a + b:.3f} "
+                  f"mean {dist.mean():.3f} E|X-m| {mean_abs:.3f} RMS {rms:.3f} "
+                  f"P(X<0.1) {dist.cdf(0.1):.3f} P(X>0.9) {dist.sf(0.9):.3f}")
 
 
-def irv_round(profiles):
-    rankings, probs = profiles["beta"]
-    shares = first_choice_shares(rankings, probs, (A, D, E))
-    fig, ax = plt.subplots(figsize=(5.5, 5.5))
-    show(ax, irv(rankings, probs), "Beta IRV and the round 3 ties among A, D, E", alpha=0.55)
+def spread_densities():
+    """Density of one coordinate of a pixel's voters under each rule, medians towards a wall."""
+    medians = (0.5, 0.7, 0.9, 0.98)
+    x = np.linspace(0.0005, 0.9995, 2000)
+    fig, axes = plt.subplots(1, len(medians), figsize=(12, 3.1), sharey=True)
+    for ax, m in zip(axes, medians):
+        ax.axvline(m, color="0.6", lw=0.8)
+        for spread in RULES:
+            ax.plot(x, beta_marginal(m, spread).pdf(x), lw=1.8, label=spread, **RULE_STYLE[spread])
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 3)
+        ax.set_title(f"median {m}", fontsize=10)
+        ax.set_xlabel("x", fontsize=9)
+        ax.tick_params(labelsize=8)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+    axes[0].set_ylabel("density", fontsize=9)
+    axes[-1].legend(fontsize=8, frameon=False, loc="upper center")
+    fig.tight_layout()
+    fig.savefig(FIGURES / "spread_densities.png", dpi=150)
+    plt.close(fig)
+
+
+def cycle_counts():
+    """Share of pixels (without ties) with a cycle or with Schulze away from Voronoi."""
+    tie, nearest = _ties(), voronoi(CANDIDATES, PIXELS)
+    print(f"pixels on a bisector (ties): {tie.sum()} of {tie.size}")
+    for deviation in (0.2, DEVIATION):
+        models = [("normal", normal, {})] + [(f"beta {s}", ranking_cells, {"spread": s}) for s in RULES]
+        for label, model, options in models:
+            rankings, probs = model.ranking_probabilities(CANDIDATES, PIXELS, deviation, **options)
+            sch, cyc = schulze(rankings, probs), condorcet_cycle(rankings, probs)
+            print(f"  deviation {deviation} {label:14s}: cycles {np.sum((cyc == CYCLE) & ~tie):5d} "
+                  f"({np.sum((cyc == CYCLE) & ~tie) / np.sum(~tie):.2%}), Schulze != Voronoi "
+                  f"{np.sum((sch != nearest) & ~tie):5d} ({np.sum((sch != nearest) & ~tie) / np.sum(~tie):.1%}), "
+                  f"area of D {np.mean(sch == D):.3f} (Voronoi {np.mean(nearest == D):.3f})")
+
+
+def spread_rules():
+    """FPTP, IRV and Condorcet winner for each spread rule, default candidates."""
+    fig, axes = plt.subplots(len(RULES), 3, figsize=(10, 3.4 * len(RULES)))
+    for row, spread in enumerate(RULES):
+        rankings, probs = profile("beta", spread)
+        for col, (label, winners) in enumerate([
+                ("FPTP", fptp(rankings, probs)), ("IRV", irv(rankings, probs)),
+                ("Condorcet winner", condorcet_cycle(rankings, probs))]):
+            show(axes[row, col], winners, f"{spread}: {label}")
+    fig.tight_layout()
+    fig.savefig(FIGURES / "spread_rules.png", dpi=130)
+    plt.close(fig)
+
+
+def irv_round():
+    """Beta IRV with the round 3 ties among A, D, E, under the legacy and the default rule."""
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5.2))
     x, y = np.meshgrid(MEDIANS, MEDIANS, indexing="ij")
-    for (p, q), color, style in [((A, D), "red", "-"), ((D, E), "black", "--"), ((A, E), "purple", ":")]:
-        ax.contour(x, y, shares[p] - shares[q], levels=[0], colors=color, linestyles=style, linewidths=2)
-        ax.plot([], [], color=color, linestyle=style, label=f"{NAMES[p]} = {NAMES[q]}")
     t = np.linspace(0, 1, 50)
-    ax.plot(t, 0.425 + (t - 0.55) * 2 / 3, color="gray", lw=1, label="bisectors D|A, D|E")
-    ax.plot(t, t + 0.2, color="gray", lw=1)
-    ax.legend(loc="lower right", fontsize=8)
+    i = int(0.55 * PIXELS)
+    for ax, spread in zip(axes, ("mean_abs", SPREAD)):
+        rankings, probs = profile("beta", spread)
+        shares = first_choice_shares(rankings, probs, (A, D, E))
+        winners = irv(rankings, probs)
+        show(ax, winners, f"{spread}: IRV and the round 3 ties among A, D, E", alpha=0.55)
+        for (p, q), color, style in [((A, D), "red", "-"), ((D, E), "black", "--"), ((A, E), "purple", ":")]:
+            ax.contour(x, y, shares[p] - shares[q], levels=[0], colors=color, linestyles=style, linewidths=2)
+            ax.plot([], [], color=color, linestyle=style, label=f"{NAMES[p]} = {NAMES[q]}")
+        ax.plot(t, 0.425 + (t - 0.55) * 2 / 3, color="gray", lw=1, label="bisectors D|A, D|E")
+        ax.plot(t, t + 0.2, color="gray", lw=1)
+        ax.legend(loc="lower right", fontsize=8)
+
+        print(f"{spread}: column x = {MEDIANS[i]:.3f}, round 3 shares among A, D, E")
+        for yy in np.arange(0.62, 1.0, 0.06):
+            j = min(int(yy * PIXELS), PIXELS - 1)
+            print(f"  y = {MEDIANS[j]:.3f}: winner {NAMES[winners[i, j]]}  "
+                  + "  ".join(f"{NAMES[c]} {shares[c][i, j]:.3f}" for c in (A, D, E))
+                  + f"  P(Y<0.2) = {beta_marginal(MEDIANS[j], spread).cdf(0.2):.3f}")
     fig.tight_layout()
     fig.savefig(FIGURES / "irv_round.png", dpi=150)
     plt.close(fig)
 
-    i = int(0.55 * PIXELS)
-    for name in profiles:
-        rankings, probs = profiles[name]
-        shares = first_choice_shares(rankings, probs, (A, D, E))
-        winners = irv(rankings, probs)
-        print(f"{name}: column x = {MEDIANS[i]:.3f}, round 3 shares among A, D, E")
-        for y in np.arange(0.62, 1.0, 0.06):
-            j = min(int(y * PIXELS), PIXELS - 1)
-            extra = ""
-            if name == "beta":
-                extra = f"  P(Y<0.2) = {beta_marginal(MEDIANS[j]).cdf(0.2):.3f}"
-            print(f"  y = {MEDIANS[j]:.3f}: winner {NAMES[winners[i, j]]}  "
-                  + "  ".join(f"{NAMES[c]} {shares[c][i, j]:.3f}" for c in (A, D, E)) + extra)
-
-
-def fptp_edge(profiles):
-    fig, axes = plt.subplots(1, 2, figsize=(8, 4.2))
-    for ax, name in zip(axes, profiles):
-        rankings, probs = profiles[name]
-        winners = fptp(rankings, probs)
-        show(ax, winners, f"{name}: FPTP")
-        print(f"{name}: FPTP boundaries near the left edge")
-        for x in (0.2, 0.08, 0.03, 0.005):
-            col = winners[int(x * PIXELS)]
-            be = [round(MEDIANS[j], 3) for j in range(PIXELS - 1) if {col[j], col[j + 1]} == {B, E}]
-            cb = [round(MEDIANS[j], 3) for j in range(PIXELS - 1) if {col[j], col[j + 1]} == {C, B}]
-            extra = ""
-            if name == "beta":
-                extra = f"  P(X<0.02) = {beta_marginal(x).cdf(0.02):.3f}"
-            print(f"  x = {x}: B|E at y {be}, C|B at y {cb}{extra}")
-    fig.tight_layout()
-    fig.savefig(FIGURES / "fptp_edge.png", dpi=150)
-    plt.close(fig)
-
+# ---------------------------------------------------------------- Beta versus normal
 
 def beta_shapes():
-    print("Beta marginals, deviation 0.3")
+    print(f"Beta marginals ({SPREAD}), deviation {DEVIATION}")
     for m in (0.5, 0.7, 0.9, 0.98):
         dist = beta_marginal(m)
         a, b = dist.args
         print(f"  median {m}: a {a:.3f} b {b:.3f} mean {dist.mean():.3f} "
-              f"P(X<0.1) {dist.cdf(0.1):.2f} P(X>0.9) {dist.sf(0.9):.2f}")
+              f"P(X<0.1) {dist.cdf(0.1):.3f} P(X>0.9) {dist.sf(0.9):.3f}")
 
 
-def spread_shapes():
-    """Beta marginals near a wall under the three spread rules (Chapter 1)."""
-    a0 = ranking_cells.centre_shape(DEVIATION)
-    print(f"spread rules, deviation {DEVIATION}: a0 {a0:.3f}, "
-          f"centre RMS {0.5 / np.sqrt(2 * a0 + 1):.3f}")
-    medians = [0.5, 0.7, 0.9, 0.98]
-    for spread in ranking_cells.SPREADS:
-        params = ranking_cells.beta_params_at(medians, DEVIATION, spread)
-        for m, (a, b) in zip(medians, params):
-            deviation = a / (a + b) * (1 - 2 * betainc(a + 1, b, m))  # median m
-            print(f"  {spread:13s} median {m}: a {a:.3f} b {b:.3f} "
-                  f"E|X-m| {deviation:.3f} P(X<0.1) {betainc(a, b, 0.1):.3f}")
-
-
-def spread_rules():
-    """FPTP, IRV and Condorcet winner for each spread rule, default candidates (Chapter 3)."""
-    fig, axes = plt.subplots(len(ranking_cells.SPREADS), 3, figsize=(10, 3.4 * len(ranking_cells.SPREADS)))
-    tie = _ties()
-    for row, spread in enumerate(ranking_cells.SPREADS):
-        rankings, probs = ranking_cells.ranking_probabilities(
-            CANDIDATES, PIXELS, DEVIATION, spread=spread)
-        nearest, cyc, sch = voronoi(CANDIDATES, PIXELS), condorcet_cycle(rankings, probs), schulze(rankings, probs)
-        print(f"{spread}: cycles {np.mean((cyc == CYCLE) & ~tie):.2%}, "
-              f"Schulze != Voronoi {np.mean((sch != nearest) & ~tie):.2%}")
-        for col, (label, winners) in enumerate([("FPTP", fptp(rankings, probs)), ("IRV", irv(rankings, probs)),
-                                                ("Condorcet winner", cyc)]):
-            show(axes[row, col], winners, f"{spread}: {label}")
+def compare(profiles):
+    fig, axes = plt.subplots(2, 3, figsize=(10, 6.9))
+    methods = [("IRV", irv), ("Schulze", schulze), ("Condorcet winner", condorcet_cycle)]
+    for row, name in enumerate(profiles):
+        rankings, probs = profiles[name]
+        for col, (label, method) in enumerate(methods):
+            show(axes[row, col], method(rankings, probs), f"{name}: {label}")
     fig.tight_layout()
-    fig.savefig(FIGURES / "spread_rules.png", dpi=130)
+    fig.savefig(FIGURES / "compare.png", dpi=150)
     plt.close(fig)
 
 
@@ -200,7 +212,7 @@ def pull_example(samples=4_000_000, seed=0):
     n = CANDIDATES[A] - CANDIDATES[D]
     offset = (CANDIDATES[A] @ CANDIDATES[A] - CANDIDATES[D] @ CANDIDATES[D]) / 2
     sigma = normal.sigma_from_deviation(DEVIATION)
-    from scipy.special import ndtr
+    print(f"pull towards the centre ({SPREAD})")
     for pixel in [(0.95, 0.55), (0.9, 0.6), (0.8, 0.45)]:
         bx, by = beta_marginal(pixel[0]), beta_marginal(pixel[1])
         x, y = bx.rvs(samples, random_state=rng), by.rvs(samples, random_state=rng)
@@ -210,7 +222,31 @@ def pull_example(samples=4_000_000, seed=0):
               f"normal share {ndtr(dist / sigma):.3f}, Beta mean ({bx.mean():.3f}, {by.mean():.3f})")
 
 
-# ---------------------------------------------------------------- round edges
+def fptp_edge(profiles):
+    fig, axes = plt.subplots(1, 2, figsize=(8, 4.2))
+    for ax, name in zip(axes, profiles):
+        rankings, probs = profiles[name]
+        show(ax, fptp(rankings, probs), f"{name}: FPTP")
+    fig.tight_layout()
+    fig.savefig(FIGURES / "fptp_edge.png", dpi=150)
+    plt.close(fig)
+
+    models = [("normal", profiles["normal"])] + [(f"beta {s}", profile("beta", s)) for s in RULES]
+    models.append((f"beta {SPREAD}, deviation 0.2",
+                   ranking_cells.ranking_probabilities(CANDIDATES, PIXELS, 0.2, spread=SPREAD)))
+    for label, (rankings, probs) in models:
+        winners = fptp(rankings, probs)
+        print(f"{label}: FPTP borders of B near the left edge")
+        for x in (0.2, 0.08, 0.03, 0.005):
+            col = winners[int(x * PIXELS)]
+            be = [round(MEDIANS[j], 3) for j in range(PIXELS - 1) if {col[j], col[j + 1]} == {B, E}]
+            cb = [round(MEDIANS[j], 3) for j in range(PIXELS - 1) if {col[j], col[j + 1]} == {C, B}]
+            extra = ""
+            if label.startswith("beta") and "deviation" not in label:
+                extra = f"  P(X<0.02) = {beta_marginal(x, label.split()[1]).cdf(0.02):.3f}"
+            print(f"  x = {x}: B|E at y {be}, C|B at y {cb}{extra}")
+
+# ---------------------------------------------------------------- blurred cells
 
 # the seven candidates of the FPTP example (B removed, three added on the left)
 SEVEN = np.array([(0.6, 0.35), (0.35, 0.3), (0.5, 0.5), (0.3, 0.7),
@@ -276,13 +312,14 @@ def seven_fptp():
     """FPTP for seven candidates: Voronoi, normal with a small and a large blur, Beta."""
     pixels = 200
     fig, axes = plt.subplots(1, 4, figsize=(14, 3.9))
-    panels = [("Voronoi (no blur)", None, None), ("normal, d = 0.1", normal, 0.1),
-              ("normal, d = 0.3", normal, 0.3), ("Beta, d = 0.3", ranking_cells, 0.3)]
-    for ax, (title, model, deviation) in zip(axes, panels):
+    panels = [("Voronoi (no blur)", None, None, {}), ("normal, D = 0.1", normal, 0.1, {}),
+              ("normal, D = 0.3", normal, 0.3, {}),
+              (f"Beta ({SPREAD}), D = 0.3", ranking_cells, 0.3, {"spread": SPREAD})]
+    for ax, (title, model, deviation, options) in zip(axes, panels):
         if model is None:
             winners = voronoi(SEVEN, pixels)
         else:
-            rankings, probs = model.ranking_probabilities(SEVEN, pixels, deviation)
+            rankings, probs = model.ranking_probabilities(SEVEN, pixels, deviation, **options)
             winners = fptp(rankings, probs)
         ax.imshow(winners.T, cmap=ListedColormap(SEVEN_PALETTE), vmin=0, vmax=6, origin="lower",
                   extent=(0, 1, 0, 1), interpolation="nearest")
@@ -303,11 +340,6 @@ def sample_voters(model, pixel, n, rng):
     return np.column_stack([beta_marginal(m).rvs(n, random_state=rng) for m in pixel])
 
 
-def first_choice(points, candidates, among):
-    among = np.asarray(among)
-    return among[np.linalg.norm(points[:, None] - candidates[among], axis=-1).argmin(axis=1)]
-
-
 def voters(ax, points, choice, palette, pixel, title):
     order = np.random.default_rng(0).permutation(len(points))  # no colour drawn on top
     ax.scatter(*points[order].T, c=np.asarray(palette)[choice[order]], s=1.5, linewidths=0)
@@ -321,32 +353,6 @@ def voters(ax, points, choice, palette, pixel, title):
     ax.set_title(title, fontsize=9)
 
 
-def voters_irv(profiles, n=6000):
-    """Voters of pixels on the column x = 0.55, coloured by first choice among A, D, E."""
-    rng = np.random.default_rng(1)
-    i = int(0.55 * PIXELS)
-    ys = (0.70, 0.80, 0.86, 0.98)
-    t = np.linspace(-0.35, 1.35, 10)
-    fig, axes = plt.subplots(2, len(ys), figsize=(3.1 * len(ys), 7.0))
-    for row, name in enumerate(profiles):
-        rankings, probs = profiles[name]
-        shares = first_choice_shares(rankings, probs, (A, D, E))
-        for ax, y in zip(axes[row], ys):
-            j = min(int(y * PIXELS), PIXELS - 1)
-            pixel = (MEDIANS[i], MEDIANS[j])
-            points = sample_voters(name, pixel, n, rng)
-            share = "  ".join(f"{NAMES[c]} {shares[c][i, j]:.3f}" for c in (A, D, E))
-            voters(ax, points, first_choice(points, CANDIDATES, (A, D, E)), PALETTE, pixel,
-                   f"{name} ({pixel[0]:.2f}, {pixel[1]:.2f})\n{share}")
-            ax.plot(t, 0.425 + (t - 0.55) * 2 / 3, color="k", lw=0.6)
-            ax.plot(t, t + 0.2, color="k", lw=0.6)
-            ax.scatter(*CANDIDATES[[A, D, E]].T, c=[PALETTE[c] for c in (A, D, E)], s=40,
-                       edgecolors="k", zorder=3)
-    fig.tight_layout()
-    fig.savefig(FIGURES / "voters_irv.png", dpi=150)
-    plt.close(fig)
-
-
 def voters_wall(n=6000):
     """Voters of pixels approaching the left wall, coloured by first choice (FPTP)."""
     rng = np.random.default_rng(2)
@@ -356,10 +362,9 @@ def voters_wall(n=6000):
         for ax, x in zip(axes[row], xs):
             pixel = (x, 0.4)
             points = sample_voters(name, pixel, 200_000, rng)
-            choice = first_choice(points, CANDIDATES, range(5))
+            choice = np.linalg.norm(points[:, None] - CANDIDATES, axis=-1).argmin(axis=1)
             share = "  ".join(f"{NAMES[c]} {np.mean(choice == c):.2f}" for c in (B, C, E))
-            voters(ax, points[:n], choice[:n], PALETTE, pixel,
-                   f"{name} ({x}, 0.4)\n{share}")
+            voters(ax, points[:n], choice[:n], PALETTE, pixel, f"{name} ({x}, 0.4)\n{share}")
             voronoi_lines(ax, CANDIDATES, colors="k", linewidths=0.6)
             ax.scatter(*CANDIDATES.T, c=PALETTE[:5], s=40, edgecolors="k", zorder=3)
     fig.tight_layout()
@@ -368,15 +373,16 @@ def voters_wall(n=6000):
 
 if __name__ == "__main__":
     FIGURES.mkdir(exist_ok=True)
+    spread_shapes()
+    spread_densities()
+    cycle_counts()
+    spread_rules()
+    irv_round()
     profiles = {name: profile(name) for name in MODELS}
     beta_shapes()
-    spread_shapes()
-    spread_rules()
-    pull_example()
     compare(profiles)
-    irv_round(profiles)
+    pull_example()
     fptp_edge(profiles)
     blur_corner()
     seven_fptp()
-    voters_irv(profiles)
     voters_wall()
