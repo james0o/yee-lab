@@ -24,6 +24,8 @@
     #square { box-sizing: border-box; border: 1px solid #222; background: #fff; cursor: crosshair; touch-action: none; }
     .choices { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 0 0 1rem; }
     .choices > span { font-size: .9rem; color: #666; }  /* row labels only, not KaTeX spans */
+    #deviation { width: 12rem; accent-color: #222; }
+    #deviationValue { font-size: .9rem; min-width: 6rem; }
     button { font: inherit; padding: .4rem .9rem; border: 1px solid #222; border-radius: 4px; background: #fff; cursor: pointer; }
     button.active { background: #222; color: #fff; }
     button:disabled { opacity: .35; cursor: default; }
@@ -39,7 +41,7 @@
     </div>
     <div class="controls">
       <div class="choices" id="distributions"><span>Voters:</span></div>
-      <div class="choices" id="deviations"><span>Deviation:</span></div>
+      <div class="choices"><span>Deviation:</span><input type="range" id="deviation"><output id="deviationValue"></output></div>
       <div class="choices" id="spreads"><span>Beta spread fixed:</span></div>
       <div class="choices" id="methods"></div>
       <p>Drag a candidate to move it · click empty space to add one · right-click to remove</p>
@@ -63,7 +65,8 @@
     const methods = document.getElementById("methods");
     const distributions = document.getElementById("distributions");
     const spreads = document.getElementById("spreads");
-    const deviations = document.getElementById("deviations");
+    const deviationSlider = document.getElementById("deviation");
+    const deviationValue = document.getElementById("deviationValue");
     const joint = document.getElementById("joint");
     const votersText = document.getElementById("voters");
     // each curve is scaled so its peak sits at 1 / HEADROOM of the strip, whatever its height
@@ -439,21 +442,27 @@
     pixels = config.pixels;
     spreadInfo = Object.fromEntries(config.spreads.map(info => [info.name, info]));
     voters = Object.fromEntries(config.voters.map(({ deviation, ...rest }) => [deviation, rest]));
-    choices(distributions, named(config.distributions), name => { distribution = name; updateSpreads(); drawVoters(); });
-    choices(deviations, config.deviations.map(d => ({
-      name: d, label: d === 0 ? "0 (voronoi)" : String(d),
-      description: d === 0 ? "Every voter at their pixel: every method draws the Voronoi diagram" :
-        `Voters at a mean distance of ${d} from their pixel along each axis (at the centre pixel for Beta)`,
-    })), d => { deviation = d; updateSpreads(); drawVoters(); });
+    choices(distributions, config.distributions, name => { distribution = name; updateSpreads(); drawVoters(); });
+    // The slider picks an index into the offered deviations, so the values stay exact. Moving it
+    // updates the voters shown; the diagram is recomputed only once it is let go.
+    function pickDeviation() {
+      deviation = config.deviations[deviationSlider.valueAsNumber];
+      deviationValue.textContent = deviation === 0 ? "0 (voronoi)" : String(deviation);
+      deviationSlider.title = deviation === 0 ? "Every voter at their pixel: every method draws the Voronoi diagram" :
+        `Voters at a mean distance of ${deviation} from their pixel along each axis (at the centre pixel for Beta)`;
+      updateSpreads();
+    }
+    Object.assign(deviationSlider, { min: 0, max: config.deviations.length - 1, step: 1 });
+    deviationSlider.value = config.deviations.indexOf(config.deviation);
+    deviationSlider.addEventListener("input", () => { pickDeviation(); drawVoters(); });
+    deviationSlider.addEventListener("change", compute);
     choices(spreads, config.spreads, name => { spread = name; drawVoters(); });
     choices(methods, named(config.methods), name => method = name);
-    distribution = config.distributions[0];
+    distribution = config.distributions[0].name;
     distributions.querySelector("button").classList.add("active");
-    spread = config.spreads[0].name;
-    spreads.querySelector("button").classList.add("active");
-    deviation = config.deviation;
-    deviations.querySelectorAll("button")[config.deviations.indexOf(deviation)].classList.add("active");
-    updateSpreads();
+    spread = config.spread;
+    spreads.querySelectorAll("button")[config.spreads.findIndex(info => info.name === spread)].classList.add("active");
+    pickDeviation();
     draw();
     drawVoters();
   </script>

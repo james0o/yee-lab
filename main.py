@@ -31,6 +31,21 @@ assert DEVIATION in DEVIATIONS
 CYCLE_BYTE = 255  # CYCLE (-1) in the uint8 response
 
 Coordinate = Annotated[float, Field(ge=0, le=1)]
+# Each voter distribution along one axis, per pixel: plain label, LaTeX label (typeset
+# by KaTeX in the UI) and tooltip.
+DISTRIBUTION_INFO = {
+    "beta": {
+        "label": "X ~ Beta(α, β)",
+        "tex": r"X \sim \operatorname{Beta}(\alpha, \beta)",
+        "description": "Beta voters, with the pixel as median; they stay inside the square.",
+    },
+    "normal": {
+        "label": "X ~ N(μ, σ²)",
+        "tex": r"X \sim \mathcal{N}(\mu, \sigma^2)",
+        "description": "Normal voters, with the pixel as mean; they can leave the square.",
+    },
+}
+assert set(DISTRIBUTION_INFO) == set(DISTRIBUTIONS)
 # Each Beta spread rule: plain label, LaTeX label (typeset by KaTeX in the UI) and
 # tooltip. All rules agree at the centre pixel.
 SPREAD_INFO = {
@@ -121,8 +136,9 @@ def _voters():
 def config():
     return {
         "methods": DIAGRAMS,
-        "distributions": list(DISTRIBUTIONS),
+        "distributions": [{"name": name, **info} for name, info in DISTRIBUTION_INFO.items()],
         "spreads": [{"name": name, **info} for name, info in SPREAD_INFO.items()],
+        "spread": SPREAD,
         "candidates": CANDIDATES.tolist(),
         "max_candidates": MAX_CANDIDATES,
         "pixels": PIXELS,

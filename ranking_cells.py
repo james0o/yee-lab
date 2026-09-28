@@ -62,7 +62,7 @@ EPS = 1e-12
 
 Spread = Literal["mean_abs", "rms", "tapered"]
 SPREADS = get_args(Spread)
-SPREAD: Spread = "mean_abs"
+SPREAD: Spread = "rms"
 CONTINUATION_STEP = 0.25  # largest step in logit(median) of the mean_abs solver
 # Exponent of the "tapered" rule, found by optimisation: it gave the straightest
 # Condorcet borders at equal numbers of cycle pixels in a benchmark (docs/math.typ).
