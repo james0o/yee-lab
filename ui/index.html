@@ -17,10 +17,11 @@
     .layout { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 2rem; }
     .diagram { flex: 1 1 480px; max-width: 860px; }
     .controls { flex: 1 1 300px; }
-    /* the square and the voter strips (y on the left, x below), placed by layout() in the script */
+    /* the square and the voter strips (y on the left, x above), placed by layout() in the script */
     .joint { position: relative; }
     .joint > * { position: absolute; }
-    #square { box-sizing: border-box; border: 1px solid #222; cursor: crosshair; touch-action: none; }
+    /* opaque, so the voter density shade behind it only shows around it */
+    #square { box-sizing: border-box; border: 1px solid #222; background: #fff; cursor: crosshair; touch-action: none; }
     .choices { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 0 0 1rem; }
     .choices > span { font-size: .9rem; color: #666; }  /* row labels only, not KaTeX spans */
     button { font: inherit; padding: .4rem .9rem; border: 1px solid #222; border-radius: 4px; background: #fff; cursor: pointer; }
@@ -41,7 +42,7 @@
       <div class="choices" id="spreads"><span>Beta spread fixed:</span></div>
       <div class="choices" id="methods"></div>
       <p>Drag a candidate to move it · click empty space to add one · right-click to remove</p>
-      <p>Hover the square to see the voters of a pixel along x (above) and y (left)</p>
+      <p>Hover the square to see the voters of a pixel in 2D and along x (above) and y (left)</p>
       <p id="voters"></p>
       <p id="message">Pick a method.</p>
     </div>
@@ -72,6 +73,29 @@
     const AXIS = 28;        // CSS px for the 0, 0.5, 1 labels on the outer side of a strip
     const POSITIONS = Array.from({ length: SAMPLES },
       (_, i) => -OVERHANG + (i + 0.5) / SAMPLES * (1 + 2 * OVERHANG));
+    // 2D voter density while hovering, as a dark shade over [-OVERHANG, 1 + OVERHANG]², so normal
+    // voters outside the square show too. Computed on a grid of DENSITY_GRID points per unit and
+    // smoothed up. DENSITY_TOP (the normal peak is 1.13) and higher get opacity DENSITY_ALPHA;
+    // below, the opacity falls like density^DENSITY_GAMMA, which lifts the low densities.
+    const DENSITY_GRID = 200;
+    const DENSITY_EDGE = Math.round(OVERHANG * DENSITY_GRID);  // grid points outside on each side
+    const DENSITY_SIZE = DENSITY_GRID + 2 * DENSITY_EDGE;
+    const DENSITY_TOP = 1.2;
+    const DENSITY_ALPHA = 0.8;
+    const DENSITY_GAMMA = 0.6;
+    // near-black with the opacity of each density level; more levels than 8 bits, as the power
+    // makes the steps near 0 large
+    const DENSITY_COLORS = Array.from({ length: 1024 }, (_, level) =>
+      [20, 20, 20, 255 * DENSITY_ALPHA * (level / 1023) ** DENSITY_GAMMA]);
+    // The whole shade, shown behind the square with CSS smoothing it up; the part inside the
+    // square is drawn by draw(), between the diagram and the candidates.
+    const densityCanvas = document.createElement("canvas");
+    densityCanvas.width = densityCanvas.height = DENSITY_SIZE;
+    Object.assign(densityCanvas.style, { pointerEvents: "none", visibility: "hidden" });
+    canvas.before(densityCanvas);
+    // up to half a level of noise per grid point, so that 256 levels show no rings where the
+    // density is nearly flat; fixed, so the image does not flicker while the mouse moves
+    const DITHER = Float32Array.from({ length: DENSITY_SIZE ** 2 }, () => Math.random() - 0.5);
 
     let candidates = [];  // [[x, y], ...] in the unit square, y pointing up
     let maxCandidates = 0;
@@ -83,6 +107,7 @@
     let betaParams = {};  // spread name -> [a, b] of the Beta voters along one axis, per pixel
     let sigma = 0;        // standard deviation of the normal voters along one axis
     let hovered = [0.5, 0.5];  // point whose pixel's voters are shown in the strips
+    let showDensity = false;   // their 2D density over the square, while hovering it
     let diagram = null;   // last computed diagram as an image, or null
     let dragged = -1;     // index of the candidate being dragged
     let requestId = 0;    // answers to older requests are ignored
@@ -108,6 +133,13 @@
       if (diagram) {
         ctx.imageSmoothingEnabled = false;  // sharp pixel borders, like interpolation="nearest"
         ctx.drawImage(diagram, 0, 0, canvas.width, canvas.height);
+      }
+      densityCanvas.style.visibility = showDensity ? "visible" : "hidden";  // the part around the square
+      if (showDensity) {  // the part of the voter density inside the square
+        ctx.imageSmoothingEnabled = true;  // smooth, unlike the diagram
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(densityCanvas, DENSITY_EDGE, DENSITY_EDGE, DENSITY_GRID, DENSITY_GRID,
+          0, 0, canvas.width, canvas.height);
       }
       candidates.forEach((candidate, i) => {
         const [x, y] = toCanvas(candidate);
@@ -227,13 +259,34 @@
     const stripX = voterStrip(false);
     const stripY = voterStrip(true);
 
-    // Voters of the hovered pixel along x (above the square) and y (left of it).
+    // The 2D density of voters X, Y into densityCanvas. They are independent, so it is f(x) g(y).
+    function fillDensity(x, y) {
+      const along = ({ pdf }) => Array.from({ length: DENSITY_SIZE },
+        (_, i) => pdf((i - DENSITY_EDGE + 0.5) / DENSITY_GRID) ?? 0);  // Beta is null outside
+      const [f, g] = [along(x), along(y)];
+      const top = DENSITY_COLORS.length - 1;
+      const image = new ImageData(DENSITY_SIZE, DENSITY_SIZE);
+      for (let row = 0; row < DENSITY_SIZE; row++) {
+        const gy = g[DENSITY_SIZE - 1 - row];  // rows go top to bottom
+        for (let col = 0; col < DENSITY_SIZE; col++) {
+          const k = row * DENSITY_SIZE + col;
+          const level = Math.round(top * Math.min(1, f[col] * gy / DENSITY_TOP) + DITHER[k]);
+          image.data.set(DENSITY_COLORS[Math.min(top, Math.max(0, level))], 4 * k);
+        }
+      }
+      densityCanvas.getContext("2d").putImageData(image, 0, 0);
+    }
+
+    // Voters of the hovered pixel along x (above the square) and y (left of it), and in 2D
+    // over the square. Redraws the square.
     function drawVoters() {
       const pixel = v => Math.min(pixels - 1, Math.floor(v * pixels));
       const [x, y] = hovered.map(v => voterDensity(pixel(v)));
       stripX.show(x);
       stripY.show(y);
       votersText.textContent = `Voters at (${x.m.toFixed(3)}, ${y.m.toFixed(3)}): X ~ ${x.text}, Y ~ ${y.text}`;
+      if (showDensity) fillDensity(x, y);
+      draw();
     }
 
     // Place the square and the strips so that the strips' 0 and 1 line up with the square's edges.
@@ -247,6 +300,7 @@
       const place = (element, left, top, width, height) =>
         Object.assign(element.style, { left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
       place(canvas, thick + gap, thick + gap, side, side);
+      place(densityCanvas, thick, thick, span, span);
       place(stripX.plot.root, thick, 0, span, thick);
       place(stripY.plot.root, 0, thick, thick, span);
       stripY.plot.setSize({ width: thick, height: span });
@@ -310,14 +364,19 @@
         dragged = candidates.length - 1;
       }
       canvas.setPointerCapture(event.pointerId);  // keep getting moves outside the canvas
+      showDensity = false;
       draw();
     });
 
     canvas.addEventListener("pointermove", event => {
       hovered = toUnit(event);
+      if (dragged !== -1) candidates[dragged] = hovered;
+      showDensity = dragged === -1;  // not while dragging, so the diagram stays visible
       drawVoters();
-      if (dragged === -1) return;
-      candidates[dragged] = hovered;
+    });
+
+    canvas.addEventListener("pointerleave", () => {
+      showDensity = false;
       draw();
     });
 
