@@ -48,7 +48,6 @@ from cache import (
     save_node_probabilities,
     value_token,
 )
-from const import CANDIDATES, DEVIATION, PIXELS
 from ranking_cells import (
     NODES,
     effective_nodes,
@@ -60,7 +59,7 @@ from ranking_cells import interpolate_to_pixels as _interpolate_to_pixels
 BOX = 10  # half-width of the margin around the unit square, in sigma
 
 
-def sigma_from_deviation(deviation=DEVIATION):
+def sigma_from_deviation(deviation):
     """sigma with E|X - m| = `deviation` for X ~ N(m, sigma^2)."""
     return deviation * np.sqrt(np.pi / 2)
 
@@ -111,7 +110,7 @@ def _triangle(s, e, medians, sigma):
     return _right_triangles(d, ts + length, sigma) - _right_triangles(d, ts, sigma)
 
 
-def compute_ranking_probabilities(candidates, medians, deviation=DEVIATION, progress=None):
+def compute_ranking_probabilities(candidates, medians, deviation, progress=None):
     """Returns (rankings (R, C), probabilities (N, N, R)); [i, j] is the pixel with
     mean (medians[i], medians[j]).
 
@@ -135,7 +134,7 @@ def compute_ranking_probabilities(candidates, medians, deviation=DEVIATION, prog
     return rankings, np.clip(probs, 0.0, 1.0)
 
 
-def ranking_probabilities(candidates, pixels=PIXELS, deviation=DEVIATION, nodes=NODES,
+def ranking_probabilities(candidates, pixels, deviation, nodes=NODES,
                           progress=None):
     """(rankings, probabilities (pixels, pixels, R)) computed at the node medians
     and interpolated, without the cache."""
@@ -163,9 +162,9 @@ def _rankings_metadata(pixels, deviation, candidates, nodes):
 
 
 def read_cached_ranking_probabilities(
-    candidates=CANDIDATES,
-    pixels=PIXELS,
-    deviation=DEVIATION,
+    candidates,
+    pixels,
+    deviation,
     nodes=NODES,
     cache_root=DEFAULT_CACHE_ROOT,
 ):
@@ -182,9 +181,9 @@ def read_cached_ranking_probabilities(
 
 
 def generate_ranking_probabilities(
-    candidates=CANDIDATES,
-    pixels=PIXELS,
-    deviation=DEVIATION,
+    candidates,
+    pixels,
+    deviation,
     nodes=NODES,
     cache_root=DEFAULT_CACHE_ROOT,
     progress=None,

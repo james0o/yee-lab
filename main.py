@@ -1,6 +1,6 @@
 """Web UI for Yee diagrams.
 
-Run `uv run fastapi dev main.py` and open http://127.0.0.1:8000.
+Run `uv run fastapi dev` and open http://127.0.0.1:8000.
 The page itself is ui/index.html; this file only answers its requests.
 """
 
@@ -13,7 +13,6 @@ from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from const import CANDIDATES, DEVIATION
 from distributions import DISTRIBUTIONS, Distribution, model
 from methods import CYCLE, METHODS, voronoi
 from normal import sigma_from_deviation
@@ -21,6 +20,9 @@ from ranking_cells import NODES, SPREAD, SPREADS, TAPER, Spread, beta_params
 
 PIXELS = 300  # per axis; lower it if dragging feels slow
 MAX_CANDIDATES = 8  # probabilities take ~0.5 s for 5 candidates, ~4 s for 8
+# The candidates the page starts with.
+CANDIDATES = [[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]]
+DEVIATION = 0.2  # default of the deviation slider
 
 # The UI offers the Voronoi diagram (no voters) next to the voting methods.
 DIAGRAMS = ["voronoi", *METHODS]
@@ -139,7 +141,7 @@ def config():
         "distributions": [{"name": name, **info} for name, info in DISTRIBUTION_INFO.items()],
         "spreads": [{"name": name, **info} for name, info in SPREAD_INFO.items()],
         "spread": SPREAD,
-        "candidates": CANDIDATES.tolist(),
+        "candidates": CANDIDATES,
         "max_candidates": MAX_CANDIDATES,
         "pixels": PIXELS,
         "deviations": DEVIATIONS,

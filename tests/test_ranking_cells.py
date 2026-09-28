@@ -13,7 +13,6 @@ import pytest
 from scipy.integrate import quad
 from scipy.special import beta as beta_fn, betainc
 
-from const import CANDIDATES
 from ranking_cells import (
     NODES,
     SPREADS,
@@ -30,6 +29,7 @@ from ranking_cells import (
     read_cached_ranking_probabilities,
 )
 
+CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
 PIXELS = 21  # odd, so the middle pixel has median exactly 0.5
 MIDDLE = PIXELS // 2
 DEVIATION = 0.3

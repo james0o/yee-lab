@@ -20,12 +20,18 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from const import CANDIDATES, DEVIATION
 from distributions import Distribution, model
 from methods import CYCLE, METHODS, voronoi
 from ranking_cells import NODES, SPREAD, Spread, effective_nodes
 
 PIXELS = 400  # per axis, default of --pixels
+DEVIATION = 0.2  # default of --deviation
+CANDIDATES = np.array([
+    [0.6,0.35],
+    [0.25,0.4],
+    [0.35,0.3],
+    [0.5, 0.5],
+    [0.3, 0.7]], dtype=np.float64)
 PLOTS = Path("plots")
 DIAGRAMS = ["voronoi", *METHODS]  # voronoi needs no voters, so it has no model folder
 console = Console()

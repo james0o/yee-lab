@@ -15,7 +15,6 @@ from scipy.integrate import quad
 from scipy.special import ndtr
 from scipy.stats import norm
 
-from const import CANDIDATES
 from methods import CYCLE, condorcet_cycle, schulze, voronoi
 from normal import (
     BOX,
@@ -28,6 +27,7 @@ from normal import (
 )
 from ranking_cells import pixel_medians
 
+CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
 PIXELS = 20
 DEVIATION = 0.3
 MEDIANS = pixel_medians(PIXELS)

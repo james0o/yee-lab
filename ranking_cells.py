@@ -54,7 +54,6 @@ from cache import (
     save_node_probabilities,
     value_token,
 )
-from const import CANDIDATES, DEVIATION, PIXELS
 
 QUAD_NODES = 24
 NODES = 49
@@ -182,7 +181,7 @@ def pixel_medians(pixels):
     return (np.arange(pixels) + 0.5) / pixels
 
 
-def beta_params_at(medians, deviation=DEVIATION, spread=SPREAD):
+def beta_params_at(medians, deviation, spread=SPREAD):
     """Parameters (a, b) for each median, shape (len(medians), 2)."""
     if not 0 < deviation < 0.5:
         raise ValueError("deviation must be between 0 and 1/2")
@@ -195,7 +194,7 @@ def beta_params_at(medians, deviation=DEVIATION, spread=SPREAD):
     return params
 
 
-def beta_params(pixels, deviation=DEVIATION, spread=SPREAD):
+def beta_params(pixels, deviation, spread=SPREAD):
     """Parameters (a, b) for pixel medians (k + 1/2) / pixels, shape (pixels, 2)."""
     return beta_params_at(pixel_medians(pixels), deviation, spread)
 
@@ -420,7 +419,7 @@ def compute_ranking_probabilities(candidates, params, quad_nodes=QUAD_NODES, pro
 
 
 @lru_cache(maxsize=None)
-def node_params(pixels, nodes=NODES, deviation=DEVIATION, spread=SPREAD):
+def node_params(pixels, nodes, deviation, spread=SPREAD):
     """(node medians, Beta parameters at them), read-only. Kept in memory: they
     depend only on the grid and the spread rule, never on the candidates."""
     medians = node_medians(pixels, nodes)
@@ -430,7 +429,7 @@ def node_params(pixels, nodes=NODES, deviation=DEVIATION, spread=SPREAD):
     return medians, params
 
 
-def ranking_probabilities(candidates, pixels=PIXELS, deviation=DEVIATION, nodes=NODES,
+def ranking_probabilities(candidates, pixels, deviation, nodes=NODES,
                           spread=SPREAD, quad_nodes=QUAD_NODES, progress=None):
     """(rankings, probabilities (pixels, pixels, R)) computed at the node medians
     and interpolated, without the cache."""
@@ -460,9 +459,9 @@ def _rankings_metadata(pixels, deviation, spread, candidates, quad_nodes, nodes)
 
 
 def read_cached_ranking_probabilities(
-    candidates=CANDIDATES,
-    pixels=PIXELS,
-    deviation=DEVIATION,
+    candidates,
+    pixels,
+    deviation,
     nodes=NODES,
     quad_nodes=QUAD_NODES,
     cache_root=DEFAULT_CACHE_ROOT,
@@ -480,9 +479,9 @@ def read_cached_ranking_probabilities(
 
 
 def load_ranking_probabilities(
-    candidates=CANDIDATES,
-    pixels=PIXELS,
-    deviation=DEVIATION,
+    candidates,
+    pixels,
+    deviation,
     nodes=NODES,
     quad_nodes=QUAD_NODES,
     cache_root=DEFAULT_CACHE_ROOT,
@@ -504,9 +503,9 @@ def load_ranking_probabilities(
 
 
 def generate_ranking_probabilities(
-    candidates=CANDIDATES,
-    pixels=PIXELS,
-    deviation=DEVIATION,
+    candidates,
+    pixels,
+    deviation,
     nodes=NODES,
     quad_nodes=QUAD_NODES,
     cache_root=DEFAULT_CACHE_ROOT,
@@ -552,12 +551,3 @@ def monte_carlo_check(candidates, params, rankings, probs, pixel_ids, samples=2_
         worst = max(worst, diff)
         print(f"pixel ({i:3d}, {j:3d}): max |exact - MC| = {diff:.2e}")
     return worst
-
-
-if __name__ == "__main__":
-    import time
-
-    start = time.perf_counter()
-    rankings, probs = load_ranking_probabilities()
-    print(f"{len(rankings)} rankings, probabilities {probs.shape}, "
-          f"{time.perf_counter() - start:.1f} s")

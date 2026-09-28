@@ -208,9 +208,9 @@ area below $10^(-14)$ are discarded. All polygons stay convex and counter-clockw
 (CCW). The ranking of a cell is found by sorting the candidates by distance from the
 cell's vertex average, which lies strictly inside the convex cell.
 
-@fig-cells shows the arrangement for the candidates in `const.py`.
+@fig-cells shows the arrangement for the candidates A–E of `docs/figures.py`.
 
-// Generated from ranking_cells(CANDIDATES) with the candidates of const.py.
+// Generated from ranking_cells(CANDIDATES) with the candidates of docs/figures.py.
 #let candidates = (
   ("A", (0.6, 0.35)),
   ("B", (0.25, 0.4)),
@@ -584,7 +584,7 @@ River method splits the square into one clean region per candidate, while Schulz
 the Beta model has distorted regions and even pixels without a Condorcet winner
 (@fig-compare). This chapter explains why.
 
-All numbers below use the candidates A–E of `const.py` (@fig-cells), $d = 0.3$
+All numbers below use the candidates A–E (@fig-cells), $d = 0.3$
 (`DEVIATION`), $300 times 300$ pixels and $49 times 49$ nodes; they are produced by
 `docs/figures.py`.
 

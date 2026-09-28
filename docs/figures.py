@@ -20,9 +20,10 @@ from scipy.stats import beta as beta_dist
 
 import normal
 import ranking_cells
-from const import CANDIDATES
 from methods import CYCLE, condorcet_cycle, fptp, irv, schulze, voronoi
 
+# candidates A-E of the chapter
+CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
 PIXELS = 300
 DEVIATION = 0.3
 NAMES = "ABCDE"
