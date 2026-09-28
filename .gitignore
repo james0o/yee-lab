@@ -14,13 +14,5 @@ wheels/
 tests/__pycache__/
 .pytest_cache/
 
-# Jupyter notebooks
-*ipynb
-!beta.ipynb
-
-# Results
-winners/*
-weights/*
-params/*
 plots/*
 cache/*
