@@ -16,7 +16,8 @@ from pydantic import BaseModel, Field
 from const import CANDIDATES, DEVIATION
 from distributions import DISTRIBUTIONS, Distribution, model
 from methods import CYCLE, METHODS, voronoi
-from ranking_cells import NODES, SPREAD, SPREADS, TAPER, Spread
+from normal import sigma_from_deviation
+from ranking_cells import NODES, SPREAD, SPREADS, TAPER, Spread, beta_params
 
 PIXELS = 300  # per axis; lower it if dragging feels slow
 MAX_CANDIDATES = 8  # probabilities take ~0.5 s for 5 candidates, ~4 s for 8
@@ -79,6 +80,13 @@ def _ranking_probabilities(
     )
 
 
+@lru_cache(maxsize=1)
+def _beta_params():
+    """(a, b) of the Beta voters along one axis for every pixel, shape (PIXELS, 2),
+    per spread rule. Independent of the candidates, so computed once."""
+    return {spread: beta_params(PIXELS, DEVIATION, spread).tolist() for spread in SPREADS}
+
+
 @app.get("/api/config")
 def config():
     return {
@@ -88,6 +96,9 @@ def config():
         "candidates": CANDIDATES.tolist(),
         "max_candidates": MAX_CANDIDATES,
         "pixels": PIXELS,
+        # for the voter distribution plots of the hovered pixel
+        "sigma": sigma_from_deviation(DEVIATION),
+        "beta_params": _beta_params(),
     }
 
 
