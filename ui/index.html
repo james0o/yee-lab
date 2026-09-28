@@ -7,7 +7,7 @@
   <!-- KaTeX 0.18.9 (MIT), bundled in ui/vendor so the page also works offline -->
   <link rel="stylesheet" href="vendor/katex/katex.min.css">
   <script src="vendor/katex/katex.min.js"></script>
-  <!-- uPlot 1.6.32 (MIT), for the voter distribution strips -->
+  <!-- uPlot 1.6.32 (MIT), for the voter distribution strip -->
   <link rel="stylesheet" href="vendor/uplot/uPlot.min.css">
   <script src="vendor/uplot/uPlot.iife.min.js"></script>
   <style>
@@ -15,9 +15,9 @@
     h1 { font-size: 1.4rem; font-weight: 600; }
     /* diagram on the left, controls on the right; stacked on narrow screens */
     .layout { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 2rem; }
-    .diagram { flex: 1 1 480px; max-width: 860px; }
+    .diagram { flex: 1 1 420px; max-width: 720px; }
     .controls { flex: 1 1 300px; }
-    /* the square and the voter strips (y on the left, x above), placed by layout() in the script */
+    /* the square and the voter strip above it, placed by layout() in the script */
     .joint { position: relative; }
     .joint > * { position: absolute; }
     /* opaque, so the voter density shade behind it only shows around it */
@@ -39,10 +39,11 @@
     </div>
     <div class="controls">
       <div class="choices" id="distributions"><span>Voters:</span></div>
+      <div class="choices" id="deviations"><span>Deviation:</span></div>
       <div class="choices" id="spreads"><span>Beta spread fixed:</span></div>
       <div class="choices" id="methods"></div>
       <p>Drag a candidate to move it · click empty space to add one · right-click to remove</p>
-      <p>Hover the square to see the voters of a pixel in 2D and along x (above) and y (left)</p>
+      <p>Hover the square to see the voters of a pixel in 2D and along x (above)</p>
       <p id="voters"></p>
       <p id="message">Pick a method.</p>
     </div>
@@ -62,15 +63,16 @@
     const methods = document.getElementById("methods");
     const distributions = document.getElementById("distributions");
     const spreads = document.getElementById("spreads");
+    const deviations = document.getElementById("deviations");
     const joint = document.getElementById("joint");
     const votersText = document.getElementById("voters");
-    // density at the far edge of a strip (the normal peak is 1.06); higher densities run off the
-    // strip, like Beta with a or b < 1, which is infinite at the walls
-    const DENSITY_MAX = 1.5;
+    // each curve is scaled so its peak sits at 1 / HEADROOM of the strip, whatever its height
+    const HEADROOM = 1.1;
     const SAMPLES = 500;    // points per density curve
-    const OVERHANG = 0.15;  // the strips reach this far beyond the square (normal voters can leave it)
-    const STRIP = 0.2;      // thickness of a strip's plot, as a fraction of the square
-    const AXIS = 28;        // CSS px for the 0, 0.5, 1 labels on the outer side of a strip
+    const OVERHANG = 0.15;  // the strip reaches this far beyond the square (normal voters can leave it)
+    const STRIP = 0.2;      // thickness of the strip's plot, as a fraction of the square
+    const AXIS = 28;        // CSS px for the 0, 0.5, 1 labels above the strip
+    const DROP = 16;        // CSS px between the strip and the square's surroundings
     const POSITIONS = Array.from({ length: SAMPLES },
       (_, i) => -OVERHANG + (i + 0.5) / SAMPLES * (1 + 2 * OVERHANG));
     // 2D voter density while hovering, as a dark shade over [-OVERHANG, 1 + OVERHANG]², so normal
@@ -104,9 +106,10 @@
     let distribution = null;  // name of the selected voter distribution
     let spread = null;    // name of the selected Beta spread rule
     let spreadInfo = {};  // spread name -> {label, tex, description} from the backend
-    let betaParams = {};  // spread name -> [a, b] of the Beta voters along one axis, per pixel
-    let sigma = 0;        // standard deviation of the normal voters along one axis
-    let hovered = [0.5, 0.5];  // point whose pixel's voters are shown in the strips
+    let deviation = 0;    // mean absolute deviation of the voters from their pixel; 0 = all at it
+    let voters = {};      // deviation above 0 -> {sigma, beta_params} from the backend, where
+                          // beta_params is spread name -> [a, b] along one axis, per pixel
+    let hovered = [0.5, 0.5];  // point whose pixel's voters are shown in the strip and the shade
     let showDensity = false;   // their 2D density over the square, while hovering it
     let diagram = null;   // last computed diagram as an image, or null
     let dragged = -1;     // index of the candidate being dragged
@@ -168,8 +171,10 @@
     // Voters of pixel k along one axis: median m (the pixel centre, as in the backend), pdf and a label.
     function voterDensity(k) {
       const m = (k + 0.5) / pixels;
+      if (deviation === 0) return { m, text: `δ(${m.toFixed(3)})`, pdf: () => null };  // all at m: no curve
+      const { sigma, beta_params } = voters[deviation];
       if (distribution === "beta") {
-        const [a, b] = betaParams[spread][k];
+        const [a, b] = beta_params[spread][k];
         const logB = lgamma(a) + lgamma(b) - lgamma(a + b);
         return {
           m, text: `Beta(${a.toFixed(3)}, ${b.toFixed(3)})`,
@@ -182,11 +187,10 @@
       };
     }
 
-    // A uPlot strip of the voter density along one axis, with density 0 at the side facing the
-    // square: above it for x (vertical = false), left of it for y (vertical = true).
-    function voterStrip(vertical) {
+    // A uPlot strip of the voter density along x, above the square, with density 0 at the bottom.
+    function voterStrip() {
       let median = 0.5;
-      // lines across the strip at positions `at` along the axis, in canvas pixels
+      // vertical lines at positions `at` along x, in canvas pixels
       function across(u, at, style, dash = []) {
         const { ctx, bbox } = u;
         ctx.save();
@@ -196,8 +200,8 @@
         for (const v of at) {
           const p = Math.round(u.valToPos(v, "x", true)) + 0.5;
           ctx.beginPath();
-          if (vertical) { ctx.moveTo(bbox.left, p); ctx.lineTo(bbox.left + bbox.width, p); }
-          else { ctx.moveTo(p, bbox.top); ctx.lineTo(p, bbox.top + bbox.height); }
+          ctx.moveTo(p, bbox.top);
+          ctx.lineTo(p, bbox.top + bbox.height);
           ctx.stroke();
         }
         ctx.restore();
@@ -209,8 +213,7 @@
         ctx.fillStyle = "#f6f6f6";
         for (const [from, to] of [[-OVERHANG, 0], [1, 1 + OVERHANG]]) {
           const [p, q] = [from, to].map(v => u.valToPos(v, "x", true));
-          if (vertical) ctx.fillRect(bbox.left, Math.min(p, q), bbox.width, Math.abs(q - p));
-          else ctx.fillRect(Math.min(p, q), bbox.top, Math.abs(q - p), bbox.height);
+          ctx.fillRect(Math.min(p, q), bbox.top, Math.abs(q - p), bbox.height);
         }
         ctx.restore();
       }
@@ -221,14 +224,12 @@
         cursor: { show: false, drag: { x: false, y: false } },
         select: { show: false },
         scales: {
-          // position along the axis: left to right, or bottom to top
-          x: { time: false, auto: false, range: [-OVERHANG, 1 + OVERHANG], ori: vertical ? 1 : 0, dir: 1 },
-          // density, growing away from the square: upwards, or to the left
-          y: { auto: false, range: [0, DENSITY_MAX], ori: vertical ? 0 : 1, dir: vertical ? -1 : 1 },
+          x: { time: false, auto: false, range: [-OVERHANG, 1 + OVERHANG] },
+          y: { auto: false, range: [0, HEADROOM] },  // density over its peak
         },
         axes: [
           {
-            side: vertical ? 3 : 0, size: AXIS, gap: 3,
+            side: 0, size: AXIS, gap: 3,
             splits: () => [0, 0.5, 1], values: (u, splits) => splits.map(String),
             font: "11px system-ui, sans-serif", stroke: "#888",
             grid: { show: false }, ticks: { size: 4, width: 1, stroke: "#ccc" },
@@ -250,14 +251,15 @@
         plot,
         show({ m, pdf }) {
           median = m;
-          // not clipped to DENSITY_MAX: uPlot cuts the curve at the edge of the strip, whereas
-          // clipped values would draw a flat line there, as if the density stopped growing
-          plot.setData([POSITIONS, POSITIONS.map(pdf)]);
+          // over the highest sample, so the whole curve fits; Beta with a or b < 1 is infinite
+          // at the walls, but its samples are not
+          const density = POSITIONS.map(pdf);
+          const peak = Math.max(...density.filter(Number.isFinite));  // Beta is null outside
+          plot.setData([POSITIONS, density.map(d => d === null || !(peak > 0) ? d : d / peak)]);
         },
       };
     }
-    const stripX = voterStrip(false);
-    const stripY = voterStrip(true);
+    const stripX = voterStrip();
 
     // The 2D density of voters X, Y into densityCanvas. They are independent, so it is f(x) g(y).
     function fillDensity(x, y) {
@@ -277,35 +279,33 @@
       densityCanvas.getContext("2d").putImageData(image, 0, 0);
     }
 
-    // Voters of the hovered pixel along x (above the square) and y (left of it), and in 2D
-    // over the square. Redraws the square.
+    // Voters of the hovered pixel along x (above the square) and in 2D over the square.
+    // Redraws the square.
     function drawVoters() {
       const pixel = v => Math.min(pixels - 1, Math.floor(v * pixels));
       const [x, y] = hovered.map(v => voterDensity(pixel(v)));
       stripX.show(x);
-      stripY.show(y);
       votersText.textContent = `Voters at (${x.m.toFixed(3)}, ${y.m.toFixed(3)}): X ~ ${x.text}, Y ~ ${y.text}`;
       if (showDensity) fillDensity(x, y);
       draw();
     }
 
-    // Place the square and the strips so that the strips' 0 and 1 line up with the square's edges.
-    // Each strip reaches OVERHANG beyond the square at both ends, so the square keeps that much
-    // space below, to its right and between it and the strips, and the strips' ends never meet.
+    // Place the square and the strip so that the strip's 0 and 1 line up with the square's edges.
+    // The strip reaches OVERHANG beyond the square at both ends, so the square keeps that much
+    // space around it, where the 2D density shows too, and DROP more between that and the strip.
     function layout() {
-      const side = (joint.clientWidth - AXIS) / (STRIP + 1 + 2 * OVERHANG);
-      const span = side * (1 + 2 * OVERHANG);  // length of a strip
-      const thick = side * STRIP + AXIS;       // thickness of a strip with its labels
+      const span = joint.clientWidth;          // length of the strip
+      const side = span / (1 + 2 * OVERHANG);
+      const thick = side * STRIP + AXIS;       // thickness of the strip with its labels
       const gap = side * OVERHANG;
+      const top = thick + DROP;                // of the square's surroundings
       const place = (element, left, top, width, height) =>
         Object.assign(element.style, { left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
-      place(canvas, thick + gap, thick + gap, side, side);
-      place(densityCanvas, thick, thick, span, span);
-      place(stripX.plot.root, thick, 0, span, thick);
-      place(stripY.plot.root, 0, thick, thick, span);
-      stripY.plot.setSize({ width: thick, height: span });
+      place(canvas, gap, top + gap, side, side);
+      place(densityCanvas, 0, top, span, span);
+      place(stripX.plot.root, 0, 0, span, thick);
       stripX.plot.setSize({ width: span, height: thick });
-      joint.style.height = `${span + thick}px`;
+      joint.style.height = `${top + span}px`;
     }
     new ResizeObserver(layout).observe(joint);
 
@@ -323,7 +323,7 @@
         const response = await fetch("/api/diagram", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ candidates, method, distribution, spread }),
+          body: JSON.stringify({ candidates, method, distribution, spread, deviation }),
         });
         if (!response.ok) throw new Error(await response.text());
         // one byte per pixel, rows top to bottom
@@ -339,12 +339,14 @@
         const tail = ` · ${candidates.length} candidates · ${Math.round(performance.now() - start)} ms`;
         if (method === "voronoi") {  // nearest candidate, no voters involved
           message.textContent = `voronoi${tail}`;
+        } else if (deviation === 0) {
+          message.textContent = `${method} · deviation 0: every voter at their pixel, so voronoi${tail}`;
         } else if (distribution === "beta") {
           const formula = document.createElement("span");
           typeset(formula, spreadInfo[spread]);
-          message.replaceChildren(`${method} · beta voters, `, formula, tail);
+          message.replaceChildren(`${method} · beta voters, deviation ${deviation}, `, formula, tail);
         } else {
-          message.textContent = `${method} · ${distribution} voters${tail}`;
+          message.textContent = `${method} · ${distribution} voters, deviation ${deviation}${tail}`;
         }
       } catch (error) {
         if (id === requestId) message.textContent = `Error: ${error.message}`;
@@ -425,9 +427,9 @@
     }
     const named = names => names.map(name => ({ name }));
 
-    // The spread rules only apply to Beta voters.
+    // The spread rules only apply to Beta voters that spread at all.
     function updateSpreads() {
-      for (const button of spreads.querySelectorAll("button")) button.disabled = distribution !== "beta";
+      for (const button of spreads.querySelectorAll("button")) button.disabled = distribution !== "beta" || deviation === 0;
     }
 
     // Start: default candidates, distributions and method names come from the backend.
@@ -436,15 +438,21 @@
     maxCandidates = config.max_candidates;
     pixels = config.pixels;
     spreadInfo = Object.fromEntries(config.spreads.map(info => [info.name, info]));
-    betaParams = config.beta_params;
-    sigma = config.sigma;
+    voters = Object.fromEntries(config.voters.map(({ deviation, ...rest }) => [deviation, rest]));
     choices(distributions, named(config.distributions), name => { distribution = name; updateSpreads(); drawVoters(); });
+    choices(deviations, config.deviations.map(d => ({
+      name: d, label: d === 0 ? "0 (voronoi)" : String(d),
+      description: d === 0 ? "Every voter at their pixel: every method draws the Voronoi diagram" :
+        `Voters at a mean distance of ${d} from their pixel along each axis (at the centre pixel for Beta)`,
+    })), d => { deviation = d; updateSpreads(); drawVoters(); });
     choices(spreads, config.spreads, name => { spread = name; drawVoters(); });
     choices(methods, named(config.methods), name => method = name);
     distribution = config.distributions[0];
     distributions.querySelector("button").classList.add("active");
     spread = config.spreads[0].name;
     spreads.querySelector("button").classList.add("active");
+    deviation = config.deviation;
+    deviations.querySelectorAll("button")[config.deviations.indexOf(deviation)].classList.add("active");
     updateSpreads();
     draw();
     drawVoters();

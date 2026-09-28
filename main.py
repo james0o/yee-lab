@@ -11,7 +11,7 @@ from typing import Annotated
 import numpy as np
 from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from const import CANDIDATES, DEVIATION
 from distributions import DISTRIBUTIONS, Distribution, model
@@ -24,6 +24,10 @@ MAX_CANDIDATES = 8  # probabilities take ~0.5 s for 5 candidates, ~4 s for 8
 
 # The UI offers the Voronoi diagram (no voters) next to the voting methods.
 DIAGRAMS = ["voronoi", *METHODS]
+# Mean absolute deviation of the voters from their pixel, as offered by the UI; DEVIATION
+# is the default. At 0 every voter is at the pixel, so every method draws the Voronoi diagram.
+DEVIATIONS = [round(0.05 * k, 2) for k in range(9)]
+assert DEVIATION in DEVIATIONS
 CYCLE_BYTE = 255  # CYCLE (-1) in the uint8 response
 
 Coordinate = Annotated[float, Field(ge=0, le=1)]
@@ -63,6 +67,20 @@ class DiagramRequest(BaseModel):
     method: Annotated[str, Field(pattern=f"^({'|'.join(DIAGRAMS)})$")]
     distribution: Distribution = "beta"
     spread: Spread = SPREAD  # Beta only
+    deviation: float = DEVIATION
+
+    @field_validator("deviation")
+    @classmethod
+    def offered(cls, deviation: float) -> float:
+        if deviation not in DEVIATIONS:
+            raise ValueError(f"deviation must be one of {DEVIATIONS}")
+        return deviation
+
+
+def _nodes(distribution: Distribution, deviation: float) -> int:
+    """Interpolation nodes per axis. Narrow Beta voters (deviation below 0.1) change
+    the probabilities faster than NODES follow: at 0.05 they would sum to up to 1.025."""
+    return 2 * NODES - 1 if distribution == "beta" and deviation < 0.1 else NODES
 
 
 @lru_cache(maxsize=8)
@@ -70,21 +88,33 @@ def _ranking_probabilities(
     candidates: tuple[tuple[float, float], ...],
     distribution: Distribution,
     spread: Spread | None,
+    deviation: float,
 ):
     """Kept in memory, not in cache/: nearly every dragged position is new.
     The lru_cache makes switching methods or voter models without moving a
     candidate instant. `spread` is None for normal voters."""
     module, options = model(distribution, spread)
     return module.ranking_probabilities(
-        np.array(candidates), PIXELS, DEVIATION, NODES, **options
+        np.array(candidates), PIXELS, deviation, _nodes(distribution, deviation), **options
     )
 
 
 @lru_cache(maxsize=1)
-def _beta_params():
-    """(a, b) of the Beta voters along one axis for every pixel, shape (PIXELS, 2),
-    per spread rule. Independent of the candidates, so computed once."""
-    return {spread: beta_params(PIXELS, DEVIATION, spread).tolist() for spread in SPREADS}
+def _voters():
+    """Per deviation above 0: sigma of the normal voters and (a, b) of the Beta voters
+    along one axis for every pixel, shape (PIXELS, 2), per spread rule. Independent of
+    the candidates, so computed once."""
+    return [
+        {
+            "deviation": deviation,
+            "sigma": sigma_from_deviation(deviation),
+            "beta_params": {
+                spread: beta_params(PIXELS, deviation, spread).tolist() for spread in SPREADS
+            },
+        }
+        for deviation in DEVIATIONS
+        if deviation > 0
+    ]
 
 
 @app.get("/api/config")
@@ -96,9 +126,10 @@ def config():
         "candidates": CANDIDATES.tolist(),
         "max_candidates": MAX_CANDIDATES,
         "pixels": PIXELS,
+        "deviations": DEVIATIONS,
+        "deviation": DEVIATION,
         # for the voter distribution plots of the hovered pixel
-        "sigma": sigma_from_deviation(DEVIATION),
-        "beta_params": _beta_params(),
+        "voters": _voters(),
     }
 
 
@@ -106,12 +137,12 @@ def config():
 def diagram(request: DiagramRequest):
     """Winner of every pixel, one byte each (CYCLE_BYTE for a Condorcet cycle),
     in image order: rows top to bottom, PIXELS x PIXELS."""
-    if request.method == "voronoi":
+    if request.method == "voronoi" or request.deviation == 0:
         winners = voronoi(np.array(request.candidates), PIXELS)
     else:
         spread = request.spread if request.distribution == "beta" else None
         rankings, probs = _ranking_probabilities(
-            tuple(request.candidates), request.distribution, spread
+            tuple(request.candidates), request.distribution, spread, request.deviation
         )
         winners = METHODS[request.method](rankings, probs)
     # winners[i, j] is pixel x = i, y = j; image rows go top to bottom, so row 0 is y = 1.
