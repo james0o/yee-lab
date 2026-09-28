@@ -30,5 +30,37 @@ def metadata(kind: str, **values: Any) -> str:
     return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
 
-def read_metadata(archive: np.lib.npyio.NpzFile) -> dict[str, Any]:
-    return json.loads(str(archive["metadata"]))
+def save_node_probabilities(
+    path: Path,
+    expected: str,
+    rankings: np.ndarray,
+    node_probabilities: np.ndarray,
+    medians: np.ndarray,
+    candidates: np.ndarray,
+    **extra: np.ndarray,
+) -> None:
+    """Save probabilities at the node medians; `expected` is from metadata(...)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        path,
+        rankings=rankings,
+        node_probabilities=node_probabilities,
+        medians=medians,
+        candidates=candidates,
+        metadata=np.array(expected),
+        **extra,
+    )
+
+
+def load_node_probabilities(
+    path: Path, expected: str, candidates: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """(rankings, node_probabilities, medians) saved by save_node_probabilities,
+    or None if the file is missing or was saved with other settings."""
+    if not path.exists():
+        return None
+    with np.load(path) as archive:
+        if json.loads(str(archive["metadata"])) != json.loads(expected) or \
+                not np.array_equal(archive["candidates"], candidates):
+            return None
+        return archive["rankings"], archive["node_probabilities"], archive["medians"]

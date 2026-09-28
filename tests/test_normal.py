@@ -16,7 +16,7 @@ from scipy.special import ndtr
 from scipy.stats import norm
 
 from const import CANDIDATES
-from methods import CYCLE, condorcet_cycle, ideal, schulze
+from methods import CYCLE, condorcet_cycle, schulze, voronoi
 from normal import (
     BOX,
     NODES,
@@ -90,7 +90,7 @@ def test_condorcet_methods_draw_voronoi(profile):
     centres = _pixel_centres(MEDIANS)
     distance = np.sort(np.linalg.norm(centres[..., None, :] - CANDIDATES, axis=-1), axis=-1)
     clear = distance[..., 1] - distance[..., 0] > 1e-9
-    nearest = ideal(rankings, probs)
+    nearest = voronoi(CANDIDATES, PIXELS)
     np.testing.assert_array_equal(schulze(rankings, probs)[clear], nearest[clear])
     winners = condorcet_cycle(rankings, probs)
     assert not (winners[clear] == CYCLE).any()

@@ -56,6 +56,7 @@
 
     let candidates = [];  // [[x, y], ...] in the unit square, y pointing up
     let maxCandidates = 0;
+    let pixels = 0;       // the backend's diagram is pixels x pixels
     let method = null;    // name of the selected method
     let distribution = null;  // name of the selected voter distribution
     let spread = null;    // name of the selected Beta spread rule
@@ -115,16 +116,20 @@
           body: JSON.stringify({ candidates, method, distribution, spread }),
         });
         if (!response.ok) throw new Error(await response.text());
-        const { pixels, winners } = await response.json();
+        // one byte per pixel, rows top to bottom
+        const winners = new Uint8Array(await response.arrayBuffer());
+        if (winners.length !== pixels * pixels) throw new Error(`expected ${pixels}² pixels, got ${winners.length}`);
         const image = new ImageData(pixels, pixels);
-        // winner -1 means a Condorcet cycle, drawn black
+        // winner 255 means a Condorcet cycle, drawn black
         winners.forEach((winner, k) => image.data.set([...(RGB[winner] ?? [0, 0, 0]), 255], 4 * k));
         const bitmap = await createImageBitmap(image);
         if (id !== requestId) return;  // candidates changed meanwhile, a newer answer is coming
         diagram = bitmap;
         draw();
         const tail = ` · ${candidates.length} candidates · ${Math.round(performance.now() - start)} ms`;
-        if (distribution === "beta") {
+        if (method === "voronoi") {  // nearest candidate, no voters involved
+          message.textContent = `voronoi${tail}`;
+        } else if (distribution === "beta") {
           const formula = document.createElement("span");
           typeset(formula, spreadInfo[spread]);
           message.replaceChildren(`${method} · beta voters, `, formula, tail);
@@ -212,6 +217,7 @@
     const config = await (await fetch("/api/config")).json();
     candidates = config.candidates;
     maxCandidates = config.max_candidates;
+    pixels = config.pixels;
     spreadInfo = Object.fromEntries(config.spreads.map(info => [info.name, info]));
     choices(distributions, named(config.distributions), name => { distribution = name; updateSpreads(); });
     choices(spreads, config.spreads, name => spread = name);

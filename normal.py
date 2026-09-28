@@ -14,7 +14,7 @@ symmetric about m, so every line through m has half of the voters on each side.
 A voter prefers c_i to c_j on c_i's side of their bisector, so a majority prefers
 c_i to c_j exactly when m is closer to c_i. The pairwise majorities rank the
 candidates by distance from m: there is never a Condorcet cycle and the
-Condorcet winner is the candidate nearest to m (methods.ideal), for any sigma.
+Condorcet winner is the candidate nearest to m (methods.voronoi), for any sigma.
 The Beta median halves the voters only along lines parallel to the axes, so
 there the majorities between candidates on a diagonal differ from the distance.
 
@@ -34,14 +34,20 @@ where the wedge {0 < y < (t / d) x} holds arctan(t / d) / (2 pi) of the voters
 and Owen's T function T(h, a) is the part of it beyond x = h (in units of sigma).
 """
 
-import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 from scipy.special import owens_t
 
-from cache import DEFAULT_CACHE_ROOT, candidate_hash, metadata, read_metadata, value_token
+from cache import (
+    DEFAULT_CACHE_ROOT,
+    candidate_hash,
+    load_node_probabilities,
+    metadata,
+    save_node_probabilities,
+    value_token,
+)
 from const import CANDIDATES, DEVIATION, PIXELS
 from ranking_cells import (
     NODES,
@@ -129,11 +135,12 @@ def compute_ranking_probabilities(candidates, medians, deviation=DEVIATION, prog
     return rankings, np.clip(probs, 0.0, 1.0)
 
 
-def ranking_probabilities(candidates, pixels=PIXELS, deviation=DEVIATION, nodes=NODES):
+def ranking_probabilities(candidates, pixels=PIXELS, deviation=DEVIATION, nodes=NODES,
+                          progress=None):
     """(rankings, probabilities (pixels, pixels, R)) computed at the node medians
     and interpolated, without the cache."""
     medians = node_medians(pixels, nodes)
-    rankings, probs = compute_ranking_probabilities(candidates, medians, deviation)
+    rankings, probs = compute_ranking_probabilities(candidates, medians, deviation, progress)
     return rankings, interpolate_to_pixels(probs, medians, pixels)
 
 # ---------------------------------------------------------------- Cache
@@ -165,17 +172,13 @@ def read_cached_ranking_probabilities(
     """(rankings, probabilities) from the cache, or None if not cached."""
     candidates = np.asarray(candidates, dtype=np.float64)
     path = rankings_path(pixels, deviation, candidates, nodes, cache_root)
-    if not path.exists():
+    saved = load_node_probabilities(
+        path, _rankings_metadata(pixels, deviation, candidates, nodes), candidates
+    )
+    if saved is None:
         return None
-    expected = _rankings_metadata(pixels, deviation, candidates, nodes)
-    with np.load(path) as archive:
-        if read_metadata(archive) == json.loads(expected) and \
-                np.array_equal(archive["candidates"], candidates):
-            probs = interpolate_to_pixels(
-                archive["node_probabilities"], archive["medians"], pixels
-            )
-            return archive["rankings"], probs
-    return None
+    rankings, probs, medians = saved
+    return rankings, interpolate_to_pixels(probs, medians, pixels)
 
 
 def generate_ranking_probabilities(
@@ -191,13 +194,8 @@ def generate_ranking_probabilities(
     medians = node_medians(pixels, nodes)
     rankings, probs = compute_ranking_probabilities(candidates, medians, deviation, progress)
     path = rankings_path(pixels, deviation, candidates, nodes, cache_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(
-        path,
-        rankings=rankings,
-        node_probabilities=probs,
-        medians=medians,
-        candidates=candidates,
-        metadata=np.array(_rankings_metadata(pixels, deviation, candidates, nodes)),
+    save_node_probabilities(
+        path, _rankings_metadata(pixels, deviation, candidates, nodes),
+        rankings, probs, medians, candidates,
     )
     return rankings, interpolate_to_pixels(probs, medians, pixels)

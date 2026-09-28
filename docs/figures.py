@@ -21,7 +21,7 @@ from scipy.stats import beta as beta_dist
 import normal
 import ranking_cells
 from const import CANDIDATES
-from methods import CYCLE, condorcet_cycle, fptp, ideal, irv, schulze
+from methods import CYCLE, condorcet_cycle, fptp, irv, schulze, voronoi
 
 PIXELS = 300
 DEVIATION = 0.3
@@ -77,14 +77,14 @@ def compare(profiles):
     tie = _ties()
     for row, name in enumerate(profiles):
         rankings, probs = profiles[name]
-        voronoi = ideal(rankings, probs)
+        nearest = voronoi(CANDIDATES, PIXELS)
         for col, (label, method) in enumerate(methods):
             winners = method(rankings, probs)
             show(axes[row, col], winners, f"{name}: {label}")
         sch, cyc = schulze(rankings, probs), condorcet_cycle(rankings, probs)
-        print(f"{name}: schulze != Voronoi on {np.sum((sch != voronoi) & ~tie)} pixels, "
+        print(f"{name}: schulze != Voronoi on {np.sum((sch != nearest) & ~tie)} pixels, "
               f"cycles {np.sum((cyc == CYCLE) & ~tie)} (of {np.sum(~tie)} without ties); "
-              f"areas Voronoi {[round(np.mean(voronoi == c), 3) for c in range(5)]} "
+              f"areas Voronoi {[round(np.mean(nearest == c), 3) for c in range(5)]} "
               f"Schulze {[round(np.mean(sch == c), 3) for c in range(5)]}")
     fig.tight_layout()
     fig.savefig(FIGURES / "compare.png", dpi=150)
@@ -178,15 +178,13 @@ def spread_shapes():
 def spread_rules():
     """FPTP, IRV and Condorcet winner for each spread rule, default candidates (Chapter 3)."""
     fig, axes = plt.subplots(len(ranking_cells.SPREADS), 3, figsize=(10, 3.4 * len(ranking_cells.SPREADS)))
-    medians = ranking_cells.node_medians(PIXELS)
     tie = _ties()
     for row, spread in enumerate(ranking_cells.SPREADS):
-        rankings, probs = ranking_cells.compute_ranking_probabilities(
-            CANDIDATES, ranking_cells.beta_params_at(medians, DEVIATION, spread))
-        probs = ranking_cells.interpolate_to_pixels(probs, medians, PIXELS)
-        voronoi, cyc, sch = ideal(rankings, probs), condorcet_cycle(rankings, probs), schulze(rankings, probs)
+        rankings, probs = ranking_cells.ranking_probabilities(
+            CANDIDATES, PIXELS, DEVIATION, spread=spread)
+        nearest, cyc, sch = voronoi(CANDIDATES, PIXELS), condorcet_cycle(rankings, probs), schulze(rankings, probs)
         print(f"{spread}: cycles {np.mean((cyc == CYCLE) & ~tie):.2%}, "
-              f"Schulze != Voronoi {np.mean((sch != voronoi) & ~tie):.2%}")
+              f"Schulze != Voronoi {np.mean((sch != nearest) & ~tie):.2%}")
         for col, (label, winners) in enumerate([("FPTP", fptp(rankings, probs)), ("IRV", irv(rankings, probs)),
                                                 ("Condorcet winner", cyc)]):
             show(axes[row, col], winners, f"{spread}: {label}")
@@ -220,7 +218,7 @@ SEVEN_PALETTE = ["#4e79a7", "#76b7b2", "#e15759", "#b07aa1", "#59a14f", "#edc948
 
 
 def voronoi_lines(ax, candidates, **style):
-    """Borders of the Voronoi cells (the `ideal` diagram), drawn as contours."""
+    """Borders of the Voronoi cells (methods.voronoi), drawn as contours."""
     t = np.linspace(0, 1, 800)
     x, y = np.meshgrid(t, t, indexing="ij")
     nearest = np.linalg.norm(np.stack([x, y], -1)[..., None, :] - candidates, axis=-1).argmin(-1)
@@ -281,17 +279,10 @@ def seven_fptp():
               ("normal, d = 0.3", normal, 0.3), ("Beta, d = 0.3", ranking_cells, 0.3)]
     for ax, (title, model, deviation) in zip(axes, panels):
         if model is None:
-            m = ranking_cells.pixel_medians(pixels)
-            centres = np.stack(np.meshgrid(m, m, indexing="ij"), -1)
-            winners = np.linalg.norm(centres[..., None, :] - SEVEN, axis=-1).argmin(-1)
-        elif model is normal:
-            rankings, probs = normal.ranking_probabilities(SEVEN, pixels, deviation)
-            winners = fptp(rankings, probs)
+            winners = voronoi(SEVEN, pixels)
         else:
-            medians = ranking_cells.node_medians(pixels)
-            rankings, probs = ranking_cells.compute_ranking_probabilities(
-                SEVEN, ranking_cells.beta_params_at(medians, deviation))
-            winners = fptp(rankings, ranking_cells.interpolate_to_pixels(probs, medians, pixels))
+            rankings, probs = model.ranking_probabilities(SEVEN, pixels, deviation)
+            winners = fptp(rankings, probs)
         ax.imshow(winners.T, cmap=ListedColormap(SEVEN_PALETTE), vmin=0, vmax=6, origin="lower",
                   extent=(0, 1, 0, 1), interpolation="nearest")
         voronoi_lines(ax, SEVEN, colors="k", linewidths=0.6, linestyles="--")

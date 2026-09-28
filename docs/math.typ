@@ -647,7 +647,7 @@ is, if and only if $|m - c_i| < |m - c_j|$. Consequently:
   $m$. It is transitive: *there are no Condorcet cycles.*
 + The Condorcet winner always exists and is the candidate nearest to $m$, so *every*
   Condorcet method (Schulze, River, Ranked Pairs, Minimax, …) draws exactly the Voronoi
-  diagram of the candidates, `methods.ideal`.
+  diagram of the candidates, `methods.voronoi`.
 + This holds *for every $sigma$*. The only property used is that every line through $m$
   has half of the voters on each side, which is true for every distribution that is
   centrally symmetric about $m$.

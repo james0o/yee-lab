@@ -4,25 +4,20 @@ Every method takes
     rankings: (R, C) candidate indices from best to worst, one row per ballot type
     probs:    (pixels, pixels, R) share of voters with each ballot type
 and returns the winner per pixel, shape (pixels, pixels).
+
+voronoi() is the reference diagram, not a method: it needs no voters at all.
 """
 
 import numpy as np
 from scipy.spatial.distance import cdist
 
-from const import CANDIDATES
 
-
-def ideal(
-    rankings: np.ndarray, probs: np.ndarray, candidates: np.ndarray = CANDIDATES
-) -> np.ndarray:
-    """Reference diagram: the median voter [x, y] of each pixel votes alone for
-    the nearest candidate. The median of pixel (i, j) is its centre
-    ((i + 1/2) / pixels, (j + 1/2) / pixels) by construction of the Beta parameters
-    (and the mean of the normal distribution, where every Condorcet method gives this).
-    """
-    pixels = probs.shape[0]
-    medians = (np.arange(pixels) + 0.5) / pixels
-    points = np.stack(np.meshgrid(medians, medians, indexing="ij"), axis=-1)
+def voronoi(candidates: np.ndarray, pixels: int) -> np.ndarray:
+    """Nearest candidate to each pixel centre ((i + 1/2) / pixels, (j + 1/2) / pixels),
+    the median (Beta) or mean (normal) of that pixel's voters. Every Condorcet method
+    draws this diagram for normal voters. Same shape as the methods' winners."""
+    centres = (np.arange(pixels) + 0.5) / pixels
+    points = np.stack(np.meshgrid(centres, centres, indexing="ij"), axis=-1)
     nearest = cdist(points.reshape(-1, 2), candidates).argmin(axis=1)
     return nearest.reshape(pixels, pixels)
 
@@ -114,7 +109,6 @@ def condorcet_cycle(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
 
 
 METHODS = {
-    "ideal": ideal,
     "fptp": fptp,
     "irv": irv,
     "borda": borda,

@@ -1,6 +1,6 @@
 import time
+from functools import partial
 from pathlib import Path
-from typing import Literal
 
 import matplotlib
 matplotlib.use("Agg")
@@ -20,15 +20,14 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-import normal
-import ranking_cells
-from const import CANDIDATES, DEVIATION, PIXELS
-from methods import CYCLE, METHODS
+from const import CANDIDATES, DEVIATION
+from distributions import Distribution, model
+from methods import CYCLE, METHODS, voronoi
 from ranking_cells import NODES, SPREAD, Spread, effective_nodes
 
+PIXELS = 400  # per axis, default of --pixels
 PLOTS = Path("plots")
-# modules with the same read_cached_ / generate_ranking_probabilities functions
-DISTRIBUTIONS = {"beta": ranking_cells, "normal": normal}
+DIAGRAMS = ["voronoi", *METHODS]  # voronoi needs no voters, so it has no model folder
 console = Console()
 app = typer.Typer(
     add_completion=False,
@@ -72,7 +71,7 @@ def plot_yee_diagram(
     return path
 
 
-def _generate_with_progress(model, pixels: int, deviation: float, nodes: int, **options):
+def _generate_with_progress(module, pixels: int, deviation: float, nodes: int, **options):
     with Progress(
         SpinnerColumn(),
         TextColumn("[bold]{task.description}"),
@@ -91,7 +90,7 @@ def _generate_with_progress(model, pixels: int, deviation: float, nodes: int, **
         def update(done: int, total: int) -> None:
             progress.update(task, completed=done, total=total)
 
-        return model.generate_ranking_probabilities(
+        return module.generate_ranking_probabilities(
             CANDIDATES, pixels, deviation, nodes, progress=update, **options
         )
 
@@ -106,7 +105,7 @@ def main(
         help="Mean absolute deviation from the median at the centre pixel "
         "(everywhere for normal voters and for --spread mean_abs).",
     ),
-    distribution: Literal["beta", "normal"] = typer.Option(
+    distribution: Distribution = typer.Option(
         "beta", help="Voter distribution around each pixel."
     ),
     spread: Spread = typer.Option(
@@ -123,10 +122,10 @@ def main(
         "and then interpolated to the pixels; 0 = exact at every pixel.",
     ),
     methods: list[str] = typer.Option(
-        list(METHODS),
+        DIAGRAMS,
         "--method",
         "-m",
-        help=f"Method to run, repeatable. Available: {', '.join(METHODS)}.",
+        help=f"Method to run, repeatable. Available: {', '.join(DIAGRAMS)}.",
     ),
     plot: bool = typer.Option(True, help="Save a Yee diagram for each method."),
     regenerate: bool = typer.Option(
@@ -134,10 +133,10 @@ def main(
     ),
 ) -> None:
     """Compute Yee diagrams with Beta or normally distributed voters."""
-    unknown = [name for name in methods if name not in METHODS]
+    unknown = [name for name in methods if name not in DIAGRAMS]
     if unknown:
         raise typer.BadParameter(
-            f"unknown method(s) {', '.join(unknown)}; choose from {', '.join(METHODS)}",
+            f"unknown method(s) {', '.join(unknown)}; choose from {', '.join(DIAGRAMS)}",
             param_hint="--method",
         )
     try:
@@ -145,39 +144,44 @@ def main(
     except ValueError as error:
         raise typer.BadParameter(str(error), param_hint="--nodes") from error
 
-    model = DISTRIBUTIONS[distribution]
-    options = {"spread": spread} if distribution == "beta" else {}
-    label = f"beta_{spread}" if distribution == "beta" else distribution
-    # plots/normal/<method>.png, plots/beta/<spread>/<method>.png
-    folder = PLOTS / "beta" / spread if distribution == "beta" else PLOTS / "normal"
-    start = time.perf_counter()
-    profile = None
-    if not regenerate:
-        profile = model.read_cached_ranking_probabilities(
-            CANDIDATES, pixels, deviation, nodes, **options
-        )
-    step = "load"
-    if profile is None:
-        profile = _generate_with_progress(model, pixels, deviation, nodes, **options)
-        step = "generate"
-    rankings, probs = profile
-    console.print(f"[bold]{step:<9}[/bold] {time.perf_counter() - start:.4f} s")
-
-    for name in methods:
+    def run(name, compute, title, path):
         with console.status(f"{name}..."):
             start = time.perf_counter()
-            winners = METHODS[name](rankings, probs)
+            winners = compute()
             computed = time.perf_counter()
             if plot:
-                plot_yee_diagram(
-                    winners, CANDIDATES, f"{name}_{label}", folder / f"{name}.png"
-                )
+                plot_yee_diagram(winners, CANDIDATES, title, path)
             plotted = time.perf_counter()
         line = f"[bold cyan]{name:<9}[/bold cyan] {computed - start:.4f} s"
         if plot:
             line += f"  [dim](plot {plotted - computed:.4f} s)[/dim]"
         console.print(line)
 
+    if "voronoi" in methods:
+        run("voronoi", partial(voronoi, CANDIDATES, pixels), "voronoi", PLOTS / "voronoi.png")
+    voting = [name for name in methods if name != "voronoi"]
+    if not voting:
+        return
+
+    module, options = model(distribution, spread)
+    label = f"beta_{spread}" if distribution == "beta" else distribution
+    # plots/normal/<method>.png, plots/beta/<spread>/<method>.png
+    folder = PLOTS / "beta" / spread if distribution == "beta" else PLOTS / "normal"
+    start = time.perf_counter()
+    profile = None
+    if not regenerate:
+        profile = module.read_cached_ranking_probabilities(
+            CANDIDATES, pixels, deviation, nodes, **options
+        )
+    step = "load"
+    if profile is None:
+        profile = _generate_with_progress(module, pixels, deviation, nodes, **options)
+        step = "generate"
+    rankings, probs = profile
+    console.print(f"[bold]{step:<9}[/bold] {time.perf_counter() - start:.4f} s")
+
+    for name in voting:
+        run(name, partial(METHODS[name], rankings, probs), f"{name}_{label}", folder / f"{name}.png")
 
 if __name__ == "__main__":
     app()

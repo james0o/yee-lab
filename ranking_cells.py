@@ -36,9 +36,9 @@ the pixels (barycentric formula). The points cluster towards 0 and 1, where the
 Beta parameters change fastest; the error decreases exponentially with NODES.
 """
 
-import json
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal, get_args
 
@@ -46,7 +46,14 @@ import numpy as np
 from scipy.optimize import brentq, root
 from scipy.special import betainc, betaincinv, betaln, expit, logit
 
-from cache import DEFAULT_CACHE_ROOT, candidate_hash, metadata, read_metadata, value_token
+from cache import (
+    DEFAULT_CACHE_ROOT,
+    candidate_hash,
+    load_node_probabilities,
+    metadata,
+    save_node_probabilities,
+    value_token,
+)
 from const import CANDIDATES, DEVIATION, PIXELS
 
 QUAD_NODES = 24
@@ -412,6 +419,26 @@ def compute_ranking_probabilities(candidates, params, quad_nodes=QUAD_NODES, pro
     return rankings, np.clip(probs, 0.0, 1.0)
 
 
+@lru_cache(maxsize=None)
+def node_params(pixels, nodes=NODES, deviation=DEVIATION, spread=SPREAD):
+    """(node medians, Beta parameters at them), read-only. Kept in memory: they
+    depend only on the grid and the spread rule, never on the candidates."""
+    medians = node_medians(pixels, nodes)
+    params = beta_params_at(medians, deviation, spread)
+    medians.setflags(write=False)
+    params.setflags(write=False)
+    return medians, params
+
+
+def ranking_probabilities(candidates, pixels=PIXELS, deviation=DEVIATION, nodes=NODES,
+                          spread=SPREAD, quad_nodes=QUAD_NODES, progress=None):
+    """(rankings, probabilities (pixels, pixels, R)) computed at the node medians
+    and interpolated, without the cache."""
+    medians, params = node_params(pixels, nodes, deviation, spread)
+    rankings, probs = compute_ranking_probabilities(candidates, params, quad_nodes, progress)
+    return rankings, interpolate_to_pixels(probs, medians, pixels)
+
+
 def rankings_path(pixels, deviation, spread, candidates, quad_nodes, nodes,
                   cache_root=DEFAULT_CACHE_ROOT):
     name = (f"P{pixels}_D{value_token(deviation)}_Q{quad_nodes}_N{effective_nodes(pixels, nodes)}"
@@ -444,17 +471,12 @@ def read_cached_ranking_probabilities(
     """(rankings, probabilities) from the cache, or None if not cached."""
     candidates = np.asarray(candidates, dtype=np.float64)
     path = rankings_path(pixels, deviation, spread, candidates, quad_nodes, nodes, cache_root)
-    if not path.exists():
-        return None
     expected = _rankings_metadata(pixels, deviation, spread, candidates, quad_nodes, nodes)
-    with np.load(path) as archive:
-        if read_metadata(archive) == json.loads(expected) and \
-                np.array_equal(archive["candidates"], candidates):
-            probs = interpolate_to_pixels(
-                archive["node_probabilities"], archive["medians"], pixels
-            )
-            return archive["rankings"], probs
-    return None
+    saved = load_node_probabilities(path, expected, candidates)
+    if saved is None:
+        return None
+    rankings, probs, medians = saved
+    return rankings, interpolate_to_pixels(probs, medians, pixels)
 
 
 def load_ranking_probabilities(
@@ -500,21 +522,11 @@ def generate_ranking_probabilities(
     candidates = np.asarray(candidates, dtype=np.float64)
     path = rankings_path(pixels, deviation, spread, candidates, quad_nodes, nodes, cache_root)
     expected = _rankings_metadata(pixels, deviation, spread, candidates, quad_nodes, nodes)
-    medians = node_medians(pixels, nodes)
-    params = beta_params_at(medians, deviation, spread)
+    medians, params = node_params(pixels, nodes, deviation, spread)
     rankings, probs = compute_ranking_probabilities(
         candidates, params, quad_nodes, progress
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(
-        path,
-        rankings=rankings,
-        node_probabilities=probs,
-        medians=medians,
-        params=params,
-        candidates=candidates,
-        metadata=np.array(expected),
-    )
+    save_node_probabilities(path, expected, rankings, probs, medians, candidates, params=params)
     return rankings, interpolate_to_pixels(probs, medians, pixels)
 
 # ---------------------------------------------------------------- Validation
