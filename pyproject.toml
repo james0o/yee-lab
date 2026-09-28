@@ -1,7 +1,7 @@
 [project]
-name = "el"
+name = "yee-lab"
 version = "0.3.0"
-description = "Add your description here"
+description = "Yee diagrams for comparing voting systems with Beta-distributed voters"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
