@@ -47,9 +47,9 @@ Ranking probabilities are cached in `cache/`, so a second run with the same sett
 uv run fastapi dev
 ```
 
-Then open http://127.0.0.1:8000. [main.py](main.py) serves the page in [ui/index.html](ui/index.html) and computes the diagrams.
+Then open http://127.0.0.1:8000. [main.py](main.py) serves the page in [ui/index.html](ui/index.html) and computes the diagrams. The diagram is drawn as curves, not pixels: the backend returns the region of every winner as polygons (`POST /api/regions`). It computes only the shares the method needs, caches everything a drag does not change, and traces each border as the zero set of the winner's margin. The details are in the last chapter of [docs/math.pdf](docs/math.pdf).
 
-- **Candidates:** drag one to move it, click empty space to add one (up to 8), right-click to remove one. The diagram is recomputed as you drag.
+- **Candidates:** drag one to move it, click empty space to add one (up to 8), right-click to remove one. The diagram follows the drag, typically within 10–40 ms. IRV is the exception: it needs every ranking cell, so it lags (about 0.1 s for 5 candidates, 0.8 s for 8).
 - **Method:** Voronoi (no voters, the reference), FPTP, IRV, Borda, Schulze or Condorcet cycle.
 - **Voters:** Beta, or normal for the original Yee model.
 - **Deviation:** $D$ from $0$ to $0.4$. At $0$ every voter sits at their pixel, so every method draws the Voronoi diagram.

@@ -44,8 +44,9 @@ from typing import Literal, get_args
 
 import numpy as np
 from scipy.optimize import brentq, root
-from scipy.special import betainc, betaincinv, betaln, expit, logit
+from scipy.special import betainc, betaln, expit, logit
 
+from beta_tables import ExactBeta
 from cache import (
     DEFAULT_CACHE_ROOT,
     candidate_hash,
@@ -234,22 +235,29 @@ def _interpolation_matrix(nodes, targets):
     return matrix
 
 
-def interpolate_to_pixels(probs, medians, pixels, transform=logit):
-    """Probabilities (pixels, pixels, R) from probabilities (N, N, R) at `medians`,
-    which are Chebyshev-Lobatto points in transform(median).
+def interpolate_to(probs, medians, targets, transform=logit):
+    """Values (T, T, ...) at the medians `targets` on both axes from values
+    (N, N, ...) at `medians`, which are Chebyshev-Lobatto points in transform(median).
 
     The result is float32: it is the largest array by far and only feeds the
     voting methods, where float32 halves memory and time. Its rounding (~1e-7)
     can only flip pixels whose winning margin is that small.
     """
-    targets = pixel_medians(pixels)
+    shape = probs.shape[2:]
     if np.array_equal(medians, targets):
         return probs.astype(np.float32)
     matrix = _interpolation_matrix(transform(medians), transform(targets))
+    probs = probs.reshape(len(medians), len(medians), -1)
     # columns[i, q, r] = sum_j matrix[q, j] probs[i, j, r]; small, so kept in float64
     columns = (matrix @ probs).reshape(len(medians), -1).astype(np.float32)
-    # one (pixels, N) @ (N, pixels * R) product for the large result
-    probs = (matrix.astype(np.float32) @ columns).reshape(pixels, pixels, -1)
+    # one (T, N) @ (N, T * R) product for the large result
+    return (matrix.astype(np.float32) @ columns).reshape(len(targets), len(targets), *shape)
+
+
+def interpolate_to_pixels(probs, medians, pixels, transform=logit):
+    """Probabilities (pixels, pixels, R) from probabilities (N, N, R) at `medians`
+    (see interpolate_to), clipped to [0, 1]."""
+    probs = interpolate_to(probs, medians, pixel_medians(pixels), transform)
     return np.clip(probs, 0.0, 1.0, out=probs)
 
 # ---------------------------------------------------------------- Arrangement
@@ -321,61 +329,69 @@ def _touches_x(p):
     return _on(p[0], 0.0) or _on(p[0], 1.0)
 
 
-def _edge_integral(s, e, a, b, nodes, weights):
+def _edge_integral(s, e, beta, nodes, weights):
     """Integral of omega = -f(x) G(y) dx over the segment s -> e.
 
-    Result has shape (pixels, pixels): [i, j] uses X-params of pixel i and
-    Y-params of pixel j.
+    beta: the CDF and quantile of the pixels' Beta distributions
+    (beta_tables.ExactBeta or TabulatedBeta). Result has shape (pixels, pixels):
+    [i, j] uses X-params of pixel i and Y-params of pixel j.
     """
     (xs, ys), (xe, ye) = s, e
-    pixels = len(a)
+    pixels = len(beta)
 
     if _on(xs, xe):  # vertical: dx = 0
         return np.zeros((pixels, pixels))
     if _on(ys, ye):  # horizontal: -G(y) (F(xe) - F(xs))
-        dF = betainc(a, b, xe) - betainc(a, b, xs)
-        return -np.outer(dF, betainc(a, b, ys))
+        dF = beta.cdf(xe) - beta.cdf(xs)
+        return -np.outer(dF, beta.cdf(ys))
 
     ts, te = _touches_x(s) or _touches_x(e), _touches_y(s) or _touches_y(e)
     corner = (_touches_x(s) and _touches_y(s)) or (_touches_x(e) and _touches_y(e))
     if ts and te and not corner:
         mid = 0.5 * (np.asarray(s) + np.asarray(e))
-        return (_edge_integral(s, mid, a, b, nodes, weights)
-                + _edge_integral(mid, e, a, b, nodes, weights))
+        return (_edge_integral(s, mid, beta, nodes, weights)
+                + _edge_integral(mid, e, beta, nodes, weights))
 
     half = 0.5 * (nodes + 1.0)
     if not te:
         # u = F_i(x): -int G_j(l(F_i^-1(u))) du
-        us, ue = betainc(a, b, xs), betainc(a, b, xe)
+        us, ue = beta.cdf(xs), beta.cdf(xe)
         u = us[:, None] + (ue - us)[:, None] * half
         w = 0.5 * (ue - us)[:, None] * weights
-        x = betaincinv(a[:, None], b[:, None], u)
+        x = beta.ppf(u)
         y = np.clip(ys + (x - xs) * (ye - ys) / (xe - xs), 0.0, 1.0)
-        G = betainc(a[None, None, :], b[None, None, :], y[:, :, None])
-        return -np.einsum("iq,iqj->ij", w, G, optimize=True)
+        G = beta.cdf(y)  # G[j, i, q] = G_j(y[i, q])
+        return -np.einsum("iq,jiq->ij", w, G, optimize=True)
 
     # v = G_j(y): int F_i(l^-1(G_j^-1(v))) dv, then omega = omega' - d(F G)
-    vs, ve = betainc(a, b, ys), betainc(a, b, ye)
+    vs, ve = beta.cdf(ys), beta.cdf(ye)
     v = vs[:, None] + (ve - vs)[:, None] * half
     w = 0.5 * (ve - vs)[:, None] * weights
-    y = betaincinv(a[:, None], b[:, None], v)
+    y = beta.ppf(v)
     x = np.clip(xs + (y - ys) * (xe - xs) / (ye - ys), 0.0, 1.0)
-    F = betainc(a[:, None, None], b[:, None, None], x[None, :, :])
+    F = beta.cdf(x)  # F[i, j, q] = F_i(x[j, q])
     omega_prime = np.einsum("jq,ijq->ij", w, F, optimize=True)
-    FG_end = np.outer(betainc(a, b, xe), ve)
-    FG_start = np.outer(betainc(a, b, xs), vs)
+    FG_end = np.outer(beta.cdf(xe), ve)
+    FG_start = np.outer(beta.cdf(xs), vs)
     return omega_prime - (FG_end - FG_start)
 
 # ---------------------------------------------------------------- Probabilities
 
-def compute_ranking_probabilities(candidates, params, quad_nodes=QUAD_NODES, progress=None):
+def compute_ranking_probabilities(candidates, params, quad_nodes=QUAD_NODES, progress=None,
+                                  edge_integral=None):
     """Returns (rankings (R, C), probabilities (pixels, pixels, R)).
 
     progress: optional callable(done, total), called after each edge integral.
+    edge_integral: optional callable(start, end) -> (pixels, pixels) replacing the
+    exact one, e.g. the cached, tabulated one of shares.py.
     """
     polygons, rankings = ranking_cells(candidates)
-    a, b = params[:, 0], params[:, 1]
-    nodes, weights = np.polynomial.legendre.leggauss(quad_nodes)
+    if edge_integral is None:
+        beta = ExactBeta(params)
+        nodes, weights = np.polynomial.legendre.leggauss(quad_nodes)
+
+        def edge_integral(start, end):
+            return _edge_integral(start, end, beta, nodes, weights)
 
     def key(p):
         return (round(float(p[0]), 9), round(float(p[1]), 9))
@@ -396,7 +412,7 @@ def compute_ranking_probabilities(candidates, params, quad_nodes=QUAD_NODES, pro
     lock = threading.Lock()
 
     def integrate(start, end, uses):
-        integral = _edge_integral(start, end, a, b, nodes, weights)
+        integral = edge_integral(start, end)
         with lock:
             for r, sign in uses:
                 probs[..., r] += sign * integral

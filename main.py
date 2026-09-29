@@ -4,22 +4,27 @@ Run `uv run fastapi dev` and open http://127.0.0.1:8000.
 The page itself is ui/index.html; this file only answers its requests.
 """
 
+import json
+import threading
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
-import numpy as np
 from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from distributions import DISTRIBUTIONS, Distribution, model
-from methods import CYCLE, METHODS, voronoi
+from distributions import DISTRIBUTIONS, Distribution
+from methods import METHODS
 from normal import sigma_from_deviation
-from ranking_cells import NODES, SPREAD, SPREADS, TAPER, Spread, beta_params
+from ranking_cells import SPREAD, SPREADS, TAPER, Spread, beta_params
+from regions import regions
+from shares import PIXELS, Model, beta_tables
 
-PIXELS = 300  # per axis; lower it if dragging feels slow
-MAX_CANDIDATES = 8  # probabilities take ~0.5 s for 5 candidates, ~4 s for 8
+# Most methods follow a drag within ~10-40 ms; IRV needs every ranking cell and takes
+# ~0.1 s for 5 candidates, ~0.8 s for 8 (see docs/math.typ).
+MAX_CANDIDATES = 8
 # The candidates the page starts with.
 CANDIDATES = [[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]]
 DEVIATION = 0.2  # default of the deviation slider
@@ -30,7 +35,10 @@ DIAGRAMS = ["voronoi", *METHODS]
 # is the default. At 0 every voter is at the pixel, so every method draws the Voronoi diagram.
 DEVIATIONS = [round(0.05 * k, 2) for k in range(9)]
 assert DEVIATION in DEVIATIONS
-CYCLE_BYTE = 255  # CYCLE (-1) in the uint8 response
+# Win regions are traced on a grid of this many points per axis: coarser while a
+# candidate is dragged, finer once it is dropped (see regions.py).
+DRAG_GRID = 160
+FINAL_GRID = 320
 
 Coordinate = Annotated[float, Field(ge=0, le=1)]
 # Each voter distribution along one axis, per pixel: plain label, LaTeX label (typeset
@@ -85,6 +93,7 @@ class DiagramRequest(BaseModel):
     distribution: Distribution = "beta"
     spread: Spread = SPREAD  # Beta only
     deviation: float = DEVIATION
+    grid: int = Field(FINAL_GRID, ge=32, le=512)
 
     @field_validator("deviation")
     @classmethod
@@ -94,26 +103,8 @@ class DiagramRequest(BaseModel):
         return deviation
 
 
-def _nodes(distribution: Distribution, deviation: float) -> int:
-    """Interpolation nodes per axis. Narrow Beta voters (deviation below 0.1) change
-    the probabilities faster than NODES follow: at 0.05 they would sum to up to 1.025."""
-    return 2 * NODES - 1 if distribution == "beta" and deviation < 0.1 else NODES
-
-
-@lru_cache(maxsize=8)
-def _ranking_probabilities(
-    candidates: tuple[tuple[float, float], ...],
-    distribution: Distribution,
-    spread: Spread | None,
-    deviation: float,
-):
-    """Kept in memory, not in cache/: nearly every dragged position is new.
-    The lru_cache makes switching methods or voter models without moving a
-    candidate instant. `spread` is None for normal voters."""
-    module, options = model(distribution, spread)
-    return module.ranking_probabilities(
-        np.array(candidates), PIXELS, deviation, _nodes(distribution, deviation), **options
-    )
+# Build the default voters' CDF tables (~0.2 s) before the first request needs them.
+threading.Thread(target=beta_tables, args=(Model("beta", DEVIATION, SPREAD),), daemon=True).start()
 
 
 @lru_cache(maxsize=1)
@@ -144,6 +135,8 @@ def config():
         "candidates": CANDIDATES,
         "max_candidates": MAX_CANDIDATES,
         "pixels": PIXELS,
+        "drag_grid": DRAG_GRID,
+        "final_grid": FINAL_GRID,
         "deviations": DEVIATIONS,
         "deviation": DEVIATION,
         # for the voter distribution plots of the hovered pixel
@@ -151,22 +144,21 @@ def config():
     }
 
 
-@app.post("/api/diagram")
-def diagram(request: DiagramRequest):
-    """Winner of every pixel, one byte each (CYCLE_BYTE for a Condorcet cycle),
-    in image order: rows top to bottom, PIXELS x PIXELS."""
-    if request.method == "voronoi" or request.deviation == 0:
-        winners = voronoi(np.array(request.candidates), PIXELS)
-    else:
+@app.post("/api/regions")
+def diagram_regions(request: DiagramRequest):
+    """Win region of every winner as polygons in the unit square (y up):
+    {"regions": [{"winner": c, "polygons": [[outer, hole, ...], ...]}], "ms": ...},
+    rings flat [x0, y0, x1, y1, ...], outer rings counter-clockwise and holes
+    clockwise. winner is -1 (methods.CYCLE) for a Condorcet cycle."""
+    start = time.perf_counter()
+    model = None  # deviation 0: every voter at their pixel, the Voronoi diagram
+    if request.deviation > 0:
         spread = request.spread if request.distribution == "beta" else None
-        rankings, probs = _ranking_probabilities(
-            tuple(request.candidates), request.distribution, spread, request.deviation
-        )
-        winners = METHODS[request.method](rankings, probs)
-    # winners[i, j] is pixel x = i, y = j; image rows go top to bottom, so row 0 is y = 1.
-    rows = winners.T[::-1]
-    rows = np.where(rows == CYCLE, CYCLE_BYTE, rows).astype(np.uint8)
-    return Response(rows.tobytes(), media_type="application/octet-stream")
+        model = Model(request.distribution, request.deviation, spread)
+    shapes = regions(request.method, request.candidates, model, request.grid)
+    payload = {"regions": shapes, "ms": round(1000 * (time.perf_counter() - start), 1)}
+    # json.dumps directly: FastAPI's encoder is slow on thousands of vertices
+    return Response(json.dumps(payload, separators=(",", ":")), media_type="application/json")
 
 
 # Last, so that /api/... is matched first; "/" serves ui/index.html.

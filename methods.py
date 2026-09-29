@@ -6,6 +6,14 @@ Every method takes
 and returns the winner per pixel, shape (pixels, pixels).
 
 voronoi() is the reference diagram, not a method: it needs no voters at all.
+
+The *_margin variants return (winner, margin) and take only the shares the method
+needs (shares.py): first-choice shares (..., C) or pairwise shares d (..., C, C),
+d[..., c, e] = share ranking c above e. The margin is >= 0, continuous in the
+shares, and 0 on every border between two winners: the winner is decided by
+comparing continuous functions of the shares, and the margin is the smallest gap
+in a comparison that could change it. (It may also be 0 where such a comparison
+ties but the winner stays.) regions.py draws the borders as its zero set.
 """
 
 import numpy as np
@@ -44,27 +52,55 @@ def _votes_by_state(
     return votes
 
 
+def _top_two(scores: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Highest score (winner) and its lead over the second."""
+    top = np.partition(scores, -2, axis=-1)
+    return scores.argmax(axis=-1), top[..., -1] - top[..., -2]
+
+
+def fptp_margin(first: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """First past the post on first-choice shares (..., C)."""
+    return _top_two(first)
+
+
 def fptp(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
     """First past the post."""
     first = np.eye(rankings.shape[1], dtype=probs.dtype)[rankings[:, 0]]
     return (probs @ first).argmax(axis=-1)
 
 
-def irv(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
+def irv_margin(rankings: np.ndarray, probs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Instant runoff: repeatedly eliminate the candidate with the fewest votes.
 
     Ballots are complete rankings, so a candidate with a majority is never
     eliminated; eliminating until one candidate remains gives the IRV winner.
+    The margin is the smallest gap between the two lowest tallies of any round:
+    the winner can change only where some elimination flips, and the gap is 0 on
+    both sides of such a flip.
     """
     n_candidates = rankings.shape[1]
     candidate_bits = 1 << np.arange(n_candidates)
     transfer = _transfer_matrices(rankings, probs.dtype)
     state = np.zeros(probs.shape[:2], dtype=np.int64)
+    margin = np.full(probs.shape[:2], np.inf, dtype=probs.dtype)
     for _ in range(n_candidates - 1):
         votes = _votes_by_state(probs, state, transfer)
         votes[(state[..., None] & candidate_bits) != 0] = np.inf
+        lowest = np.partition(votes, 1, axis=-1)
+        np.minimum(margin, lowest[..., 1] - lowest[..., 0], out=margin)
         state |= candidate_bits[votes.argmin(axis=-1)]
-    return ((state[..., None] & candidate_bits) == 0).argmax(axis=-1)
+    return ((state[..., None] & candidate_bits) == 0).argmax(axis=-1), margin
+
+
+def irv(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
+    """Instant runoff, see irv_margin."""
+    return irv_margin(rankings, probs)[0]
+
+
+def borda_margin(d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Borda count on pairwise shares: a ballot gives c one point per candidate
+    ranked below c, so c scores sum_e d[..., c, e]."""
+    return _top_two(d.sum(axis=-1))
 
 
 def borda(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
@@ -97,6 +133,57 @@ def schulze(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
 
 
 CYCLE = -1
+
+
+def condorcet_margin(d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Condorcet winner, or CYCLE where there is none (see condorcet_cycle).
+    worst[c] = min_e (d[c, e] - d[e, c]) is c's narrowest head-to-head result; c is
+    the Condorcet winner where it is positive. The margin |max_c worst[c]| is the
+    winner's narrowest win, or, in a cycle, how far every candidate is from beating
+    everyone."""
+    n = d.shape[-1]
+    lead = d - np.swapaxes(d, -1, -2)
+    worst = np.where(np.eye(n, dtype=bool), np.inf, lead).min(axis=-1)
+    best = worst.max(axis=-1)
+    return np.where(best > 0, worst.argmax(axis=-1), CYCLE), np.abs(best)
+
+
+def _schulze_paths(d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Schulze winner and margin from the widest paths (see schulze_margin)."""
+    n = d.shape[-1]
+    p = np.maximum(d - np.swapaxes(d, -1, -2), 0.0)
+    through = np.empty_like(p)
+    for k in range(n):  # in place: row and column k do not change in step k (p[k, k] = 0)
+        np.minimum(p[..., :, k, None], p[..., None, k, :], out=through)
+        np.maximum(p, through, out=p)
+    beaten = (p - np.swapaxes(p, -1, -2)).max(axis=-2)  # [..., e] = max_f p[f, e] - p[e, f]
+    winner = (beaten <= 0).argmax(axis=-1)
+    others = np.where(np.arange(n) == winner[..., None], np.inf, beaten)
+    return winner, np.maximum(others.min(axis=-1), 0.0)
+
+
+def schulze_margin(d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Schulze method on pairwise shares, with margins d - d^T as link strengths.
+    For complete rankings d + d^T = 1, so the margin 2 d - 1 orders the links like
+    the winning votes d of schulze() and the winners agree; unlike winning votes,
+    the path strengths are then continuous in d.
+
+    The winner w is the candidate that no one beats (p[e, w] <= p[w, e] for all e).
+    It changes only where another candidate becomes unbeaten, so the margin is how
+    far the others are from that: min over e != w of max_f (p[f, e] - p[e, f]).
+    (min_e p[w, e] - p[e, w] would not do: it can be 0 on a whole area, where two
+    widest paths share their weakest link.)
+
+    A Condorcet winner is the Schulze winner, so the widest paths are only computed
+    where there is none. Elsewhere the Condorcet margin stands in: it is positive,
+    at most the margin above (p[w, e] >= d[w, e] - d[e, w], p[e, w] = 0), and 0 on
+    the border of the Condorcet region, so it vanishes on the same borders.
+    """
+    winner, margin = condorcet_margin(d)
+    cycle = winner == CYCLE
+    if cycle.any():
+        winner[cycle], margin[cycle] = _schulze_paths(d[cycle])
+    return winner, margin
 
 
 def condorcet_cycle(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:

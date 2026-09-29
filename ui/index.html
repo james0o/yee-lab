@@ -56,7 +56,6 @@
     const COLORS = ["#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c", "#98df8a", "#d62728",
       "#ff9896", "#9467bd", "#c5b0d5", "#8c564b", "#c49c94", "#e377c2", "#f7b6d2", "#7f7f7f",
       "#c7c7c7", "#bcbd22", "#dbdb8d", "#17becf", "#9edae5"];
-    const RGB = COLORS.map(hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)));
     const RADIUS = 14;  // candidate dot, in canvas pixels
 
     const canvas = document.getElementById("square");
@@ -104,7 +103,7 @@
 
     let candidates = [];  // [[x, y], ...] in the unit square, y pointing up
     let maxCandidates = 0;
-    let pixels = 0;       // the backend's diagram is pixels x pixels
+    let pixels = 0;       // voters of pixel k (of pixels per axis) have median (k + 1/2) / pixels
     let method = null;    // name of the selected method
     let distribution = null;  // name of the selected voter distribution
     let spread = null;    // name of the selected Beta spread rule
@@ -114,9 +113,11 @@
                           // beta_params is spread name -> [a, b] along one axis, per pixel
     let hovered = [0.5, 0.5];  // point whose pixel's voters are shown in the strip and the shade
     let showDensity = false;   // their 2D density over the square, while hovering it
-    let diagram = null;   // last computed diagram as an image, or null
+    let regions = null;   // last computed win regions [{winner, path}], path a Path2D in the unit square
     let dragged = -1;     // index of the candidate being dragged
-    let requestId = 0;    // answers to older requests are ignored
+    let dragGrid = 0, finalGrid = 0;  // grid the backend traces regions on: while dragging, after
+    let inFlight = false; // a request is on its way; at most one is, so a drag never queues up
+    let queued = null;    // grid of the request to send once it is back (with the latest candidates)
 
     // Unit square has y up, the canvas has y down.
     const clamp = v => Math.min(1, Math.max(0, v));
@@ -136,9 +137,18 @@
 
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (diagram) {
-        ctx.imageSmoothingEnabled = false;  // sharp pixel borders, like interpolation="nearest"
-        ctx.drawImage(diagram, 0, 0, canvas.width, canvas.height);
+      if (regions) {
+        ctx.save();
+        ctx.setTransform(canvas.width, 0, 0, -canvas.height, 0, canvas.height);  // unit square, y up
+        // A stroke in the fill colour covers the faint seams antialiasing leaves between neighbours.
+        ctx.lineWidth = 1.5 / canvas.width;
+        ctx.lineJoin = "round";
+        for (const { winner, path } of regions) {
+          ctx.fillStyle = ctx.strokeStyle = COLORS[winner] ?? "#000";  // winner -1: Condorcet cycle
+          ctx.fill(path, "evenodd");  // holes are further rings; even-odd ignores their orientation
+          ctx.stroke(path);
+        }
+        ctx.restore();
       }
       densityCanvas.style.visibility = showDensity ? "visible" : "hidden";  // the part around the square
       if (showDensity) {  // the part of the voter density inside the square
@@ -312,47 +322,82 @@
     }
     new ResizeObserver(layout).observe(joint);
 
-    // Ask the backend for the winner of every pixel and turn it into an image.
-    async function compute() {
-      const id = ++requestId;
+    // Win regions as a Path2D: every ring of every polygon, [x0, y0, x1, y1, ...] in the unit square.
+    function toPath(polygons) {
+      const path = new Path2D();
+      for (const rings of polygons) {
+        for (const ring of rings) {
+          path.moveTo(ring[0], ring[1]);
+          for (let k = 2; k < ring.length; k += 2) path.lineTo(ring[k], ring[k + 1]);
+          path.closePath();
+        }
+      }
+      return path;
+    }
+
+    // What an answer depends on besides the candidates' positions. An answer to other settings
+    // (or to a candidate added or removed since, whose colours shifted) is not drawn.
+    const settings = () => JSON.stringify([method, distribution, spread, deviation, candidates.length]);
+
+    // Ask the backend for the win regions, traced on `grid` points per axis. While an answer is
+    // on its way, only remember that another is needed: it is asked for as soon as the answer is
+    // back, with the candidates as they are then, so a drag shows the newest positions it can.
+    function compute(grid = finalGrid) {
       if (!method) return;
       if (candidates.length < 2) {
         message.textContent = "Add at least 2 candidates.";
         return;
       }
-      message.textContent = `Computing ${method}…`;
+      if (inFlight) {
+        queued = grid;
+        return;
+      }
+      request(grid);
+    }
+
+    async function request(grid) {
+      inFlight = true;
+      const asked = settings();
+      if (grid === finalGrid) message.textContent = `Computing ${method}…`;
       const start = performance.now();
       try {
-        const response = await fetch("/api/diagram", {
+        const response = await fetch("/api/regions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ candidates, method, distribution, spread, deviation }),
+          body: JSON.stringify({ candidates, method, distribution, spread, deviation, grid }),
         });
         if (!response.ok) throw new Error(await response.text());
-        // one byte per pixel, rows top to bottom
-        const winners = new Uint8Array(await response.arrayBuffer());
-        if (winners.length !== pixels * pixels) throw new Error(`expected ${pixels}² pixels, got ${winners.length}`);
-        const image = new ImageData(pixels, pixels);
-        // winner 255 means a Condorcet cycle, drawn black
-        winners.forEach((winner, k) => image.data.set([...(RGB[winner] ?? [0, 0, 0]), 255], 4 * k));
-        const bitmap = await createImageBitmap(image);
-        if (id !== requestId) return;  // candidates changed meanwhile, a newer answer is coming
-        diagram = bitmap;
-        draw();
-        const tail = ` · ${candidates.length} candidates · ${Math.round(performance.now() - start)} ms`;
-        if (method === "voronoi") {  // nearest candidate, no voters involved
-          message.textContent = `voronoi${tail}`;
-        } else if (deviation === 0) {
-          message.textContent = `${method} · deviation 0: every voter at their pixel, so voronoi${tail}`;
-        } else if (distribution === "beta") {
-          const formula = document.createElement("span");
-          typeset(formula, spreadInfo[spread]);
-          message.replaceChildren(`${method} · beta voters, deviation ${deviation}, `, formula, tail);
-        } else {
-          message.textContent = `${method} · ${distribution} voters, deviation ${deviation}${tail}`;
+        const answer = await response.json();
+        if (asked === settings()) {
+          regions = answer.regions.map(({ winner, polygons }) => ({ winner, path: toPath(polygons) }));
+          draw();
+          describe(Math.round(performance.now() - start), Math.round(answer.ms));
         }
       } catch (error) {
-        if (id === requestId) message.textContent = `Error: ${error.message}`;
+        if (asked === settings()) message.textContent = `Error: ${error.message}`;
+      } finally {
+        inFlight = false;
+        if (queued !== null) {
+          const next = queued;
+          queued = null;
+          compute(next);
+        }
+      }
+    }
+
+    // What the diagram shows, and how long it took (round trip, and computing it on the backend).
+    function describe(total, server) {
+      const tail = ` · ${candidates.length} candidates · ${total} ms (${server} ms computing)`;
+      if (method === "voronoi") {  // nearest candidate, no voters involved
+        message.textContent = `voronoi${tail}`;
+      } else if (deviation === 0) {
+        message.textContent = `${method} · deviation 0: every voter at their pixel, so voronoi${tail}`;
+      } else if (distribution === "beta") {
+        const formula = document.createElement("span");
+        typeset(formula, spreadInfo[spread]);
+        message.replaceChildren(`${method} · beta voters, deviation ${deviation}, `, formula, tail);
+      } else {
+        message.textContent = `${method} · ${distribution} voters, deviation ${deviation}${tail}`;
       }
     }
 
@@ -375,7 +420,10 @@
 
     canvas.addEventListener("pointermove", event => {
       hovered = toUnit(event);
-      if (dragged !== -1) candidates[dragged] = hovered;
+      if (dragged !== -1) {
+        candidates[dragged] = hovered;
+        compute(dragGrid);  // follow the drag on a coarser grid; the drop asks for the fine one
+      }
       showDensity = dragged === -1;  // not while dragging, so the diagram stays visible
       drawVoters();
     });
@@ -398,7 +446,7 @@
       const i = candidateAt(toUnit(event));
       if (i === -1) return;
       candidates.splice(i, 1);
-      diagram = null;  // colours follow the index, which just shifted
+      regions = null;  // colours follow the index, which just shifted
       draw();
       compute();
     });
@@ -440,6 +488,8 @@
     candidates = config.candidates;
     maxCandidates = config.max_candidates;
     pixels = config.pixels;
+    dragGrid = config.drag_grid;
+    finalGrid = config.final_grid;
     spreadInfo = Object.fromEntries(config.spreads.map(info => [info.name, info]));
     voters = Object.fromEntries(config.voters.map(({ deviation, ...rest }) => [deviation, rest]));
     choices(distributions, config.distributions, name => { distribution = name; updateSpreads(); drawVoters(); });

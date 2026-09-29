@@ -32,7 +32,8 @@ candidates is computed exactly for every pixel, and @ch-methods how the voting m
 turn these shares into winners. @ch-compare explains why Beta and normal voters give
 different diagrams. @ch-spread compares the spread rules and explains why `rms` is the
 default. @ch-shapes asks when a candidate's region is convex or in one piece, and how
-that relates to the monotonicity of the method.
+that relates to the monotonicity of the method. @ch-realtime shows how the web UI draws
+the regions as curves fast enough to follow a dragged candidate.
 
 The settings that appear in the mathematics, with their defaults:
 
@@ -43,13 +44,14 @@ The settings that appear in the mathematics, with their defaults:
   table.hline(),
   [quantity], [symbol], [set by], [default],
   table.hline(stroke: 0.5pt),
-  [pixels per axis], [$n$], [`--pixels` (`plot.py`), `PIXELS` (`main.py`)], [400 / 300],
+  [pixels per axis], [$n$], [`--pixels` (`plot.py`), `PIXELS` (`shares.py`)], [400 / 300],
   [deviation], [$D$], [`--deviation`, _Deviation_ slider], [0.2],
   [voter distribution], [], [`--distribution`, _Voters_], [Beta],
   [Beta spread rule], [], [`--spread`, _Beta spread fixed_], [`rms`],
   [interpolation nodes per axis], [$N$], [`--nodes` (`NODES`)], [49],
   [Gauss–Legendre points per edge], [$Q$], [`QUAD_NODES`], [24],
   [exponent of `tapered`], [$tau$], [`TAPER`], [0.2],
+  [contour grid per axis (UI)], [$G$], [`DRAG_GRID` / `FINAL_GRID` (`main.py`)], [160 / 320],
   table.hline(),
 ))
 
@@ -1596,3 +1598,215 @@ borders close together.
 - So neither the shape nor the connectedness of a region proves anything about
   monotonicity. What holds is weaker: in the random layouts only IRV split regions, and
   for candidates on a line FPTP can never split a region, while IRV does.
+
+#pagebreak()
+
+= Real-time diagrams in the web UI <ch-realtime>
+
+The web UI redraws the diagram while a candidate is dragged. @ch-compute computes the
+share of every ranking for every pixel, which is exact and serves every method, but
+takes too long for that:
+
+#align(center, table(
+  columns: 3,
+  align: (left, right, right),
+  stroke: none,
+  table.hline(),
+  [step ($D = 0.2$, `rms`, $49 times 49$ nodes)], [5 candidates], [8 candidates],
+  table.hline(stroke: 0.5pt),
+  [ranking shares at the nodes (`compute_ranking_probabilities`)], [333 ms], [2878 ms],
+  [bisector arrangement (`ranking_cells`)], [8 ms], [99 ms],
+  [interpolation to $300 times 300$ pixels], [12 ms], [88 ms],
+  [IRV / Schulze on the pixels], [61 / 64 ms], [703 / 358 ms],
+  table.hline(),
+))
+
+Almost all of the time goes to the shares at the $N times N$ nodes, which do not depend
+on the number of pixels at all. Drawing the diagram as curves instead of pixels
+(@sec-zero-sets) is the right output, but on its own it saves little. The speed comes
+from computing fewer integrals (@sec-needs), keeping those a drag does not change
+(@sec-edge-cache), and making each one cheaper (@sec-tables). This chapter describes
+`shares.py`, `beta_tables.py` and `regions.py`, which `main.py` uses for the UI.
+`plot.py`, `docs/figures.py` and the tests of @sec-validation still use the pipeline of
+@ch-compute.
+
+== What each method needs (`shares.py`) <sec-needs>
+
+The arrangement of all $C (C - 1) slash 2$ bisectors has $O(C^4)$ cells and edges: 43
+cells and 65 slanted edges for 5 candidates, 272 cells and 468 slanted edges for 8. Most
+methods need much less than the share of every cell.
+
+*Pairwise shares.* Schulze and the Condorcet winner only use $pi_(i j)$
+(@eq-pairwise). Borda does too: $C - 1 - "pos"_r (i)$ is the number of candidates below
+$c_i$ in ranking $r$, so
+
+$ "score"_i = sum_r P(r) (C - 1 - "pos"_r (i)) = sum_(j != i) pi_(i j) . $
+
+Each $pi_(i j)$ is the share of one half-plane, the part of the square on $c_i$'s side
+of the bisector: a convex polygon with one slanted edge. For 8 candidates that makes 28
+slanted edges instead of 468. For normal voters no integral is needed at all:
+$pi_(i j) = Phi(delta_(i j) (m) slash sigma)$ (@eq-normal-pairwise).
+
+*First-choice shares.* FPTP only uses $s_i$ (@eq-first-choice), the share of the
+Voronoi cell of $c_i$: $C$ convex polygons with about $3 C$ edges in all. For normal
+voters the cells are taken in the box of @sec-normal and summed with Owen's T.
+
+*The whole profile.* IRV needs the first choices among every set of remaining
+candidates. In a benchmark with 8 candidates it visited 106 of the 247 sets of two or
+more, so computing sets lazily saves little, and IRV uses the full arrangement.
+
+All three are sums of edge terms: the Green integrals of @sec-edges for Beta voters and
+the signed triangles of @sec-normal for normal voters.
+
+== Dragging: an edge cache <sec-edge-cache>
+
+An edge term depends only on the edge and the voter model. The terms are therefore
+cached with the endpoints as key (rounded to $10^(-9)$, the smaller endpoint first, the
+sign from the orientation, as in @sec-green), up to 64 MB, least recently used out
+first. Dragging $c_k$ moves only the $C - 1$ bisectors through $c_k$; the half-planes and
+Voronoi edges of all other pairs keep their endpoints and come from the cache. For
+pairwise shares 4 of 10 half-planes are recomputed with 5 candidates, 7 of 28 with 8.
+The arrangement gains less: every other bisector is cut by the moving ones, so for 5
+candidates about 60 of its 89 edges are new after each step.
+
+== Tabulated Beta CDF (`beta_tables.py`) <sec-tables>
+
+An edge integral evaluates $G_j$ at $Q$ points for every pair of nodes,
+$Q N^2 approx 58 thin 000$ calls of `betainc` at about 400 ns each. The $N$ Beta
+distributions of the nodes depend only on $D$ and the spread rule, so their CDFs can be
+tabulated once.
+
+The table is kept in logit–logit coordinates, $s = logit y$ and
+$lambda(s) = logit G(expit s)$, with
+
+$ lambda'(s) = (g(y) thin y (1 - y)) / (G(y) (1 - G(y))) . $
+
+Near a wall $G(y) = y^a slash (a B(a, b)) (1 + O(y))$, so $lambda(s) = a s + "const" + o(1)$
+as $s -> -oo$, and $lambda(s) approx b s$ as $s -> +oo$. $lambda$ is smooth and
+asymptotically linear even for $a, b < 1$, where the density itself is infinite. A cubic
+Hermite interpolant with the exact slope $lambda'$ on a uniform grid ($s in [-40, 40]$,
+step $0.02$) is therefore accurate everywhere. Below the table ($y < 4 dot 10^(-18)$)
+the power law $y^a slash (a B(a, b))$ itself is used, which is exact to double precision
+there; above it there is no double $y < 1$. Two numerical details matter:
+
+- Of $G$ and $1 - G$ the smaller is computed directly and the other as its complement.
+  Using $1 - G(y) = G'(1 - y)$ with the mirrored Beta is not enough: $1 - y$ rounds to $1$
+  below $y approx 10^(-16)$, where $G approx y^a$ is still $0.02$ for $a = 0.1$.
+- The same grid in $s$ serves all nodes, so a point's interval and its position in it
+  are computed once and reused for all $N$ nodes. The remaining work per point and node
+  is a gather of four coefficients, a cubic and $1 slash (1 + e^(-lambda))$.
+
+The quantile $F^(-1)$ has the inverse table, $logit x$ against $logit u$ with slope
+$1 slash lambda'$, for $u in [expit(-30), expit(30)]$. Outside it the table is extended
+linearly. A $u$-interval of width $w$ changes an edge integral by at most $w$, because
+the integrand is bounded by 1, so values below $10^(-13)$ do not matter.
+
+Over all offered deviations and spread rules the tables agree with `betainc` to
+$2 dot 10^(-9)$ and with `betaincinv` to $2 dot 10^(-8)$ in $x$ (tests:
+$10^(-8)$ and $10^(-7)$), and edge integrals agree with the exact ones to
+$3 dot 10^(-9)$. An edge takes 1.3 ms instead of 23 ms (2.8 ms if it is split). A table
+is built in about 0.2 s, in parallel over the nodes.
+
+Threads help little here: numpy holds the interpreter lock between its many small
+operations, and 8 threads run the edges only about 1.5 times faster than one.
+
+== Borders as zero sets (`methods.py`, `regions.py`) <sec-zero-sets>
+
+The shares are smooth in the median $m$; only the winner jumps. Each method compares
+continuous functions of the shares, so its borders are where such a comparison is a tie.
+The `*_margin` variants of the methods return, next to the winner, a *margin* $mu >= 0$
+that is continuous in the shares and $0$ on every border between two winners. It is the
+smallest gap in a comparison that could change the winner, so it can also vanish where
+such a comparison ties but the winner stays; that makes no border, because the sign of
+$psi_c$ below changes only with the winner:
+
+#align(center, table(
+  columns: 2,
+  align: (left, left),
+  stroke: none,
+  table.hline(),
+  [method], [margin $mu$],
+  table.hline(stroke: 0.5pt),
+  [FPTP, Borda], [lead of the top score over the second],
+  [Condorcet winner], [$min_(j != w) (pi_(w j) - pi_(j w))$; in a cycle $-max_i min_(j != i) (pi_(i j) - pi_(j i))$],
+  [Schulze], [$min_(e != w) max_f (p_(f e) - p_(e f))$],
+  [IRV], [smallest gap between the two lowest tallies over all rounds],
+  table.hline(),
+))
+
+*IRV.* On each side of a curve where some round's two lowest tallies tie, the gap of
+that round tends to $0$. So $mu$ is continuous, and it vanishes on every curve where an
+elimination changes, whether or not the winner changes there.
+
+*Schulze.* With complete rankings $pi_(i j) + pi_(j i) = 1$, so the margin
+$pi_(i j) - pi_(j i) = 2 pi_(i j) - 1$ orders the links exactly like the winning votes
+$pi_(i j)$ of @ch-methods, and the winners are the same. Unlike winning votes, the link
+strengths $max(pi_(i j) - pi_(j i), 0)$ are continuous in $pi$, and so are the path
+strengths $p$. The winner $w$ is the candidate no one beats ($p_(e w) <= p_(w e)$ for all
+$e$). It changes only where another candidate becomes unbeaten, hence the margin in
+the table. The simpler $min_e (p_(w e) - p_(e w))$ does not work: it can be $0$ on a
+whole area, where the widest paths from $w$ to $e$ and back share their weakest link.
+Where a Condorcet winner exists it is the Schulze winner. There the Condorcet margin
+stands in for the Schulze margin: it is positive, at most the Schulze margin, and $0$ on
+the border of the Condorcet region. So the widest paths are only computed at the
+points without a Condorcet winner.
+
+For each winner $c$ let
+
+$ psi_c = cases(mu & "where" c "wins", -mu & "elsewhere") . $
+
+$psi_c$ is continuous, and the region of $c$ is ${psi_c > 0}$. It is traced by marching
+squares (`contourpy`) on a grid of $G times G$ points: the centres $(k + 1/2) slash G$
+plus both walls, where the medians are clamped to the outermost pixel centres, as the
+nodes are. On a grid edge from a point where $c$ wins with margin $alpha$ to a point
+where $c'$ wins with margin $beta$, both $psi_c$ and $psi_(c')$ cross zero at
+$alpha slash (alpha + beta)$ of the way. So neighbouring regions share their border
+points and leave no gaps. The shares come from the interpolant of @sec-interpolation,
+so the grid only has to be fine enough not to miss slivers; its borders do not have the
+steps of a pixel image. The UI uses $G = 160$ while dragging and $G = 320$ once the
+candidate is dropped. The margins at grid points next to a change of winner are
+$O(1 slash G)$, which the tests check.
+
+*Polygons.* Every region is a list of polygons, because regions can be in pieces
+(@sec-pieces) and can have holes (an island of another winner). Each polygon is an
+outer ring and its holes. Can the order of a ring's points tell the region from its
+complement? In principle yes: with the convention that the region lies to the left of
+each edge, a counter-clockwise triangle is the triangle and a clockwise one is
+everything else. GeoJSON and the nonzero fill rule use this convention for holes. But
+a canvas never fills a lone clockwise ring as its outside; it fills the inside with
+winding number $-1$. So the complement is sent explicitly, as an outer ring
+(counter-clockwise) with the triangle as a hole (clockwise). The UI fills with the
+even-odd rule, which does not depend on the orientation at all. This matters because
+flipping $y$ for the canvas reverses every orientation. Voronoi diagrams need no grid:
+their cells are the polygons of @sec-needs.
+
+== Timings
+
+Round trip of one update over HTTP while dragging one candidate ($G = 160$; median of
+15 steps, $D = 0.2$, `rms` for Beta). Timings on the test machine vary by up to a factor
+of two between runs.
+
+#align(center, table(
+  columns: 7,
+  align: (left, right, right, right, right, right, right),
+  stroke: none,
+  table.hline(),
+  [], [candidates], [FPTP], [Borda], [Condorcet], [Schulze], [IRV],
+  table.hline(stroke: 0.5pt),
+  [Beta], [5], [12 ms], [25 ms], [19 ms], [18 ms], [134 ms],
+  [], [8], [21 ms], [33 ms], [33 ms], [33 ms], [773 ms],
+  [normal], [5], [16 ms], [14 ms], [16 ms], [17 ms], [86 ms],
+  [], [8], [18 ms], [23 ms], [31 ms], [31 ms], [506 ms],
+  table.hline(),
+))
+
+The narrowest Beta voters ($D = 0.05$) use $2 N - 1 = 97$ nodes (@sec-interpolation),
+which makes every edge four times as expensive: updates take 25–160 ms except for IRV.
+IRV is the exception throughout. It needs every cell of the arrangement, and a drag
+changes about two thirds of their edges.
+
+All edges of the arrangement lie on the $C (C - 1) slash 2$ bisectors, though. If the
+integral of $omega$ along each bisector were tabulated once, as a function of the
+position on it, every edge would be a difference of two values. The cost would then
+grow with the number of lines (28 for 8 candidates) instead of edges (468). This is
+not implemented yet.
