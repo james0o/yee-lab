@@ -1637,8 +1637,8 @@ from computing fewer integrals (@sec-needs), keeping those a drag does not chang
 (@sec-edge-cache), making each one cheaper (@sec-tables), and compiling the loops that
 remain (@sec-compiled). This chapter describes `margin/` (`shares.py`, `beta_tables.py`,
 `methods.py` and `regions.py`), which `web/app.py` uses for the UI.
-`docs/figures.py`, the plots and the tests of @sec-validation still use the pipeline of
-@ch-compute, which is in `pixels/`. The two never import each other; what both need
+`docs/figures.py` (apart from the examples of @sec-zero-sets), the plots and the tests of
+@sec-validation still use the pipeline of @ch-compute, which is in `pixels/`. The two never import each other; what both need
 (`ranking_cells.py`, `normal.py`, `voting.py`, `threads.py`) is at the top of the package.
 
 == What each method needs (`margin/shares.py`) <sec-needs>
@@ -1805,6 +1805,123 @@ stands in for the Schulze margin: it is positive, at most the Schulze margin, an
 the border of the Condorcet region. So the widest paths are only computed at the
 points without a Condorcet winner.
 
+=== Example: margins at two medians <sec-margin-example>
+
+The examples use the candidates A–E (@fig-cells) and the defaults of the UI: Beta voters,
+`rms` and $D = 0.2$. @tab-margin-shares lists the exact shares at two medians:
+$m_1 = (0.5, 0.5)$, the position of D, and $m_2 = (0.32, 0.545)$, in a small pocket
+where B, D and E form a cycle. @tab-margins gives the winners and margins. The shares
+are rounded to four decimals, while the margins come from the unrounded shares, so a
+difference of two entries can be off by one in the last digit.
+
+#figure(
+  table(
+    columns: 7,
+    align: (left, left, right, right, right, right, right),
+    stroke: none,
+    table.hline(),
+    [median], [], [A], [B], [C], [D], [E],
+    table.hline(stroke: 0.5pt),
+    [$m_1$], [$s_i$], [0.2697], [0.1164], [0.1303], [0.2565], [0.2271],
+    [], [$"score"_i$], [2.1051], [1.6919], [1.8157], [2.7301], [1.6572],
+    [], [$pi_(A j)$], [–], [0.5783], [0.5819], [0.3636], [0.5812],
+    [], [$pi_(B j)$], [0.4217], [–], [0.4436], [0.3095], [0.5172],
+    [], [$pi_(C j)$], [0.4181], [0.5564], [–], [0.3111], [0.5301],
+    [], [$pi_(D j)$], [0.6364], [0.6905], [0.6889], [–], [0.7143],
+    [], [$pi_(E j)$], [0.4188], [0.4828], [0.4699], [0.2857], [–],
+    table.hline(stroke: 0.5pt),
+    [$m_2$], [$s_i$], [0.1243], [0.2218], [0.1227], [0.1730], [0.3582],
+    [], [$"score"_i$], [1.2748], [2.3343], [1.8258], [2.3824], [2.1827],
+    [], [$pi_(A j)$], [–], [0.3342], [0.3539], [0.2084], [0.3784],
+    [], [$pi_(B j)$], [0.6658], [–], [0.6587], [0.5206], [0.4891],
+    [], [$pi_(C j)$], [0.6461], [0.3413], [–], [0.3949], [0.4435],
+    [], [$pi_(D j)$], [0.7916], [0.4794], [0.6051], [–], [0.5062],
+    [], [$pi_(E j)$], [0.6216], [0.5109], [0.5565], [0.4938], [–],
+    table.hline(),
+  ),
+  caption: [Shares at $m_1$ and $m_2$ (Beta, `rms`, $D = 0.2$): first choices $s_i$
+    (@eq-first-choice), Borda scores and pairwise shares $pi_(i j)$ (@eq-pairwise),
+    candidate $i$ in the row, $j$ in the column.],
+) <tab-margin-shares>
+
+#figure(
+  table(
+    columns: 5,
+    align: (left, left, right, left, right),
+    stroke: none,
+    table.hline(),
+    [method], [winner at $m_1$], [$mu$], [winner at $m_2$], [$mu$],
+    table.hline(stroke: 0.5pt),
+    [FPTP], [A], [0.0132], [E], [0.1363],
+    [Borda], [D], [0.6250], [D], [0.0481],
+    [Condorcet winner], [D], [0.2727], [none (cycle)], [0.0125],
+    [Schulze], [D], [0.2727], [E], [0.0093],
+    [IRV], [D], [0.0138], [E], [0.0016],
+    table.hline(),
+  ),
+  caption: [Winners and margins at $m_1$ and $m_2$, as returned by the `*_margin`
+    methods.],
+) <tab-margins>
+
+*At $m_1$.* D sits at the median of the voters, but A has the most first choices, so FPTP
+elects A with $mu = s_A - s_D = 0.2697 - 0.2565 = 0.0132$. The Borda scores are the row
+sums of $pi$ (@sec-needs), and D leads A by $2.7301 - 2.1051 = 0.6250$. D beats every
+candidate head to head, most narrowly A: the Condorcet margin is
+$pi_(D A) - pi_(A D) = 0.2727$, and Schulze, which elects the Condorcet winner, uses the
+same margin. IRV eliminates B, C, E and A in turn:
+
+#align(center, table(
+  columns: 8,
+  align: (center, right, right, right, right, right, center, right),
+  stroke: none,
+  table.hline(),
+  [round], [A], [B], [C], [D], [E], [out], [gap],
+  table.hline(stroke: 0.5pt),
+  [1], [0.2697], [0.1164], [0.1303], [0.2565], [0.2271], [B], [0.0138],
+  [2], [0.2697], [], [0.2129], [0.2622], [0.2552], [C], [0.0423],
+  [3], [0.3636], [], [], [0.3507], [0.2857], [E], [0.0650],
+  [4], [0.3636], [], [], [0.6364], [], [A], [0.2727],
+  table.hline(),
+))
+
+The gap between the two lowest tallies is smallest in the first round, between B and C,
+so $mu = 0.0138$.
+
+*At $m_2$.* B, D and E each beat A and C, but among themselves they form a cycle: B beats
+D ($pi_(B D) = 0.5206$), D beats E ($0.5062$) and E beats B ($0.5109$). The narrowest
+head-to-head results $min_(j != i) (pi_(i j) - pi_(j i))$ are $-0.0218$ for B, $-0.0412$
+for D and $-0.0125$ for E (A and C lose by much more). No candidate beats everyone, and
+the Condorcet margin is $0.0125$, E's deficit against D.
+
+Schulze has to resolve the cycle. Its links $pi_(i j) - pi_(j i) > 0$ among B, D and E
+are B→D $0.0412$, D→E $0.0125$ and E→B $0.0218$. A and C beat none of the three, so the
+widest paths between B, D and E stay among them:
+$p_(B E) = min(0.0412, 0.0125) = 0.0125$ through D,
+$p_(D B) = min(0.0125, 0.0218) = 0.0125$ through E, and
+$p_(E D) = min(0.0218, 0.0412) = 0.0218$ through B. E is unbeaten, since
+$p_(E B) = 0.0218 > p_(B E)$ and $p_(E D) = 0.0218 > p_(D E) = 0.0125$, so E wins. For
+the margin, each other candidate $e$ is beaten by $max_f (p_(f e) - p_(e f))$: B only by E,
+by $0.0218 - 0.0125 = 0.0093$; D by B, by $0.0412 - 0.0125 = 0.0287$ (and by E, by
+$0.0093$); A and C by $0.5832$ and $0.3175$. The smallest of these, $mu = 0.0093$, says
+that B is the candidate closest to being unbeaten.
+
+In the first round of IRV, A ($0.1243$) and C ($0.1227$) nearly tie for last place,
+so $mu = 0.0016$. E wins whichever of the two goes out first: $m_2$ lies next to a curve
+where $mu$ vanishes but the winner does not change. @fig-margins shows $mu$ over the
+whole square, with $m_1$ and $m_2$ marked. The FPTP margin vanishes only on the borders.
+The IRV margin also vanishes on many curves that are not borders: there two candidates
+tie for last place in some round, but the winner does not change.
+
+#figure(
+  image("figures/margins.png", width: 100%),
+  caption: [The margin $mu$ of FPTP (left) and IRV (right) on the grid of $G = 320$
+    points per axis (Beta, `rms`, $D = 0.2$), on a log scale: black is below $10^(-4)$.
+    Yellow: the borders between winners, traced as in @sec-tracing. The crosses mark
+    $m_1$ (at D) and $m_2$.],
+) <fig-margins>
+
+=== Tracing the regions <sec-tracing>
+
 For each winner $c$ let
 
 $ psi_c = cases(mu & "where" c "wins", -mu & "elsewhere") . $
@@ -1815,24 +1932,87 @@ plus both walls, where the medians are clamped to the outermost pixel centres, a
 nodes are. On a grid edge from a point where $c$ wins with margin $alpha$ to a point
 where $c'$ wins with margin $beta$, both $psi_c$ and $psi_(c')$ cross zero at
 $alpha slash (alpha + beta)$ of the way. So neighbouring regions share their border
-points and leave no gaps. The shares come from the interpolant of @sec-interpolation,
-so the grid only has to be fine enough not to miss slivers; its borders do not have the
-steps of a pixel image. The UI uses $G = 160$ while dragging and $G = 320$ once the
-candidate is dropped. The margins at grid points next to a change of winner are
-$O(1 slash G)$, which the tests check.
+points and leave no gap along a border. For example, for IRV at $G = 160$ the
+neighbouring grid points $(0.296875, 0.384375)$ and $(0.303125, 0.384375)$ are won by B
+with $alpha = 0.00255$ and by C with $beta = 0.00350$. Both the ring of B and the ring
+of C get the vertex $0.4215$ of the way along, at $x = 0.299509$ (@fig-polygons, near the
+bottom tip of C's island). A gap is left only in a grid cell where three winners meet:
+there each of the three regions ends at a straight segment between two edge crossings,
+and the small triangle between the three segments belongs to none of them.
 
-*Polygons.* Every region is a list of polygons, because regions can be in pieces
-(@sec-pieces) and can have holes (an island of another winner). Each polygon is an
-outer ring and its holes. Can the order of a ring's points tell the region from its
-complement? In principle yes: with the convention that the region lies to the left of
-each edge, a counter-clockwise triangle is the triangle and a clockwise one is
-everything else. GeoJSON and the nonzero fill rule use this convention for holes. But
-a canvas never fills a lone clockwise ring as its outside; it fills the inside with
-winding number $-1$. So the complement is sent explicitly, as an outer ring
-(counter-clockwise) with the triangle as a hole (clockwise). The UI fills with the
-even-odd rule, which does not depend on the orientation at all. This matters because
-flipping $y$ for the canvas reverses every orientation. Voronoi diagrams need no grid:
-their cells are the polygons of @sec-needs.
+The shares come from the interpolant of @sec-interpolation, so the grid only has to be
+fine enough not to miss slivers; its borders do not have the steps of a pixel image. The
+UI uses $G = 160$ while dragging and $G = 320$ once the candidate is dropped. The margins
+at grid points next to a change of winner are $O(1 slash G)$, which the tests check.
+
+=== Polygons <sec-polygons>
+
+Every region is a list of polygons, because regions can be in pieces (@sec-pieces) and
+can have holes (an island of another winner). Each polygon is an outer ring and its
+holes. Can the order of a ring's points tell the region from its complement? In
+principle yes: with the convention that the region lies to the left of each edge, a
+counter-clockwise triangle is the triangle and a clockwise one is everything else.
+GeoJSON and the nonzero fill rule use this convention for holes. But a canvas never
+fills a lone clockwise ring as its outside; it fills the inside with winding number
+$-1$. So the complement is sent explicitly, as an outer ring (counter-clockwise) with
+the triangle as a hole (clockwise). The UI fills with the even-odd rule, which does not
+depend on the orientation at all. This matters because flipping $y$ for the canvas
+reverses every orientation. Voronoi diagrams need no grid: their cells are the polygons
+of @sec-needs.
+
+Each ring is sent as a flat list $[x_0, y_0, x_1, y_1, dots]$ with six decimals. It is
+closed: the last point repeats the first, so a ring with $k$ vertices has $2 (k + 1)$
+numbers. @tab-polygons lists the IRV regions of @fig-margins as the UI receives them
+while dragging ($G = 160$), with the signed (shoelace) area of every ring, which is
+positive for a counter-clockwise ring. @fig-polygons draws them.
+
+#figure(
+  image("figures/polygons.png", width: 100%),
+  caption: [The polygons of @tab-polygons, filled with the even-odd rule as in the UI.
+    Solid black: outer rings; dashed red: holes. Right: the frame on the left, with the
+    grid points coloured by their winner. The arrows run clockwise along B's two holes:
+    the island of C, and at the top right a sliver of C that the grid catches at only
+    one point.],
+) <fig-polygons>
+
+#figure(
+  table(
+    columns: 4,
+    align: (center, center, right, left),
+    stroke: none,
+    table.hline(),
+    [winner], [polygon], [outer ring], [holes],
+    table.hline(stroke: 0.5pt),
+    [A], [1], [389~($+0.267367$)], [],
+    [], [2], [10~($+0.000155$)], [],
+    [], [3], [4~($+0.000020$)], [],
+    [], [4], [76~($+0.005068$)], [4~($-0.000001$)],
+    [B], [1], [356~($+0.117606$)], [60~($-0.001887$), 4~($-0.000004$)],
+    [C], [1], [391~($+0.138644$)], [],
+    [], [2], [60~($+0.001887$)], [],
+    [], [3], [4~($+0.000004$)], [],
+    [D], [1], [443~($+0.233848$)], [],
+    [], [2], [4~($+0.000001$)], [],
+    [E], [1], [32~($+0.001143$)], [],
+    [], [2], [385~($+0.236058$)], [],
+    table.hline(),
+  ),
+  caption: [The IRV regions of the UI's default diagram while dragging (candidates A–E,
+    Beta voters, `rms`, $D = 0.2$, $G = 160$): the number of vertices of every ring and,
+    in brackets, its signed area.],
+) <tab-polygons>
+
+B's region is one polygon with two holes. The larger hole is the island of C next to B.
+C's region lists the same 60 vertices again as a polygon of its own, counter-clockwise,
+so its area is $+0.001887$ where B's hole has $-0.001887$. The area of B's region is the
+sum over its rings, $0.117606 - 0.001887 - 0.000004 = 0.115715$. The rings with 4
+vertices are diamonds around a single grid point, the most the grid shows of a sliver
+thinner than its step. The smaller hole of B is such a sliver of C, near
+$(0.347, 0.472)$. A and E are in several pieces, as IRV regions often are (@sec-pieces).
+
+The signed areas of all rings add up to $0.99991$ instead of $1$. The missing $0.00009$
+lies in the grid cells where three winners meet (@sec-tracing). It shrinks with the
+grid, to $0.99998$ at $G = 320$.
 
 == Timings
 

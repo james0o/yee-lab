@@ -15,7 +15,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import ListedColormap
+from matplotlib.colors import ListedColormap, LogNorm
+from matplotlib.patches import PathPatch
 from matplotlib.path import Path as MplPath
 from scipy import ndimage
 from scipy.spatial import ConvexHull
@@ -23,9 +24,13 @@ from scipy.special import betainc, ndtr, ndtri
 from scipy.stats import beta as beta_dist
 
 from yeelab import normal, ranking_cells
+from yeelab.margin import methods as margin_methods
+from yeelab.margin.regions import regions, winners
+from yeelab.margin.shares import Model
 from yeelab.pixels import beta as pixel_beta, normal as pixel_normal
 from yeelab.pixels.methods import _pairwise_preferences, borda, condorcet_cycle, fptp, irv, schulze, voronoi
 from yeelab.voting import CYCLE
+from yeelab.web.app import DEVIATION as UI_DEVIATION, DRAG_GRID, FINAL_GRID
 
 # candidates A-E of the document
 CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
@@ -567,43 +572,182 @@ def stochastic_order():
             print(f"stochastic order, {spread:8s} D = {deviation}: P(X <= t) grows with the median "
                   f"from median {start:.3f} on, by at most {gain.max():.3f}")
 
+# ---------------------------------------------------------------- web UI: margins and polygons
 
-def shape_search(layouts=100, seed=1):
-    """Random layouts of 3-6 candidates: how often is a region non-convex or in pieces?
-    Slow (several minutes); run with `uv run python docs/figures.py search`."""
-    pixels, minsize = 150, 20
-    methods = {"FPTP": fptp, "Borda": borda, "Schulze": schulze, "IRV": irv}
-    for name, model, options in (("normal", pixel_normal, {}), (f"beta {SPREAD}", pixel_beta, {"spread": SPREAD})):
-        for deviation in (0.2, 0.3):
-            rng = np.random.default_rng(seed)
-            concave, split = dict.fromkeys(methods, 0), dict.fromkeys(methods, 0)
-            for _ in range(layouts):
-                candidates = rng.uniform(0.05, 0.95, (rng.integers(3, 7), 2))
-                rankings, probs = model.ranking_probabilities(candidates, pixels, deviation, **options)
-                for label, method in methods.items():
-                    winners = method(rankings, probs)
-                    masks = [winners == c for c in range(len(candidates))]
-                    concave[label] += any(concave_pixels(mask) > 0 for mask in masks)
-                    split[label] += any(len(pieces(mask, minsize)[0]) > 1 for mask in masks)
-            print(f"search {name} D = {deviation}, {layouts} layouts: non-convex "
-                  + ", ".join(f"{k} {v}" for k, v in concave.items())
-                  + "; in pieces " + ", ".join(f"{k} {v}" for k, v in split.items()), flush=True)
-    # two candidates: every method is the majority between them
-    pixels = 200
-    for spread in ("rms", "mean_abs"):
-        for deviation in (0.2, 0.3, 0.4):
-            medians, params = ranking_cells.node_params(pixels, ranking_cells.NODES, deviation, spread)
-            count = split = 0
-            for theta in np.radians(np.arange(5, 90, 10)):
-                u = np.array([np.cos(theta), np.sin(theta)])
-                for q in np.stack(np.meshgrid(*[np.linspace(0.05, 0.95, 10)] * 2), -1).reshape(-1, 2):
-                    rankings, probs = pixel_beta.compute_ranking_probabilities(
-                        np.array([q - 0.05 * u, q + 0.05 * u]), params)
-                    share = pixel_beta.interpolate_to_pixels(probs, medians, pixels)[..., rankings[:, 0] == 0].sum(-1)
-                    split += len(pieces(share > 0.5, 5)[0]) > 1 or len(pieces(share < 0.5, 5)[0]) > 1
-                    count += 1
-            print(f"search two candidates, beta {spread} D = {deviation}: {split} of {count} layouts "
-                  "with a majority region in pieces", flush=True)
+# the web UI's defaults: Beta voters, the default rule, its deviation
+UI_MODEL = Model("beta", UI_DEVIATION, SPREAD)
+# the medians of the margin examples: at candidate D, and in a pocket of Condorcet cycles
+MARGIN_POINTS = {"m_1": (0.5, 0.5), "m_2": (0.32, 0.545)}
+# the part of the square around B's holes in the polygon example
+HOLE_WINDOW = ((0.225, 0.365), (0.365, 0.49))
+
+
+def _signed_area(ring):
+    x, y = np.reshape(ring, (-1, 2)).T
+    return 0.5 * np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y)
+
+
+def margin_example():
+    """Shares, winner and margin of every method (margin/methods.py) at MARGIN_POINTS."""
+    for label, point in MARGIN_POINTS.items():
+        rankings, probs = pixel_beta.compute_ranking_probabilities(
+            CANDIDATES, ranking_cells.beta_params_at(np.array(point), UI_DEVIATION, SPREAD))
+        probs = probs[0, 1]  # the median (point[0], point[1])
+        first = np.array([probs[rankings[:, 0] == c].sum() for c in range(5)])
+        d = _pairwise_preferences(rankings, probs[None, None])[0, 0]
+        print(f"margins at {label} = {point} (Beta {SPREAD}, D = {UI_DEVIATION})")
+        print("  first choices " + "  ".join(f"{n} {s:.4f}" for n, s in zip(NAMES, first)))
+        print("  Borda scores  " + "  ".join(f"{n} {s:.4f}" for n, s in zip(NAMES, d.sum(-1))))
+        for i in range(5):
+            print(f"  pi_{NAMES[i]}. " + "  ".join(f"{d[i, j]:.4f}" for j in range(5)))
+        # IRV round by round, as voting.irv_rounds
+        alive = list(range(5))
+        while len(alive) > 1:
+            tally = first_choice_shares(rankings, probs, alive)
+            low, second = sorted(alive, key=lambda c: tally[c])[:2]
+            print("  IRV round " + "  ".join(f"{NAMES[c]} {tally[c]:.4f}" for c in alive)
+                  + f": {NAMES[low]} out, gap to {NAMES[second]} {tally[second] - tally[low]:.4f}")
+            alive.remove(low)
+        lead = d - d.T
+        print("  narrowest head-to-head result " + "  ".join(
+            f"{NAMES[i]} {np.delete(lead[i], i).min():+.4f}" for i in range(5)))
+        # Schulze path strengths from the margins d - d^T (margin_methods._schulze_paths)
+        p = np.maximum(lead, 0.0)
+        for k in range(5):
+            p = np.maximum(p, np.minimum(p[:, k, None], p[None, k, :]))
+        print("  Schulze links " + "  ".join(f"{NAMES[i]}>{NAMES[j]} {lead[i, j]:.4f}"
+                                             for i in range(5) for j in range(5) if lead[i, j] > 0))
+        print("  Schulze paths " + "  ".join(f"{NAMES[i]}>{NAMES[j]} {p[i, j]:.4f}"
+                                             for i in range(5) for j in range(5) if i != j and p[i, j] > 0))
+        print("  beaten by (max_f p_fe - p_ef) " + "  ".join(
+            f"{NAMES[e]} {(p[:, e] - p[e, :]).max():.4f}" for e in range(5)))
+        for name, method, args in (("FPTP", margin_methods.fptp_margin, (first,)),
+                                   ("Borda", margin_methods.borda_margin, (d,)),
+                                   ("Condorcet", margin_methods.condorcet_margin, (d,)),
+                                   ("Schulze", margin_methods.schulze_margin, (d,)),
+                                   ("IRV", margin_methods.irv_margin, (rankings, probs))):
+            winner, margin = method(*[a[None] if a is not rankings else a for a in args])
+            print(f"  {name:9s} winner {'cycle' if winner[0] == CYCLE else NAMES[winner[0]]}, "
+                  f"margin {margin[0]:.4f}")
+
+
+def margin_fields():
+    """The margin of FPTP and IRV over the square, with the borders of the regions."""
+    fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.7), layout="constrained")
+    norm = LogNorm(1e-4, 0.3, clip=True)
+    for ax, (label, method) in zip(axes, (("FPTP", "fptp"), ("IRV", "irv"))):
+        coords, _, margin = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)
+        image = ax.pcolormesh(coords, coords, margin.T, norm=norm, cmap="gray", shading="nearest",
+                              rasterized=True)
+        for region in regions(method, CANDIDATES, UI_MODEL, FINAL_GRID):
+            for polygon in region["polygons"]:
+                for ring in polygon:
+                    ax.plot(*np.reshape(ring, (-1, 2)).T, color="#edc948", lw=0.9)
+        ax.scatter(*CANDIDATES.T, c=PALETTE[:5], s=45, edgecolors="k", zorder=3)
+        for name, (x, y) in zip(NAMES, CANDIDATES):
+            ax.annotate(name, (x + 0.015, y + 0.015), weight="bold", fontsize=9, color="#edc948")
+        for (name, (x, y)), offset in zip(MARGIN_POINTS.items(), ((0.02, -0.065), (-0.085, 0.02))):
+            ax.scatter(x, y, marker="+", color="#e15759", s=90, lw=1.5, zorder=4)
+            ax.annotate(f"${name}$", (x + offset[0], y + offset[1]), color="#e15759", fontsize=11,
+                        weight="bold", zorder=4)
+        ax.plot([], [], color="#edc948", lw=0.9, label="border between winners")
+        ax.legend(fontsize=8, loc="lower right")
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_aspect("equal")
+        ax.set_title(f"{label}: margin $\\mu$, Beta ({SPREAD}), D = {UI_DEVIATION}", fontsize=10)
+    fig.colorbar(image, ax=axes, shrink=0.85, label="$\\mu$ (log scale)")
+    fig.savefig(FIGURES / "margins.png", dpi=150)
+    plt.close(fig)
+
+
+def _draw_regions(ax, shapes):
+    """Fill every polygon even-odd, as the UI does; outer rings solid, holes dashed on top."""
+    for region in shapes:
+        for polygon in region["polygons"]:
+            rings = [np.reshape(ring, (-1, 2)) for ring in polygon]
+            path = MplPath.make_compound_path(*[MplPath(ring, closed=True) for ring in rings])
+            ax.add_patch(PathPatch(path, facecolor=PALETTE[region["winner"]], alpha=0.6, lw=0))
+    for k in (0, 1):
+        for region in shapes:
+            for polygon in region["polygons"]:
+                for ring in polygon[:1] if k == 0 else polygon[1:]:
+                    ax.plot(*np.reshape(ring, (-1, 2)).T, color="k" if k == 0 else "#e15759",
+                            lw=0.8 if k == 0 else 1.2, ls="-" if k == 0 else "--")
+
+
+def polygon_example():
+    """IRV regions as the web UI receives them while dragging: rings, orientation, holes."""
+    coords, winner, margin = winners("irv", CANDIDATES, UI_MODEL, DRAG_GRID)
+    shapes = regions("irv", CANDIDATES, UI_MODEL, DRAG_GRID)
+    print(f"IRV polygons, Beta {SPREAD}, D = {UI_DEVIATION}, grid {DRAG_GRID}")
+    total = 0.0
+    for region in shapes:
+        for polygon in region["polygons"]:
+            areas = [_signed_area(ring) for ring in polygon]
+            closed = all(ring[:2] == ring[-2:] for ring in polygon)
+            total += sum(areas)
+            print(f"  {NAMES[region['winner']]}: polygon of {len(polygon)} ring(s), vertices "
+                  f"{[len(ring) // 2 - 1 for ring in polygon]}, signed areas "
+                  + ", ".join(f"{a:+.6f}" for a in areas) + ("" if closed else " (not closed)"))
+    print(f"  sum of all signed areas {total:.5f}; at grid {FINAL_GRID} " + "{:.5f}".format(sum(
+        _signed_area(ring) for region in regions("irv", CANDIDATES, UI_MODEL, FINAL_GRID)
+        for polygon in region["polygons"] for ring in polygon)))
+    # B's holes are rings of C, reversed
+    holes = [np.reshape(ring, (-1, 2)) for region in shapes if region["winner"] == B
+             for polygon in region["polygons"] for ring in polygon[1:]]
+    outers = [np.reshape(polygon[0], (-1, 2)) for region in shapes if region["winner"] == C
+              for polygon in region["polygons"]]
+    for hole in holes:
+        match = [k for k, outer in enumerate(outers) if set(map(tuple, outer)) == set(map(tuple, hole))]
+        print(f"  hole of B with {len(hole) - 1} vertices, lowest point {hole[hole[:, 1].argmin()]}, "
+              f"= outer ring of C's polygon {match}")
+    # one crossing on the border of B's larger hole: a grid edge along x from B to C
+    (left, bottom), (right, top) = holes[0].min(axis=0), holes[0].max(axis=0)
+    for j in np.flatnonzero((coords > bottom) & (coords < top)):
+        i = np.flatnonzero((winner[:-1, j] == B) & (winner[1:, j] == C)
+                           & (coords[:-1] > left - 0.01) & (coords[1:] < right + 0.01))
+        if len(i):
+            i = i[0]
+            alpha, beta = margin[i, j], margin[i + 1, j]
+            t = alpha / (alpha + beta)
+            x = coords[i] + t * (coords[i + 1] - coords[i])
+            print(f"  crossing at y = {coords[j]:.6f}: B wins at x = {coords[i]:.6f} with margin "
+                  f"{alpha:.5f}, C at x = {coords[i + 1]:.6f} with margin {beta:.5f}; t = {t:.4f}, "
+                  f"x = {x:.6f}, a vertex of the hole: {np.abs(holes[0] - (x, coords[j])).max(1).min() < 1e-6}")
+            break
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.9))
+    (x0, x1), (y0, y1) = HOLE_WINDOW
+    for ax in axes:
+        _draw_regions(ax, shapes)
+        ax.scatter(*CANDIDATES.T, c=PALETTE[:5], s=45, edgecolors="k", zorder=3)
+        for name, (x, y) in zip(NAMES, CANDIDATES):
+            ax.annotate(name, (x + 0.006, y + 0.006), weight="bold", fontsize=9)
+        ax.set_aspect("equal")
+    axes[0].add_patch(plt.Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, lw=1))
+    axes[0].set_xlim(0, 1)
+    axes[0].set_ylim(0, 1)
+    axes[0].set_title(f"IRV, Beta ({SPREAD}), D = {UI_DEVIATION}: polygons on a "
+                      f"{DRAG_GRID} grid", fontsize=10)
+    ax = axes[1]
+    inside = (coords >= x0) & (coords <= x1), (coords >= y0) & (coords <= y1)
+    gx, gy = np.meshgrid(coords[inside[0]], coords[inside[1]], indexing="ij")
+    ax.scatter(gx, gy, c=[PALETTE[w] for w in winner[np.ix_(*inside)].ravel()], s=5, zorder=2)
+    for hole in holes:  # arrows along B's holes: clockwise
+        step = max(len(hole) // 8, 1)
+        for k in range(0, len(hole) - 1, step):
+            ax.annotate("", hole[k + 1], hole[k], zorder=4,
+                        arrowprops={"arrowstyle": "-|>", "color": "#e15759", "lw": 1.2})
+    ax.plot([], [], color="k", lw=0.8, label="outer ring (counter-clockwise)")
+    ax.plot([], [], color="#e15759", lw=1.2, ls="--", label="hole of B (clockwise)")
+    ax.legend(fontsize=8, loc="upper left", facecolor="white", framealpha=1)
+    ax.set_xlim(x0, x1)
+    ax.set_ylim(y0, y1)
+    ax.set_title("detail: grid points coloured by winner", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(FIGURES / "polygons.png", dpi=150)
+    plt.close(fig)
 
 
 if __name__ == "__main__":
@@ -628,3 +772,6 @@ if __name__ == "__main__":
     disconnected_fptp()
     schulze_notch()
     stochastic_order()
+    margin_example()
+    margin_fields()
+    polygon_example()
