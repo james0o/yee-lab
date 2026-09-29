@@ -14,8 +14,8 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
 below c, so c's expected score is sum_e d[c, e].)
 
 Every share of a polygon is a sum over its edges: Green's theorem edge integrals
-(ranking_cells._edge_integral) with the tabulated CDFs of beta_tables.py for Beta
-voters, signed triangles with Owen's T (normal._triangle) for normal voters. An edge
+(ranking_cells._edge_integral, compiled on the tabulated CDFs of beta_tables.py) for
+Beta voters, signed triangles with Owen's T (normal.triangle_terms) for normal voters. An edge
 term depends only on the edge, so they are cached by their endpoints: dragging one
 candidate moves only its C - 1 bisectors, and only edges on those are new.
 For normal voters a half-plane holds Phi(signed distance / sigma) of the voters, so
@@ -25,10 +25,8 @@ Everything here is at the interpolation nodes, shape (N, N, ...); regions.py
 interpolates it to the points where the methods are evaluated.
 """
 
-import os
 import threading
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property, lru_cache
 
@@ -37,15 +35,14 @@ from scipy.special import logit, ndtr
 
 import normal
 import ranking_cells
+import threads
 from beta_tables import TabulatedBeta
 from distributions import Distribution
-from ranking_cells import NODES, QUAD_NODES, Spread, _clip, _edge_integral
+from ranking_cells import NODES, QUAD_NODES, Spread, _clip
 
 PIXELS = 300  # the outermost medians are 1/2 and 1 - 1/2 pixel from the walls
 CACHE_BYTES = 64 * 2**20  # edge integrals kept between requests
 SQUARE = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
-
-_pool = ThreadPoolExecutor(max_workers=os.cpu_count())
 
 
 def node_count(distribution: Distribution, deviation: float) -> int:
@@ -151,38 +148,27 @@ def _edge_key(start, end):
     return (ke, ks), -1.0, end, start
 
 
-def _integral(model, key, start, end):
-    """Cached edge term of the canonical edge start -> end."""
-    value = edge_cache.get((model, key))
-    if value is None:
-        if model.distribution == "beta":
-            value = _edge_integral(start, end, beta_tables(model), *_QUADRATURE)
-        else:
-            value = normal._triangle(start, end, model.medians, model.sigma)
-        edge_cache.put((model, key), value)
-    return value
+def _edge_terms(model, segments):
+    """Edge terms of the segments [(start, end), ...], each (N, N)."""
+    if model.distribution == "beta":
+        return beta_tables(model).edge_terms(np.reshape(segments, (-1, 4)), *_QUADRATURE)
+    return normal.triangle_terms(np.reshape(segments, (-1, 4)), model.medians, model.sigma)
 
 
 def edge_integrals(model: Model, edges):
-    """Edge terms of the segments `edges` [(start, end), ...], each (N, N): from the
-    cache, the missing ones computed in parallel (betainc, owens_t and most numpy
-    loops release the GIL)."""
+    """(sign, term) of the segments `edges` [(start, end), ...]: the term (N, N) of the
+    canonical edge from the cache, the missing ones computed and cached; the
+    segment's term is sign * term."""
     keyed = [_edge_key(np.asarray(s, dtype=np.float64), np.asarray(e, dtype=np.float64))
              for s, e in edges]
     unique = {key: (start, end) for key, _, start, end in keyed}
-    values = dict(zip(unique, _pool.map(lambda key: _integral(model, key, *unique[key]), unique)))
-    return [sign * values[key] for key, sign, _, _ in keyed]
-
-
-def cached_edge_integral(model: Model):
-    """callable(start, end) for ranking_cells.compute_ranking_probabilities, which
-    runs its own threads."""
-
-    def integral(start, end):
-        key, sign, start, end = _edge_key(start, end)
-        return sign * _integral(model, key, start, end)
-
-    return integral
+    values = {key: edge_cache.get((model, key)) for key in unique}
+    missing = [key for key, value in values.items() if value is None]
+    if missing:
+        for key, value in zip(missing, _edge_terms(model, [unique[key] for key in missing])):
+            edge_cache.put((model, key), value)
+            values[key] = value
+    return [(sign, values[key]) for key, sign, _, _ in keyed]
 
 
 def _polygon_shares(model: Model, polygons):
@@ -194,10 +180,13 @@ def _polygon_shares(model: Model, polygons):
         for k in range(len(poly)):
             edges.append((poly[k], poly[(k + 1) % len(poly)]))
             owner.append(p)
-    shares = np.zeros((model.nodes, model.nodes, len(polygons)))
-    for p, integral in zip(owner, edge_integrals(model, edges)):
-        shares[..., p] += integral
-    return np.clip(shares, 0.0, 1.0)
+    shares = np.zeros((len(polygons), model.nodes, model.nodes))  # contiguous per polygon
+    for p, (sign, term) in zip(owner, edge_integrals(model, edges)):
+        if sign > 0:
+            shares[p] += term
+        else:
+            shares[p] -= term
+    return np.clip(np.moveaxis(shares, 0, -1), 0.0, 1.0)
 
 # ---------------------------------------------------------------- Shares
 
@@ -259,11 +248,11 @@ def first_choice_shares(candidates, model: Model) -> np.ndarray:
 
 def ranking_shares(candidates, model: Model):
     """(rankings (R, C), shares (N, N, R)) as ranking_cells / normal
-    compute_ranking_probabilities return them, with the edges from the edge cache."""
+    compute_ranking_probabilities return them: the cells of the bisector arrangement,
+    with their edges from the edge cache."""
     candidates = np.asarray(candidates, dtype=np.float64)
     if model.distribution == "beta":
-        params = ranking_cells.node_params(model.pixels, model.nodes, model.deviation, model.spread)[1]
-        return ranking_cells.compute_ranking_probabilities(
-            candidates, params, edge_integral=cached_edge_integral(model))
-    polygons, rankings = normal.normal_cells(candidates, model.sigma)
+        polygons, rankings = ranking_cells.ranking_cells(candidates)
+    else:
+        polygons, rankings = normal.normal_cells(candidates, model.sigma)
     return rankings, _polygon_shares(model, polygons)

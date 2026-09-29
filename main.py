@@ -20,10 +20,10 @@ from methods import METHODS
 from normal import sigma_from_deviation
 from ranking_cells import SPREAD, SPREADS, TAPER, Spread, beta_params
 from regions import regions
-from shares import PIXELS, Model, beta_tables
+from shares import PIXELS, Model
 
-# Most methods follow a drag within ~10-40 ms; IRV needs every ranking cell and takes
-# ~0.1 s for 5 candidates, ~0.8 s for 8 (see docs/math.typ).
+# Methods follow a drag within ~5-30 ms; IRV needs every ranking cell and takes up to
+# ~0.1 s for 8 candidates (see docs/math.typ).
 MAX_CANDIDATES = 8
 # The candidates the page starts with.
 CANDIDATES = [[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]]
@@ -103,8 +103,17 @@ class DiagramRequest(BaseModel):
         return deviation
 
 
-# Build the default voters' CDF tables (~0.2 s) before the first request needs them.
-threading.Thread(target=beta_tables, args=(Model("beta", DEVIATION, SPREAD),), daemon=True).start()
+def _warm_up():
+    """Build the default voters' CDF tables (~0.2 s) and load the compiled kernels
+    (compiled on the very first run, then from numba's cache) before the first
+    request needs them."""
+    for distribution in DISTRIBUTIONS:
+        model = Model(distribution, DEVIATION, SPREAD if distribution == "beta" else None)
+        for method in DIAGRAMS:
+            regions(method, CANDIDATES, model, 32)
+
+
+threading.Thread(target=_warm_up, daemon=True).start()
 
 
 @lru_cache(maxsize=1)

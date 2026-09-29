@@ -32,13 +32,25 @@ one leg d from m to the edge line and the other leg t along it, and
 
 where the wedge {0 < y < (t / d) x} holds arctan(t / d) / (2 pi) of the voters
 and Owen's T function T(h, a) is the part of it beyond x = h (in units of sigma).
+
+Owen's T is compiled (numba) rather than scipy's owens_t, so that the triangles of
+many edges run in one call without the GIL. For 0 <= a <= 1 it is its integral
+
+    T(h, a) = a / (2 pi) int_0^1 exp(-h^2 (1 + a^2 x^2) / 2) / (1 + a^2 x^2) dx
+
+with 12-point Gauss-Legendre (the integrand is analytic; 12 points agree with scipy
+to 1e-16 for all h), and for a > 1 the identity
+T(h, a) = (Phi(h) + Phi(a h)) / 2 - Phi(h) Phi(a h) - T(a h, 1 / a) reduces it to that.
 """
 
-from concurrent.futures import ThreadPoolExecutor
+import math
+import os
 from pathlib import Path
 
 import numpy as np
-from scipy.special import owens_t
+from numba import njit
+
+import threads
 
 from cache import (
     DEFAULT_CACHE_ROOT,
@@ -57,6 +69,9 @@ from ranking_cells import (
 from ranking_cells import interpolate_to_pixels as _interpolate_to_pixels
 
 BOX = 10  # half-width of the margin around the unit square, in sigma
+# 12-point Gauss-Legendre on [0, 1] for Owen's T
+_T_NODES, _T_WEIGHTS = np.polynomial.legendre.leggauss(12)
+_T_NODES, _T_WEIGHTS = 0.5 * (_T_NODES + 1), 0.5 * _T_WEIGHTS
 
 
 def sigma_from_deviation(deviation):
@@ -91,23 +106,63 @@ def normal_cells(candidates, sigma):
     return [poly * size - margin for poly in polygons], rankings
 
 
-def _right_triangles(d, t, sigma):
+@njit(inline="always")
+def _phi(x):
+    return 0.5 * math.erfc(-x / math.sqrt(2.0))
+
+
+@njit(inline="always")
+def _owens_t_unit(h, a, nodes, weights):
+    """T(h, a) for 0 <= a <= 1, by quadrature of its integral."""
+    total = 0.0
+    for q in range(nodes.size):
+        r = 1.0 + (a * nodes[q]) ** 2
+        total += weights[q] * math.exp(-0.5 * h * h * r) / r
+    return a * total / (2 * math.pi)
+
+
+@njit(inline="always")
+def _right_triangle(d, t, sigma, nodes, weights):
     """R(d, t), signed like d * t; zero where d = 0 (m on the edge line)."""
-    with np.errstate(divide="ignore", invalid="ignore"):
-        a = t / d
-        r = np.arctan(a) / (2 * np.pi) - owens_t(d / sigma, a)
-    return np.where(d == 0, 0.0, r)
+    if d == 0.0:
+        return 0.0
+    a = t / d
+    h, b = abs(d / sigma), abs(a)  # T is even in h and odd in a
+    if b <= 1.0:
+        T = _owens_t_unit(h, b, nodes, weights)
+    else:
+        ph, pbh = _phi(h), _phi(b * h)
+        T = 0.5 * (ph + pbh) - ph * pbh - _owens_t_unit(b * h, 1.0 / b, nodes, weights)
+    return math.atan(a) / (2 * math.pi) - math.copysign(T, a)
 
 
-def _triangle(s, e, medians, sigma):
-    """Signed probability of the triangle (m, s, e), positive when m is left of
-    s -> e. Shape (N, N): [i, j] has mean (medians[i], medians[j])."""
-    length = np.linalg.norm(e - s)
-    ux, uy = (e - s) / length
-    x, y = medians[:, None], medians[None, :]
-    d = (s[0] - x) * uy - (s[1] - y) * ux  # distance of m from the line, > 0 on its left
-    ts = (s[0] - x) * ux + (s[1] - y) * uy  # position of s along the line, 0 at the foot
-    return _right_triangles(d, ts + length, sigma) - _right_triangles(d, ts, sigma)
+@njit(cache=True, nogil=True, error_model="numpy")
+def _triangle_terms(segments, medians, sigma, nodes, weights, out):
+    """out[e, i, j] = signed probability of the triangle (m, s, e) for segment e =
+    (xs, ys, xe, ye) and m = (medians[i], medians[j]); positive when m is left of s -> e."""
+    for e in range(segments.shape[0]):
+        xs, ys, xe, ye = segments[e, 0], segments[e, 1], segments[e, 2], segments[e, 3]
+        length = math.hypot(xe - xs, ye - ys)
+        ux, uy = (xe - xs) / length, (ye - ys) / length
+        for i in range(medians.size):
+            for j in range(medians.size):
+                d = (xs - medians[i]) * uy - (ys - medians[j]) * ux  # > 0 when m is left
+                ts = (xs - medians[i]) * ux + (ys - medians[j]) * uy  # s on the line, 0 at the foot
+                out[e, i, j] = (_right_triangle(d, ts + length, sigma, nodes, weights)
+                                - _right_triangle(d, ts, sigma, nodes, weights))
+
+
+def triangle_terms(segments, medians, sigma):
+    """Signed triangle probabilities (m, s, e) of the segments (E, 4) = (xs, ys, xe, ye),
+    shape (E, N, N): [e, i, j] has mean (medians[i], medians[j]). Chunks of the edges
+    run in parallel threads."""
+    segments = np.ascontiguousarray(segments, dtype=np.float64).reshape(-1, 4)
+    medians = np.ascontiguousarray(medians, dtype=np.float64)
+    out = np.empty((len(segments), len(medians), len(medians)))
+    chunk = max(1, -(-len(segments) // (os.cpu_count() or 1)))
+    threads.in_chunks(lambda a, b: _triangle_terms(segments[a:b], medians, sigma, _T_NODES,
+                                                   _T_WEIGHTS, out[a:b]), len(segments), chunk)
+    return out
 
 
 def compute_ranking_probabilities(candidates, medians, deviation, progress=None):
@@ -119,19 +174,15 @@ def compute_ranking_probabilities(candidates, medians, deviation, progress=None)
     sigma = sigma_from_deviation(deviation)
     polygons, rankings = normal_cells(candidates, sigma)
     medians = np.asarray(medians, dtype=np.float64)
-
-    def cell_probability(poly):
-        edges = zip(poly, np.roll(poly, -1, axis=0))
-        return sum(_triangle(s, e, medians, sigma) for s, e in edges)
-
-    probs = np.empty((len(medians), len(medians), len(polygons)))
-    # owens_t releases the GIL, so cells are computed in parallel.
-    with ThreadPoolExecutor() as pool:
-        for r, cell in enumerate(pool.map(cell_probability, polygons)):
-            probs[..., r] = cell
-            if progress is not None:
-                progress(r + 1, len(polygons))
-    return rankings, np.clip(probs, 0.0, 1.0)
+    # every edge of every cell (shared edges twice) in one parallel call
+    segments = np.concatenate([np.hstack([poly, np.roll(poly, -1, axis=0)]) for poly in polygons])
+    terms = triangle_terms(segments, medians, sigma)
+    cells = np.repeat(np.arange(len(polygons)), [len(poly) for poly in polygons])
+    probs = np.zeros((len(polygons), len(medians), len(medians)))
+    np.add.at(probs, cells, terms)
+    if progress is not None:
+        progress(len(polygons), len(polygons))
+    return rankings, np.clip(np.moveaxis(probs, 0, -1), 0.0, 1.0)
 
 
 def ranking_probabilities(candidates, pixels, deviation, nodes=NODES,

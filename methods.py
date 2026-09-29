@@ -17,7 +17,13 @@ ties but the winner stays.) regions.py draws the borders as its zero set.
 """
 
 import numpy as np
+from numba import njit
 from scipy.spatial.distance import cdist
+
+import threads
+
+CHUNK = 4096  # points per task of the compiled loops (threads.py)
+_kernel = njit(cache=True, nogil=True, error_model="numpy")
 
 
 def voronoi(candidates: np.ndarray, pixels: int) -> np.ndarray:
@@ -28,28 +34,6 @@ def voronoi(candidates: np.ndarray, pixels: int) -> np.ndarray:
     points = np.stack(np.meshgrid(centres, centres, indexing="ij"), axis=-1)
     nearest = cdist(points.reshape(-1, 2), candidates).argmin(axis=1)
     return nearest.reshape(pixels, pixels)
-
-
-def _transfer_matrices(rankings: np.ndarray, dtype: np.dtype) -> np.ndarray:
-    """T[s, r, c] = 1 if c is the highest ranked candidate of ballot r that is
-    not in the eliminated set s (bit c of s set = c eliminated). Shape (2^C, R, C)."""
-    n_ballots, n_candidates = rankings.shape
-    states = np.arange(1 << n_candidates)
-    eliminated = ((states[:, None] >> np.arange(n_candidates)) & 1).astype(bool)
-    alive = ~eliminated[:, rankings]
-    choice = rankings[np.arange(n_ballots), alive.argmax(axis=-1)]
-    return np.eye(n_candidates, dtype=dtype)[choice]
-
-
-def _votes_by_state(
-    probs: np.ndarray, state: np.ndarray, transfer: np.ndarray
-) -> np.ndarray:
-    """First choice votes among remaining candidates; state: (pixels, pixels) bitmask."""
-    votes = np.empty((*probs.shape[:2], transfer.shape[-1]), dtype=probs.dtype)
-    for s in np.unique(state):
-        mask = state == s
-        votes[mask] = probs[mask] @ transfer[s]
-    return votes
 
 
 def _top_two(scores: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -69,6 +53,50 @@ def fptp(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
     return (probs @ first).argmax(axis=-1)
 
 
+@_kernel
+def _irv_points(rankings, probs, winner, margin):
+    """irv_margin for probs (P, R) into winner (P,) and margin (P,).
+
+    Every ballot type points to its highest ranked remaining candidate, so an
+    elimination only moves the ballots that pointed to the eliminated candidate:
+    at most R C steps per point in all rounds together.
+    """
+    n_ballots, n_candidates = rankings.shape
+    tally = np.empty(n_candidates)
+    alive = np.empty(n_candidates, dtype=np.bool_)
+    top = np.empty(n_ballots, dtype=np.int64)
+    for p in range(probs.shape[0]):
+        tally[:] = 0.0
+        alive[:] = True
+        for r in range(n_ballots):
+            top[r] = 0
+            tally[rankings[r, 0]] += probs[p, r]
+        gap = np.inf
+        for _ in range(n_candidates - 1):
+            # the two lowest tallies; ties go to the first candidate, like argmin
+            lowest, second = -1, -1
+            for c in range(n_candidates):
+                if not alive[c]:
+                    continue
+                if lowest < 0 or tally[c] < tally[lowest]:
+                    second, lowest = lowest, c
+                elif second < 0 or tally[c] < tally[second]:
+                    second = c
+            gap = min(gap, tally[second] - tally[lowest])
+            alive[lowest] = False
+            for r in range(n_ballots):
+                if rankings[r, top[r]] == lowest:
+                    k = top[r] + 1
+                    while not alive[rankings[r, k]]:
+                        k += 1
+                    top[r] = k
+                    tally[rankings[r, k]] += probs[p, r]
+        for c in range(n_candidates):
+            if alive[c]:
+                winner[p] = c
+        margin[p] = gap
+
+
 def irv_margin(rankings: np.ndarray, probs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Instant runoff: repeatedly eliminate the candidate with the fewest votes.
 
@@ -78,18 +106,14 @@ def irv_margin(rankings: np.ndarray, probs: np.ndarray) -> tuple[np.ndarray, np.
     the winner can change only where some elimination flips, and the gap is 0 on
     both sides of such a flip.
     """
-    n_candidates = rankings.shape[1]
-    candidate_bits = 1 << np.arange(n_candidates)
-    transfer = _transfer_matrices(rankings, probs.dtype)
-    state = np.zeros(probs.shape[:2], dtype=np.int64)
-    margin = np.full(probs.shape[:2], np.inf, dtype=probs.dtype)
-    for _ in range(n_candidates - 1):
-        votes = _votes_by_state(probs, state, transfer)
-        votes[(state[..., None] & candidate_bits) != 0] = np.inf
-        lowest = np.partition(votes, 1, axis=-1)
-        np.minimum(margin, lowest[..., 1] - lowest[..., 0], out=margin)
-        state |= candidate_bits[votes.argmin(axis=-1)]
-    return ((state[..., None] & candidate_bits) == 0).argmax(axis=-1), margin
+    shape = probs.shape[:-1]
+    flat = np.ascontiguousarray(probs.reshape(-1, probs.shape[-1]))
+    rankings = np.ascontiguousarray(rankings, dtype=np.int64)
+    winner = np.empty(len(flat), dtype=np.int64)
+    margin = np.empty(len(flat))
+    threads.in_chunks(lambda a, b: _irv_points(rankings, flat[a:b], winner[a:b], margin[a:b]),
+                      len(flat), CHUNK)
+    return winner.reshape(shape), margin.reshape(shape)
 
 
 def irv(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:

@@ -32,6 +32,36 @@ def _shares(rankings, probs):
             "condorcet_cycle": (d,)}
 
 
+def _irv_reference(rankings, probs):
+    """IRV with 0/1 transfer matrices, one matrix product per round and set of
+    eliminated candidates: the numpy version the compiled kernel replaced."""
+    n = rankings.shape[1]
+    bits = 1 << np.arange(n)
+    eliminated = ((np.arange(1 << n)[:, None] >> np.arange(n)) & 1).astype(bool)
+    choice = rankings[np.arange(len(rankings)), (~eliminated[:, rankings]).argmax(axis=-1)]
+    transfer = np.eye(n, dtype=probs.dtype)[choice]
+    state = np.zeros(probs.shape[:2], dtype=np.int64)
+    margin = np.full(probs.shape[:2], np.inf)
+    for _ in range(n - 1):
+        votes = np.empty((*probs.shape[:2], n), dtype=probs.dtype)
+        for s in np.unique(state):
+            votes[state == s] = probs[state == s] @ transfer[s]
+        votes[(state[..., None] & bits) != 0] = np.inf
+        lowest = np.partition(votes, 1, axis=-1)
+        margin = np.minimum(margin, lowest[..., 1] - lowest[..., 0])
+        state |= bits[votes.argmin(axis=-1)]
+    return ((state[..., None] & bits) == 0).argmax(axis=-1), margin
+
+
+@pytest.mark.parametrize("candidates", [CANDIDATES, SEVEN], ids=["five", "seven"])
+def test_irv_kernel_matches_transfer_matrices(candidates):
+    rankings, probs = ranking_cells.ranking_probabilities(candidates, 80, 0.2)
+    winner, margin = methods.irv_margin(rankings, probs)
+    expected_winner, expected_margin = _irv_reference(rankings, probs)
+    np.testing.assert_array_equal(winner, expected_winner)
+    np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-6)  # float32 sums
+
+
 @pytest.mark.parametrize("candidates", [CANDIDATES, SEVEN], ids=["five", "seven"])
 def test_margin_variants_pick_the_same_winners(candidates):
     rankings, probs = ranking_cells.ranking_probabilities(candidates, 60, 0.2)

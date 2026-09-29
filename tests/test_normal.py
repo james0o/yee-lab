@@ -3,8 +3,9 @@
 For voters N(m, sigma^2 I) the share preferring c_i to c_j has a closed form,
 Phi(distance of m from their bisector / sigma), for bisectors in every direction
 (the Beta model only has one for bisectors parallel to an axis). It follows that
-Condorcet methods draw the Voronoi diagram. Also checked against Monte Carlo
-sampling, and interpolation from Chebyshev nodes against exact probabilities.
+Condorcet methods draw the Voronoi diagram. Also checked: the compiled Owen's T
+against scipy's, the shares against Monte Carlo sampling, and interpolation from
+Chebyshev nodes against exact probabilities.
 """
 
 import itertools
@@ -12,7 +13,7 @@ import itertools
 import numpy as np
 import pytest
 from scipy.integrate import quad
-from scipy.special import ndtr
+from scipy.special import ndtr, owens_t
 from scipy.stats import norm
 
 from methods import CYCLE, condorcet_cycle, schulze, voronoi
@@ -24,6 +25,7 @@ from normal import (
     node_medians,
     normal_cells,
     sigma_from_deviation,
+    triangle_terms,
 )
 from ranking_cells import pixel_medians
 
@@ -48,6 +50,29 @@ def test_sigma_gives_requested_deviation():
     sigma = sigma_from_deviation(DEVIATION)
     deviation, _ = quad(lambda x: abs(x) * norm.pdf(x, scale=sigma), -np.inf, np.inf)
     assert deviation == pytest.approx(DEVIATION, abs=1e-10)
+
+
+@pytest.mark.parametrize("sigma", [0.063, 0.25, 0.5])
+def test_triangles_match_scipy_owens_t(sigma):
+    """The compiled Owen's T (quadrature and the a > 1 identity) against scipy's."""
+    rng = np.random.default_rng(0)
+    segments = rng.uniform(-1, 2, (30, 4))
+    segments[:5, 1] = segments[:5, 3]  # horizontal
+    segments[5:10, 0] = segments[5:10, 2]  # vertical
+    segments[10:13, :2] = MEDIANS[[2, 9, 15], None]  # from a pixel centre (d = 0 there)
+    medians = MEDIANS
+    for (xs, ys, xe, ye), got in zip(segments, triangle_terms(segments, medians, sigma)):
+        length = np.hypot(xe - xs, ye - ys)
+        ux, uy = (xe - xs) / length, (ye - ys) / length
+        x, y = medians[:, None], medians[None, :]
+        d = (xs - x) * uy - (ys - y) * ux
+        ts = (xs - x) * ux + (ys - y) * uy
+        with np.errstate(divide="ignore", invalid="ignore"):
+            def right(t):
+                r = np.arctan(t / d) / (2 * np.pi) - owens_t(d / sigma, t / d)
+                return np.where(d == 0, 0.0, r)
+            expected = right(ts + length) - right(ts)
+        np.testing.assert_allclose(got, expected, rtol=0, atol=1e-14)
 
 
 @pytest.mark.parametrize("candidates", [CANDIDATES, AXIS_CANDIDATES])

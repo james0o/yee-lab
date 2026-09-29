@@ -45,15 +45,24 @@ def test_scalar_and_walls(betas):
     assert table.cdf(0.3).shape == (len(table),)
 
 
-@pytest.mark.parametrize("edge", [
-    ((0.1, 0.2), (0.7, 0.6)),  # interior: u = F(x)
-    ((0.2, 0.0), (0.5, 0.6)),  # from the bottom wall: v = G(y)
-    ((0.0, 0.3), (0.6, 1.0)),  # left wall to top wall: split
-    ((0.2, 0.4), (0.8, 0.4)),  # horizontal: closed form
-], ids=["interior", "y-wall", "both-walls", "horizontal"])
-def test_edge_integrals_match_exact(betas, edge):
+EDGES = {
+    "interior": ((0.1, 0.2), (0.7, 0.6)),     # u = F(x)
+    "y-wall": ((0.2, 0.0), (0.5, 0.6)),       # from the bottom wall: v = G(y)
+    "both-walls": ((0.0, 0.3), (0.6, 1.0)),   # left wall to top wall: split
+    "horizontal": ((0.2, 0.4), (0.8, 0.4)),   # closed form
+    "vertical": ((0.3, 0.1), (0.3, 0.9)),     # dx = 0
+    "corner": ((0.0, 0.0), (0.7, 0.4)),       # from a corner: v form, not split
+    "backwards": ((1.0, 0.2), (0.0, 0.9)),    # wall to wall, right to left
+}
+
+
+def test_edge_integrals_match_exact(betas):
+    """The compiled edge integrals of the tables against ranking_cells._edge_integral
+    with scipy, for every kind of edge at once."""
     exact, table = betas
-    s, e = np.array(edge, dtype=np.float64)
     nodes, weights = np.polynomial.legendre.leggauss(24)
-    np.testing.assert_allclose(_edge_integral(s, e, table, nodes, weights),
-                               _edge_integral(s, e, exact, nodes, weights), rtol=0, atol=1e-7)
+    edges = np.array(list(EDGES.values()), dtype=np.float64)
+    got = table.edge_terms(edges.reshape(-1, 4), nodes, weights)
+    for name, (s, e), term in zip(EDGES, edges, got):
+        np.testing.assert_allclose(term, _edge_integral(s, e, exact, nodes, weights),
+                                   rtol=0, atol=1e-7, err_msg=name)

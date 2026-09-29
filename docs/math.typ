@@ -659,9 +659,15 @@ where $rho > 0$ when $m$ lies left of the edge, i.e. inside a CCW cell. Then
 $ P_plus.minus (m, s, e) = R(rho, t_e) - R(rho, t_s), $
 
 and $0$ when $rho = 0$ (the triangle degenerates). For the $N times N$ grid of pixel
-centres $rho$, $t_s$, $t_e$ are outer sums, so each edge costs two `owens_t` evaluations
-per pixel; the cells are computed in parallel threads (`owens_t` releases the GIL).
-Five candidates take about $0.1$ s on $49 times 49$ nodes.
+centres $rho$, $t_s$, $t_e$ are outer sums, so each edge costs two evaluations of Owen's
+T per pixel. They are compiled (@sec-compiled): for $0 <= a <= 1$ the integral above with
+12-point Gauss–Legendre, which agrees with scipy's `owens_t` to $10^(-16)$ for every $h$
+(the integrand is analytic in $x$), and for $a > 1$ the identity
+
+$ T(h, a) + T(a h, 1 slash a) = 1/2 (Phi(h) + Phi(a h)) - Phi(h) Phi(a h) quad (h, a >= 0), $
+
+which leaves $T(a h, 1 slash a)$ with $1 slash a < 1$. Five candidates take about
+$0.02$ s on $49 times 49$ nodes.
 
 === Nodes
 
@@ -732,9 +738,10 @@ $ s_i^S = sum_(r: "first of" r "outside" S "is" i) P(r) . $
 The candidate with the smallest share is added to $S$, and after $C - 1$ rounds the
 remaining candidate wins. The rankings are complete, so no ballot is ever exhausted and
 a candidate with a majority is never eliminated: running to the end gives the same
-winner as stopping at a majority. For each of the $2^C$ sets $S$ a 0/1 transfer matrix
-$T_S$ of shape $R times C$ is precomputed, so a round is one product $P thin T_S$ for
-all pixels with the same $S$.
+winner as stopping at a majority. The rounds run in a compiled loop over the pixels
+(@sec-compiled): every ranking points to its highest ranked candidate outside $S$, and
+eliminating a candidate moves only the rankings that point to it. All $C - 1$ rounds
+together take at most $R C$ steps per pixel.
 
 == Borda count (`borda`)
 
@@ -1625,8 +1632,9 @@ Almost all of the time goes to the shares at the $N times N$ nodes, which do not
 on the number of pixels at all. Drawing the diagram as curves instead of pixels
 (@sec-zero-sets) is the right output, but on its own it saves little. The speed comes
 from computing fewer integrals (@sec-needs), keeping those a drag does not change
-(@sec-edge-cache), and making each one cheaper (@sec-tables). This chapter describes
-`shares.py`, `beta_tables.py` and `regions.py`, which `main.py` uses for the UI.
+(@sec-edge-cache), making each one cheaper (@sec-tables), and compiling the loops that
+remain (@sec-compiled). This chapter describes `shares.py`, `beta_tables.py` and
+`regions.py`, which `main.py` uses for the UI.
 `plot.py`, `docs/figures.py` and the tests of @sec-validation still use the pipeline of
 @ch-compute.
 
@@ -1676,39 +1684,82 @@ $Q N^2 approx 58 thin 000$ calls of `betainc` at about 400 ns each. The $N$ Beta
 distributions of the nodes depend only on $D$ and the spread rule, so their CDFs can be
 tabulated once.
 
-The table is kept in logit–logit coordinates, $s = logit y$ and
-$lambda(s) = logit G(expit s)$, with
+The CDF is tabulated against $s = logit y$, with the exact slope
 
-$ lambda'(s) = (g(y) thin y (1 - y)) / (G(y) (1 - G(y))) . $
+$ (dif G) / (dif s) = g(y) thin y (1 - y) . $
 
-Near a wall $G(y) = y^a slash (a B(a, b)) (1 + O(y))$, so $lambda(s) = a s + "const" + o(1)$
-as $s -> -oo$, and $lambda(s) approx b s$ as $s -> +oo$. $lambda$ is smooth and
-asymptotically linear even for $a, b < 1$, where the density itself is infinite. A cubic
-Hermite interpolant with the exact slope $lambda'$ on a uniform grid ($s in [-40, 40]$,
-step $0.02$) is therefore accurate everywhere. Below the table ($y < 4 dot 10^(-18)$)
-the power law $y^a slash (a B(a, b))$ itself is used, which is exact to double precision
-there; above it there is no double $y < 1$. Two numerical details matter:
+Near a wall $G(y) = y^a slash (a B(a, b)) (1 + O(y)) = e^(a s) slash (a B(a, b)) (1 + O(y))$:
+an exponential in $s$, smooth even for $a, b < 1$, where the density itself is infinite.
+A cubic Hermite interpolant with the exact slope on a uniform grid ($s in [-40, 40]$,
+step $0.01$) is therefore accurate everywhere ($4 dot 10^(-9)$ for the narrowest voters).
+Below the table ($y < 4 dot 10^(-18)$) the power law $y^a slash (a B(a, b))$ itself is
+used, which is exact to double precision there; above it there is no double $y < 1$.
+(A table of $logit G$ instead is smooth enough for a step of $0.02$, but evaluating it
+costs an `exp` per point and node, which was most of the time of the compiled kernel.)
+Two numerical details matter:
 
 - Of $G$ and $1 - G$ the smaller is computed directly and the other as its complement.
   Using $1 - G(y) = G'(1 - y)$ with the mirrored Beta is not enough: $1 - y$ rounds to $1$
   below $y approx 10^(-16)$, where $G approx y^a$ is still $0.02$ for $a = 0.1$.
 - The same grid in $s$ serves all nodes, so a point's interval and its position in it
   are computed once and reused for all $N$ nodes. The remaining work per point and node
-  is a gather of four coefficients, a cubic and $1 slash (1 + e^(-lambda))$.
+  is one cubic, with the coefficients of all nodes in one interval stored together.
 
-The quantile $F^(-1)$ has the inverse table, $logit x$ against $logit u$ with slope
-$1 slash lambda'$, for $u in [expit(-30), expit(30)]$. Outside it the table is extended
-linearly. A $u$-interval of width $w$ changes an edge integral by at most $w$, because
+The quantile $F^(-1)$ has a table in logit–logit coordinates, $logit x$ against
+$logit u$, for $u in [expit(-30), expit(30)]$ with step $0.02$. It is asymptotically
+linear at both ends ($x approx (a B u)^(1 slash a)$ near $0$), so outside the table it is
+extended linearly. A $u$-interval of width $w$ changes an edge integral by at most $w$, because
 the integrand is bounded by 1, so values below $10^(-13)$ do not matter.
 
 Over all offered deviations and spread rules the tables agree with `betainc` to
-$2 dot 10^(-9)$ and with `betaincinv` to $2 dot 10^(-8)$ in $x$ (tests:
+$4 dot 10^(-9)$ and with `betaincinv` to $2 dot 10^(-8)$ in $x$ (tests:
 $10^(-8)$ and $10^(-7)$), and edge integrals agree with the exact ones to
-$3 dot 10^(-9)$. An edge takes 1.3 ms instead of 23 ms (2.8 ms if it is split). A table
-is built in about 0.2 s, in parallel over the nodes.
+$5 dot 10^(-9)$. With the compiled kernel of @sec-compiled an edge takes about 0.2 ms
+instead of 23 ms. A table is built in about 0.2 s, in parallel over the nodes.
 
-Threads help little here: numpy holds the interpreter lock between its many small
-operations, and 8 threads run the edges only about 1.5 times faster than one.
+== Compiled kernels (numba) <sec-compiled>
+
+With the tables in numpy an edge still took 1.3 ms: about 13 passes over temporary
+arrays of $Q N^2$ elements, and threads ran edges only 1.5 times faster than one, since
+numpy holds the interpreter lock between its many small operations. The loops that
+remain are therefore compiled with numba:
+
+- the edge integrals of @sec-edges on the tables, every form of the edge (vertical,
+  horizontal, split, $u$ and $v$) in one kernel for a whole batch of edges; the lookup,
+  the cubic and the quadrature sum happen in one pass (about 2 ns per point and node);
+- the triangles of normal voters with Owen's T (@sec-normal);
+- the clipping of a polygon by a bisector (`ranking_cells`), which with a vectorized
+  test of which cells a bisector crosses takes the arrangement of 8 candidates from
+  120 ms to 5 ms;
+- the rounds of IRV (@ch-methods).
+
+The kernels release the interpreter lock but are not parallel themselves; `threads.py`
+runs chunks of their work (edges, pixels) in a pool of threads. A kernel with numba's
+own parallel loops would abort, with numba's default threading layer, as soon as two
+threads call it at once, as two requests of the web UI can. Two details decided the
+speed: indexing the coefficient table element by element (an array view per point and
+node costs more than the cubic), and not calling `exp` in the innermost loop (this
+numba has no vectorized `exp`), hence the table of $G$ itself. The first run compiles
+the kernels; numba caches them on disk, and the UI loads them at start.
+
+Compute per drag update (in process, best of several runs, $G = 160$), with the kernels
+and before them:
+
+#align(center, table(
+  columns: 6,
+  align: (left, right, right, right, right, right),
+  stroke: none,
+  table.hline(),
+  [], [candidates], [FPTP], [Borda], [Schulze], [IRV],
+  table.hline(stroke: 0.5pt),
+  [Beta, $D = 0.2$], [5], [5 (12) ms], [11 (23) ms], [15 (26) ms], [14 (170) ms],
+  [], [8], [7 (27) ms], [22 (41) ms], [30 (61) ms], [79 (984) ms],
+  [Beta, $D = 0.05$], [5], [7 (28) ms], [17 (48) ms], [18 (48) ms], [24 (366) ms],
+  [], [8], [10 (52) ms], [31 (95) ms], [39 (96) ms], [162 (2308) ms],
+  [normal, $D = 0.2$], [5], [6 ms], [10 ms], [14 ms], [31 ms],
+  [], [8], [9 ms], [23 ms], [27 ms], [118 ms],
+  table.hline(),
+))
 
 == Borders as zero sets (`methods.py`, `regions.py`) <sec-zero-sets>
 
@@ -1783,8 +1834,9 @@ their cells are the polygons of @sec-needs.
 == Timings
 
 Round trip of one update over HTTP while dragging one candidate ($G = 160$; median of
-15 steps, $D = 0.2$, `rms` for Beta). Timings on the test machine vary by up to a factor
-of two between runs.
+15 steps, $D = 0.2$, `rms`), which adds a few milliseconds to the compute times of
+@sec-compiled. Timings on the test machine, a laptop with performance and efficiency
+cores, vary by up to a factor of three between runs.
 
 #align(center, table(
   columns: 7,
@@ -1793,20 +1845,15 @@ of two between runs.
   table.hline(),
   [], [candidates], [FPTP], [Borda], [Condorcet], [Schulze], [IRV],
   table.hline(stroke: 0.5pt),
-  [Beta], [5], [12 ms], [25 ms], [19 ms], [18 ms], [134 ms],
-  [], [8], [21 ms], [33 ms], [33 ms], [33 ms], [773 ms],
-  [normal], [5], [16 ms], [14 ms], [16 ms], [17 ms], [86 ms],
-  [], [8], [18 ms], [23 ms], [31 ms], [31 ms], [506 ms],
+  [Beta], [5], [13 ms], [14 ms], [16 ms], [16 ms], [17 ms],
+  [], [8], [10 ms], [21 ms], [29 ms], [26 ms], [75 ms],
   table.hline(),
 ))
 
-The narrowest Beta voters ($D = 0.05$) use $2 N - 1 = 97$ nodes (@sec-interpolation),
-which makes every edge four times as expensive: updates take 25–160 ms except for IRV.
-IRV is the exception throughout. It needs every cell of the arrangement, and a drag
-changes about two thirds of their edges.
-
-All edges of the arrangement lie on the $C (C - 1) slash 2$ bisectors, though. If the
-integral of $omega$ along each bisector were tabulated once, as a function of the
-position on it, every edge would be a difference of two values. The cost would then
-grow with the number of lines (28 for 8 candidates) instead of edges (468). This is
-not implemented yet.
+IRV is still the slowest: it needs every cell of the arrangement, a drag changes about
+two thirds of their edges, and the shares of about 300 rankings are interpolated to the
+grid. All edges of the arrangement lie on the $C (C - 1) slash 2$ bisectors, though. If
+the integral of $omega$ along each bisector were tabulated once, as a function of the
+position on it, every edge would be a difference of two values, and the cost would grow
+with the number of lines (28 for 8 candidates) instead of edges (468). This is not
+implemented.

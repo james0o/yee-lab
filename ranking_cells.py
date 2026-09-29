@@ -36,6 +36,7 @@ the pixels (barycentric formula). The points cluster towards 0 and 1, where the
 Beta parameters change fastest; the error decreases exponentially with NODES.
 """
 
+import math
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
@@ -43,6 +44,7 @@ from pathlib import Path
 from typing import Literal, get_args
 
 import numpy as np
+from numba import njit
 from scipy.optimize import brentq, root
 from scipy.special import betainc, betaln, expit, logit
 
@@ -262,29 +264,46 @@ def interpolate_to_pixels(probs, medians, pixels, transform=logit):
 
 # ---------------------------------------------------------------- Arrangement
 
-def _clip(poly, normal, offset):
-    """Part of convex CCW polygon `poly` with normal . p <= offset."""
-    vals = poly @ normal - offset
-    vals[np.abs(vals) < EPS] = 0.0
-    out = []
-    n = len(poly)
+@njit(cache=True, error_model="numpy")
+def _clip_kernel(poly, nx, ny, offset):
+    """_clip with an empty (0, 2) array for None; compiled, since the arrangement
+    of 8 candidates clips a few thousand small polygons."""
+    n = poly.shape[0]
+    vals = np.empty(n)
     for k in range(n):
-        p, q = poly[k], poly[(k + 1) % n]
-        vp, vq = vals[k], vals[(k + 1) % n]
+        v = poly[k, 0] * nx + poly[k, 1] * ny - offset
+        vals[k] = 0.0 if abs(v) < EPS else v
+    out = np.empty((2 * n, 2))
+    m = 0
+    for k in range(n):
+        j = (k + 1) % n
+        vp, vq = vals[k], vals[j]
         if vp <= 0:
-            out.append(p)
+            out[m] = poly[k]
+            m += 1
         if (vp < 0 < vq) or (vq < 0 < vp):
-            out.append(p + vp / (vp - vq) * (q - p))
-    if len(out) < 3:
-        return None
-    out = np.array(out)
-    keep = np.linalg.norm(out - np.roll(out, -1, axis=0), axis=1) > 1e-10
-    out = out[keep]
-    if len(out) < 3:
-        return None
-    x, y = out[:, 0], out[:, 1]
-    area = 0.5 * np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y)
-    return out if area > 1e-14 else None
+            f = vp / (vp - vq)
+            out[m, 0] = poly[k, 0] + f * (poly[j, 0] - poly[k, 0])
+            out[m, 1] = poly[k, 1] + f * (poly[j, 1] - poly[k, 1])
+            m += 1
+    # drop vertices that repeat the next one
+    keep = np.empty(m, dtype=np.bool_)
+    for k in range(m):
+        j = (k + 1) % m
+        keep[k] = math.hypot(out[k, 0] - out[j, 0], out[k, 1] - out[j, 1]) > 1e-10
+    out = out[:m][keep]
+    m = out.shape[0]
+    area = 0.0
+    for k in range(m):
+        j = (k + 1) % m
+        area += out[k, 0] * out[j, 1] - out[j, 0] * out[k, 1]
+    return out if m >= 3 and 0.5 * area > 1e-14 else out[:0]
+
+
+def _clip(poly, normal, offset):
+    """Part of convex CCW polygon `poly` with normal . p <= offset, or None."""
+    out = _clip_kernel(poly, float(normal[0]), float(normal[1]), float(offset))
+    return out if len(out) else None
 
 
 def ranking_cells(candidates):
@@ -301,8 +320,16 @@ def ranking_cells(candidates):
             # closer to i  <=>  2 (c_j - c_i) . p < |c_j|^2 - |c_i|^2
             normal = 2 * (candidates[j] - candidates[i])
             offset = candidates[j] @ candidates[j] - candidates[i] @ candidates[i]
+            # Most polygons lie on one side of the bisector (up to EPS) and stay whole;
+            # one product over all vertices finds the few it crosses.
+            vals = np.concatenate(polygons) @ normal - offset
+            starts = np.cumsum([0] + [len(poly) for poly in polygons[:-1]])
+            lowest, highest = np.minimum.reduceat(vals, starts), np.maximum.reduceat(vals, starts)
             split = []
-            for poly in polygons:
+            for poly, low, high in zip(polygons, lowest, highest):
+                if high < EPS or low > -EPS:
+                    split.append(poly)
+                    continue
                 for part in (_clip(poly, normal, offset), _clip(poly, -normal, -offset)):
                     if part is not None:
                         split.append(part)
@@ -332,9 +359,9 @@ def _touches_x(p):
 def _edge_integral(s, e, beta, nodes, weights):
     """Integral of omega = -f(x) G(y) dx over the segment s -> e.
 
-    beta: the CDF and quantile of the pixels' Beta distributions
-    (beta_tables.ExactBeta or TabulatedBeta). Result has shape (pixels, pixels):
-    [i, j] uses X-params of pixel i and Y-params of pixel j.
+    beta: the CDF and quantile of the pixels' Beta distributions (beta_tables.ExactBeta;
+    TabulatedBeta.edge_terms is this function compiled for the tables). Result has
+    shape (pixels, pixels): [i, j] uses X-params of pixel i and Y-params of pixel j.
     """
     (xs, ys), (xe, ye) = s, e
     pixels = len(beta)
@@ -360,8 +387,7 @@ def _edge_integral(s, e, beta, nodes, weights):
         w = 0.5 * (ue - us)[:, None] * weights
         x = beta.ppf(u)
         y = np.clip(ys + (x - xs) * (ye - ys) / (xe - xs), 0.0, 1.0)
-        G = beta.cdf(y)  # G[j, i, q] = G_j(y[i, q])
-        return -np.einsum("iq,jiq->ij", w, G, optimize=True)
+        return -beta.cdf_sums(y, w)  # [i, j] = sum_q w[i, q] G_j(y[i, q])
 
     # v = G_j(y): int F_i(l^-1(G_j^-1(v))) dv, then omega = omega' - d(F G)
     vs, ve = beta.cdf(ys), beta.cdf(ye)
@@ -369,29 +395,21 @@ def _edge_integral(s, e, beta, nodes, weights):
     w = 0.5 * (ve - vs)[:, None] * weights
     y = beta.ppf(v)
     x = np.clip(xs + (y - ys) * (xe - xs) / (ye - ys), 0.0, 1.0)
-    F = beta.cdf(x)  # F[i, j, q] = F_i(x[j, q])
-    omega_prime = np.einsum("jq,ijq->ij", w, F, optimize=True)
+    omega_prime = beta.cdf_sums(x, w).T  # [i, j] = sum_q w[j, q] F_i(x[j, q])
     FG_end = np.outer(beta.cdf(xe), ve)
     FG_start = np.outer(beta.cdf(xs), vs)
     return omega_prime - (FG_end - FG_start)
 
 # ---------------------------------------------------------------- Probabilities
 
-def compute_ranking_probabilities(candidates, params, quad_nodes=QUAD_NODES, progress=None,
-                                  edge_integral=None):
+def compute_ranking_probabilities(candidates, params, quad_nodes=QUAD_NODES, progress=None):
     """Returns (rankings (R, C), probabilities (pixels, pixels, R)).
 
     progress: optional callable(done, total), called after each edge integral.
-    edge_integral: optional callable(start, end) -> (pixels, pixels) replacing the
-    exact one, e.g. the cached, tabulated one of shares.py.
     """
     polygons, rankings = ranking_cells(candidates)
-    if edge_integral is None:
-        beta = ExactBeta(params)
-        nodes, weights = np.polynomial.legendre.leggauss(quad_nodes)
-
-        def edge_integral(start, end):
-            return _edge_integral(start, end, beta, nodes, weights)
+    beta = ExactBeta(params)
+    nodes, weights = np.polynomial.legendre.leggauss(quad_nodes)
 
     def key(p):
         return (round(float(p[0]), 9), round(float(p[1]), 9))
@@ -412,7 +430,7 @@ def compute_ranking_probabilities(candidates, params, quad_nodes=QUAD_NODES, pro
     lock = threading.Lock()
 
     def integrate(start, end, uses):
-        integral = edge_integral(start, end)
+        integral = _edge_integral(start, end, beta, nodes, weights)
         with lock:
             for r, sign in uses:
                 probs[..., r] += sign * integral
