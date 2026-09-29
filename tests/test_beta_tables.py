@@ -1,4 +1,4 @@
-"""Checks of the tabulated Beta CDF and quantile (beta_tables.py).
+"""Checks of the tabulated Beta CDF and quantile (margin/beta_tables.py).
 
 The tables are compared with scipy over the whole range of doubles, for the node
 distributions the web UI uses (the extremes of the deviation slider and every spread
@@ -9,10 +9,10 @@ import numpy as np
 import pytest
 from scipy.special import expit
 
-from yeelab.beta_tables import ExactBeta, TabulatedBeta
-from yeelab.pixels.beta import _edge_integral
+from yeelab.margin.beta_tables import TabulatedBeta
+from yeelab.margin.shares import PIXELS, node_count
+from yeelab.pixels.beta import ExactBeta, _edge_integral
 from yeelab.ranking_cells import SPREADS, node_params
-from yeelab.shares import PIXELS, node_count
 
 # every double y in (0, 1), including the tails below the table, and both walls
 POINTS = np.concatenate([expit(np.linspace(-745, 37, 4001)), [0.0, 1.0]])

@@ -16,7 +16,6 @@ from scipy.integrate import quad
 from scipy.special import ndtr, owens_t
 from scipy.stats import norm
 
-from yeelab.methods import CYCLE
 from yeelab.normal import (
     BOX,
     NODES,
@@ -28,6 +27,7 @@ from yeelab.normal import (
 from yeelab.pixels.methods import condorcet_cycle, schulze, voronoi
 from yeelab.pixels.normal import compute_ranking_probabilities, interpolate_to_pixels
 from yeelab.ranking_cells import pixel_medians
+from yeelab.voting import CYCLE
 
 CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
 PIXELS = 20

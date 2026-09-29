@@ -13,12 +13,8 @@ ties but the winner stays.) regions.py draws the borders as its zero set.
 """
 
 import numpy as np
-from numba import njit
 
-from yeelab import threads
-
-CHUNK = 4096  # points per task of the compiled loops (threads.py)
-_kernel = njit(cache=True, nogil=True, error_model="numpy")
+from yeelab.voting import CYCLE, irv_rounds
 
 
 def _top_two(scores: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -32,76 +28,16 @@ def fptp_margin(first: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return _top_two(first)
 
 
-@_kernel
-def _irv_points(rankings, probs, winner, margin):
-    """irv_margin for probs (P, R) into winner (P,) and margin (P,).
-
-    Every ballot type points to its highest ranked remaining candidate, so an
-    elimination only moves the ballots that pointed to the eliminated candidate:
-    at most R C steps per point in all rounds together.
-    """
-    n_ballots, n_candidates = rankings.shape
-    tally = np.empty(n_candidates)
-    alive = np.empty(n_candidates, dtype=np.bool_)
-    top = np.empty(n_ballots, dtype=np.int64)
-    for p in range(probs.shape[0]):
-        tally[:] = 0.0
-        alive[:] = True
-        for r in range(n_ballots):
-            top[r] = 0
-            tally[rankings[r, 0]] += probs[p, r]
-        gap = np.inf
-        for _ in range(n_candidates - 1):
-            # the two lowest tallies; ties go to the first candidate, like argmin
-            lowest, second = -1, -1
-            for c in range(n_candidates):
-                if not alive[c]:
-                    continue
-                if lowest < 0 or tally[c] < tally[lowest]:
-                    second, lowest = lowest, c
-                elif second < 0 or tally[c] < tally[second]:
-                    second = c
-            gap = min(gap, tally[second] - tally[lowest])
-            alive[lowest] = False
-            for r in range(n_ballots):
-                if rankings[r, top[r]] == lowest:
-                    k = top[r] + 1
-                    while not alive[rankings[r, k]]:
-                        k += 1
-                    top[r] = k
-                    tally[rankings[r, k]] += probs[p, r]
-        for c in range(n_candidates):
-            if alive[c]:
-                winner[p] = c
-        margin[p] = gap
-
-
 def irv_margin(rankings: np.ndarray, probs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Instant runoff: repeatedly eliminate the candidate with the fewest votes.
-
-    Ballots are complete rankings, so a candidate with a majority is never
-    eliminated; eliminating until one candidate remains gives the IRV winner.
-    The margin is the smallest gap between the two lowest tallies of any round:
-    the winner can change only where some elimination flips, and the gap is 0 on
-    both sides of such a flip.
-    """
-    shape = probs.shape[:-1]
-    flat = np.ascontiguousarray(probs.reshape(-1, probs.shape[-1]))
-    rankings = np.ascontiguousarray(rankings, dtype=np.int64)
-    winner = np.empty(len(flat), dtype=np.int64)
-    margin = np.empty(len(flat))
-    threads.in_chunks(lambda a, b: _irv_points(rankings, flat[a:b], winner[a:b], margin[a:b]),
-                      len(flat), CHUNK)
-    return winner.reshape(shape), margin.reshape(shape)
+    """Instant runoff on the whole profile; the margin is the smallest gap between the
+    two lowest tallies of any round (voting.irv_rounds)."""
+    return irv_rounds(rankings, probs)
 
 
 def borda_margin(d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Borda count on pairwise shares: a ballot gives c one point per candidate
     ranked below c, so c scores sum_e d[..., c, e]."""
     return _top_two(d.sum(axis=-1))
-
-
-CYCLE = -1  # winner where there is no Condorcet winner
 
 
 def condorcet_margin(d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

@@ -27,6 +27,9 @@ dev = [
 
 [tool.uv.build-backend]
 module-name = "yeelab"  # the project is yee-lab, but a package name cannot have a hyphen
+# output of the pixel pipeline, not part of the package
+source-exclude = ["src/yeelab/pixels/cache", "src/yeelab/pixels/plots"]
+wheel-exclude = ["yeelab/pixels/cache", "yeelab/pixels/plots"]
 
 [tool.fastapi]
 entrypoint = "yeelab.web.app:app"

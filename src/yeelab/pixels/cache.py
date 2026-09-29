@@ -8,8 +8,8 @@ from typing import Any
 import numpy as np
 
 CACHE_VERSION = 3
-# cache/normal/<file>.npz, cache/beta/<spread>/<file>.npz
-DEFAULT_CACHE_ROOT = Path("cache")
+# pixels/cache/normal/<file>.npz, pixels/cache/beta/<spread>/<file>.npz
+DEFAULT_CACHE_ROOT = Path(__file__).parent / "cache"
 
 
 def value_token(value: float) -> str:

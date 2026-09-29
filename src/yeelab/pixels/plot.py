@@ -1,4 +1,4 @@
-"""Yee diagrams as PNGs in plots/: uv run python -m yeelab.pixels.plot -h."""
+"""Yee diagrams as PNGs in pixels/plots/: uv run python -m yeelab.pixels.plot -h."""
 
 import time
 from functools import partial
@@ -23,10 +23,10 @@ from rich.progress import (
 )
 
 from yeelab.distributions import Distribution
-from yeelab.methods import CYCLE
 from yeelab.pixels import beta, normal
 from yeelab.pixels.methods import METHODS, voronoi
 from yeelab.ranking_cells import NODES, SPREAD, Spread, effective_nodes
+from yeelab.voting import CYCLE
 
 PIXELS = 400  # per axis, default of --pixels
 DEVIATION = 0.2  # default of --deviation
@@ -36,7 +36,7 @@ CANDIDATES = np.array([
     [0.35,0.3],
     [0.5, 0.5],
     [0.3, 0.7]], dtype=np.float64)
-PLOTS = Path("plots")
+PLOTS = Path(__file__).parent / "plots"
 DIAGRAMS = ["voronoi", *METHODS]  # voronoi needs no voters, so it has no model folder
 console = Console()
 app = typer.Typer(

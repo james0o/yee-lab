@@ -11,10 +11,10 @@ import pytest
 from fastapi.testclient import TestClient
 from matplotlib.path import Path as MplPath
 
-from yeelab import methods
+from yeelab.margin import methods
+from yeelab.margin.regions import MARGINS, grid, regions, winners
+from yeelab.margin.shares import Model, first_choice_shares
 from yeelab.pixels import beta as pixel_beta, methods as pixel_methods, normal as pixel_normal
-from yeelab.regions import MARGINS, grid, regions, winners
-from yeelab.shares import Model, first_choice_shares
 from yeelab.web.app import DIAGRAMS, app
 
 CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])

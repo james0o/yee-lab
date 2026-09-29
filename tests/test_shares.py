@@ -1,4 +1,4 @@
-"""Checks of the shares that single methods need (shares.py).
+"""Checks of the shares that single methods need (margin/shares.py).
 
 They are compared with the same shares aggregated from the complete ranking
 probabilities (pixels.beta / pixels.normal compute_ranking_probabilities, exact), and
@@ -9,9 +9,7 @@ import numpy as np
 import pytest
 
 from yeelab import ranking_cells
-from yeelab.pixels import beta as pixel_beta, normal as pixel_normal
-from yeelab.pixels.methods import _pairwise_preferences
-from yeelab.shares import (
+from yeelab.margin.shares import (
     Model,
     _edge_key,
     _half_plane,
@@ -20,6 +18,8 @@ from yeelab.shares import (
     pairwise_shares,
     ranking_shares,
 )
+from yeelab.pixels import beta as pixel_beta, normal as pixel_normal
+from yeelab.pixels.methods import _pairwise_preferences
 
 CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
 MODELS = [Model("beta", 0.2, "rms"), Model("beta", 0.35, "mean_abs"), Model("normal", 0.2)]

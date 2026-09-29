@@ -4,7 +4,7 @@ Every method takes
     rankings: (R, C) candidate indices from best to worst, one row per ballot type
     probs:    (pixels, pixels, R) share of voters with each ballot type
 and returns the winner per pixel, shape (pixels, pixels). The *_margin variants of
-methods.py pick the same winners from only the shares a method needs.
+margin/methods.py pick the same winners from only the shares a method needs.
 
 voronoi() is the reference diagram, not a method: it needs no voters at all.
 """
@@ -12,7 +12,7 @@ voronoi() is the reference diagram, not a method: it needs no voters at all.
 import numpy as np
 from scipy.spatial.distance import cdist
 
-from yeelab.methods import CYCLE, irv_margin
+from yeelab.voting import CYCLE, irv_rounds
 
 
 def voronoi(candidates: np.ndarray, pixels: int) -> np.ndarray:
@@ -32,8 +32,8 @@ def fptp(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
 
 
 def irv(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
-    """Instant runoff, see methods.irv_margin."""
-    return irv_margin(rankings, probs)[0]
+    """Instant runoff, see voting.irv_rounds."""
+    return irv_rounds(rankings, probs)[0]
 
 
 def borda(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:

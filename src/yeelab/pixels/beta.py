@@ -21,9 +21,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
-from scipy.special import logit
+from scipy.special import betainc, betaincinv, logit
 
-from yeelab.beta_tables import ExactBeta
 from yeelab.pixels.cache import (
     DEFAULT_CACHE_ROOT,
     candidate_hash,
@@ -43,6 +42,37 @@ from yeelab.ranking_cells import (
     pixel_medians,
     ranking_cells,
 )
+
+
+def _broadcast(values, extra):
+    """(N,) parameters shaped (N, 1, ..., 1) with `extra` trailing axes."""
+    return values.reshape(-1, *(1,) * extra)
+
+
+class ExactBeta:
+    """Beta CDF and quantile of the nodes, straight from scipy (margin.beta_tables
+    has the same interface from tables)."""
+
+    def __init__(self, params):
+        self.a, self.b = params[:, 0], params[:, 1]
+
+    def __len__(self):
+        return len(self.a)
+
+    def cdf(self, x):
+        """F_i(x) for every node i at every x, shape (N, *x.shape)."""
+        x = np.asarray(x, dtype=np.float64)
+        return betainc(_broadcast(self.a, x.ndim), _broadcast(self.b, x.ndim), x)
+
+    def ppf(self, u):
+        """F_i^-1(u[i, ...]): row i of u with node i, shape of u."""
+        u = np.asarray(u, dtype=np.float64)
+        extra = u.ndim - 1
+        return betaincinv(_broadcast(self.a, extra), _broadcast(self.b, extra), u)
+
+    def cdf_sums(self, points, weights):
+        """S[r, n] = sum_q weights[r, q] F_n(points[r, q]), shape (R, N)."""
+        return np.einsum("rq,nrq->rn", weights, self.cdf(points), optimize=True)
 
 
 def interpolate_to_pixels(probs, medians, pixels, transform=logit):
@@ -68,8 +98,8 @@ def _touches_x(p):
 def _edge_integral(s, e, beta, nodes, weights):
     """Integral of omega = -f(x) G(y) dx over the segment s -> e.
 
-    beta: the CDF and quantile of the pixels' Beta distributions (beta_tables.ExactBeta;
-    TabulatedBeta.edge_terms is this function compiled for the tables). Result has
+    beta: the CDF and quantile of the pixels' Beta distributions (ExactBeta;
+    margin.beta_tables.TabulatedBeta.edge_terms is this function compiled for the tables). Result has
     shape (pixels, pixels): [i, j] uses X-params of pixel i and Y-params of pixel j.
     """
     (xs, ys), (xe, ye) = s, e

@@ -21,15 +21,21 @@ of another winner).
 import contourpy
 import numpy as np
 
-from yeelab.methods import (
+from yeelab.margin.methods import (
     borda_margin,
     condorcet_margin,
     fptp_margin,
     irv_margin,
     schulze_margin,
 )
+from yeelab.margin.shares import (
+    Model,
+    first_choice_shares,
+    pairwise_shares,
+    ranking_shares,
+    voronoi_cells,
+)
 from yeelab.ranking_cells import interpolate_to
-from yeelab.shares import Model, first_choice_shares, pairwise_shares, ranking_shares, voronoi_cells
 
 DIGITS = 6  # decimals of the vertices sent to the UI
 TINY = 1e-12  # rings with less area are dropped (collapsed onto a grid point)

@@ -16,10 +16,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from yeelab.distributions import DISTRIBUTIONS, Distribution
+from yeelab.margin.regions import MARGINS, regions
+from yeelab.margin.shares import PIXELS, Model
 from yeelab.normal import sigma_from_deviation
 from yeelab.ranking_cells import SPREAD, SPREADS, TAPER, Spread, beta_params
-from yeelab.regions import MARGINS, regions
-from yeelab.shares import PIXELS, Model
 
 # Methods follow a drag within ~5-30 ms; IRV needs every ranking cell and takes up to
 # ~0.1 s for 8 candidates (see docs/math.typ).
@@ -35,7 +35,7 @@ DIAGRAMS = ["voronoi", *MARGINS]
 DEVIATIONS = [round(0.05 * k, 2) for k in range(9)]
 assert DEVIATION in DEVIATIONS
 # Win regions are traced on a grid of this many points per axis: coarser while a
-# candidate is dragged, finer once it is dropped (see regions.py).
+# candidate is dragged, finer once it is dropped (see margin/regions.py).
 DRAG_GRID = 160
 FINAL_GRID = 320
 
@@ -157,7 +157,7 @@ def diagram_regions(request: DiagramRequest):
     """Win region of every winner as polygons in the unit square (y up):
     {"regions": [{"winner": c, "polygons": [[outer, hole, ...], ...]}], "ms": ...},
     rings flat [x0, y0, x1, y1, ...], outer rings counter-clockwise and holes
-    clockwise. winner is -1 (methods.CYCLE) for a Condorcet cycle."""
+    clockwise. winner is -1 (voting.CYCLE) for a Condorcet cycle."""
     start = time.perf_counter()
     model = None  # deviation 0: every voter at their pixel, the Voronoi diagram
     if request.deviation > 0:

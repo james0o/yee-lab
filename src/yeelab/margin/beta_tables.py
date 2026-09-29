@@ -1,4 +1,4 @@
-"""Beta CDF and quantile of the node distributions, exact or from tables.
+"""Beta CDF and quantile of the node distributions from tables.
 
 The edge integrals of pixels/beta.py evaluate, for a fixed list of N Beta
 distributions (the voters of the interpolation nodes along one axis), the CDF of
@@ -46,36 +46,6 @@ QUANTILE_CLAMP = 700.0  # |logit(x)| beyond this (x or 1 - x < 1e-304) is cut of
 
 _kernel = njit(cache=True, nogil=True, error_model="numpy")
 _inline = njit(inline="always", error_model="numpy")  # helpers of the kernels
-
-
-def _broadcast(values, extra):
-    """(N,) parameters shaped (N, 1, ..., 1) with `extra` trailing axes."""
-    return values.reshape(-1, *(1,) * extra)
-
-
-class ExactBeta:
-    """Beta CDF and quantile of the nodes, straight from scipy."""
-
-    def __init__(self, params):
-        self.a, self.b = params[:, 0], params[:, 1]
-
-    def __len__(self):
-        return len(self.a)
-
-    def cdf(self, x):
-        """F_i(x) for every node i at every x, shape (N, *x.shape)."""
-        x = np.asarray(x, dtype=np.float64)
-        return betainc(_broadcast(self.a, x.ndim), _broadcast(self.b, x.ndim), x)
-
-    def ppf(self, u):
-        """F_i^-1(u[i, ...]): row i of u with node i, shape of u."""
-        u = np.asarray(u, dtype=np.float64)
-        extra = u.ndim - 1
-        return betaincinv(_broadcast(self.a, extra), _broadcast(self.b, extra), u)
-
-    def cdf_sums(self, points, weights):
-        """S[r, n] = sum_q weights[r, q] F_n(points[r, q]), shape (R, N)."""
-        return np.einsum("rq,nrq->rn", weights, self.cdf(points), optimize=True)
 
 # ---------------------------------------------------------------- Kernels
 
@@ -266,7 +236,7 @@ def _hermite(values, slopes, step):
 
 class TabulatedBeta:
     """Beta CDF and quantile of the nodes from the tables; same interface as
-    ExactBeta, absolute error below 1e-7 (tests/test_beta_tables.py)."""
+    pixels.beta.ExactBeta, absolute error below 1e-7 (tests/test_beta_tables.py)."""
 
     def __init__(self, params):
         a, b = params[:, 0:1], params[:, 1:2]

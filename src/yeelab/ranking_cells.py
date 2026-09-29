@@ -18,7 +18,7 @@ square into convex cells, each cell has one fixed ranking, and the cells are the
 same for every pixel. Only the probability of each cell changes between pixels.
 (Ties have probability zero and are ignored.) The probabilities are edge integrals
 over the cell boundaries: exact for every cell in pixels/beta.py, from tables and
-compiled in beta_tables.py.
+compiled in margin/beta_tables.py.
 
 The probabilities are smooth in the pixel median (only the winners jump), so they
 are computed exactly on NODES x NODES Chebyshev-Lobatto points in logit(median) and

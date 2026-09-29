@@ -14,5 +14,6 @@ wheels/
 tests/__pycache__/
 .pytest_cache/
 
-plots/*
-cache/*
+# output of the pixel pipeline
+src/yeelab/pixels/plots/
+src/yeelab/pixels/cache/

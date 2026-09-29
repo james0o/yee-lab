@@ -29,7 +29,7 @@ Requires [uv](https://docs.astral.sh/uv/).
 
 ### Plots
 
-[yeelab/pixels/plot.py](src/yeelab/pixels/plot.py) saves one PNG per method into `plots/`:
+[yeelab/pixels/plot.py](src/yeelab/pixels/plot.py) saves one PNG per method into `src/yeelab/pixels/plots/`:
 
 ```sh
 uv run python -m yeelab.pixels.plot                         # all methods, Beta voters
@@ -39,7 +39,7 @@ uv run python -m yeelab.pixels.plot -d 0.3 -p 800           # deviation 0.3, 800
 uv run python -m yeelab.pixels.plot -h                      # all options
 ```
 
-Ranking probabilities are cached in `cache/`, so a second run with the same settings is fast (`--regenerate` ignores the cache). Candidates are set in [yeelab/pixels/plot.py](src/yeelab/pixels/plot.py).
+Ranking probabilities are cached in `src/yeelab/pixels/cache/`, so a second run with the same settings is fast (`--regenerate` ignores the cache). Candidates are set in [yeelab/pixels/plot.py](src/yeelab/pixels/plot.py).
 
 ### Web UI
 
@@ -57,11 +57,12 @@ Then open http://127.0.0.1:8000. [yeelab/web/app.py](src/yeelab/web/app.py) serv
 
 ## Code
 
-The code is the package `yeelab` in [src/yeelab/](src/yeelab/):
+The code is the package `yeelab` in [src/yeelab/](src/yeelab/). It computes a diagram in two ways, which never import each other:
 
-- `yeelab/` — what the web UI computes with: voters, ranking cells, shares, methods on shares, regions as polygons.
-- `yeelab/web/` — the FastAPI app and the page.
-- `yeelab/pixels/` — the complete ranking profile of every pixel, its cache, the methods on it and the plot CLI. [docs/figures.py](docs/figures.py) and the tests use it; the UI does not.
+- `yeelab/margin/` — the web UI's way: only the shares each method needs, a winner with a margin that is 0 on every border, and the regions as polygons traced along that zero set.
+- `yeelab/pixels/` — the original way: the complete ranking profile of every pixel, cached on disk, the winner of every pixel, and the plot CLI. [docs/figures.py](docs/figures.py) and the tests use it, the tests as the reference for `margin/`.
+
+Both have a `methods.py`, each with the methods in the form it needs. What both use is at the top of the package: the voter models and ranking cells (`ranking_cells.py`, `normal.py`), `voting.py` (the IRV rounds and the Condorcet-cycle code) and `threads.py`. `yeelab/web/` is the FastAPI app and the page, on top of `margin/`.
 
 `uv run pytest` runs the tests; `uv run python docs/figures.py` regenerates the figures of [docs/math.pdf](docs/math.pdf).
 

@@ -33,9 +33,9 @@ from functools import cached_property, lru_cache
 import numpy as np
 from scipy.special import logit, ndtr
 
-from yeelab import normal, ranking_cells, threads
-from yeelab.beta_tables import TabulatedBeta
+from yeelab import normal, ranking_cells
 from yeelab.distributions import Distribution
+from yeelab.margin.beta_tables import TabulatedBeta
 from yeelab.ranking_cells import NODES, QUAD_NODES, Spread, _clip
 
 PIXELS = 300  # the outermost medians are 1/2 and 1 - 1/2 pixel from the walls

@@ -45,7 +45,7 @@ package `src/yeelab/`):
   table.hline(),
   [quantity], [symbol], [set by], [default],
   table.hline(stroke: 0.5pt),
-  [pixels per axis], [$n$], [`--pixels` (`pixels/plot.py`), `PIXELS` (`shares.py`)], [400 / 300],
+  [pixels per axis], [$n$], [`--pixels` (`pixels/plot.py`), `PIXELS` (`margin/shares.py`)], [400 / 300],
   [deviation], [$D$], [`--deviation`, _Deviation_ slider], [0.2],
   [voter distribution], [], [`--distribution`, _Voters_], [Beta],
   [Beta spread rule], [], [`--spread`, _Beta spread fixed_], [`rms`],
@@ -604,8 +604,8 @@ probabilities of each pixel still sum to one up to rounding. Narrow voters chang
 faster with the median: for Beta voters with $D < 0.1$ the web UI uses $2N - 1 = 97$
 nodes, because with $49$ the shares of a pixel at $D = 0.05$ would sum to up to $1.025$.
 
-Only the node probabilities are cached on disk (`cache/beta/<spread>/`,
-`cache/normal/`), together with the medians, the parameters and the settings they were
+Only the node probabilities are cached on disk (`pixels/cache/beta/<spread>/`,
+`pixels/cache/normal/`), together with the medians, the parameters and the settings they were
 made with; interpolation happens on every load.
 
 == Normal voters (`normal.py`) <sec-normal>
@@ -1341,7 +1341,7 @@ percentile 3.1 and 2.0 pixels; the single worst border 4.9 and 7.7 pixels).
 - *`tapered`* keeps Condorcet borders a little straighter at the same number of cycles
   and otherwise behaves like `rms`; its exponent is empirical.
 - *`mean_abs`* is kept to reproduce results made with it (caches and plots are kept
-  apart per rule, `cache/beta/<spread>/`, `plots/beta/<spread>/`). By @eq-push it
+  apart per rule, `pixels/cache/beta/<spread>/`, `pixels/plots/beta/<spread>/`). By @eq-push it
   pushes the far half of the voters out twice as far near a wall, which bends borders
   the most, adds cycles and makes the round IRV edge.
 
@@ -1635,12 +1635,13 @@ on the number of pixels at all. Drawing the diagram as curves instead of pixels
 (@sec-zero-sets) is the right output, but on its own it saves little. The speed comes
 from computing fewer integrals (@sec-needs), keeping those a drag does not change
 (@sec-edge-cache), making each one cheaper (@sec-tables), and compiling the loops that
-remain (@sec-compiled). This chapter describes `shares.py`, `beta_tables.py` and
-`regions.py`, which `web/app.py` uses for the UI.
+remain (@sec-compiled). This chapter describes `margin/` (`shares.py`, `beta_tables.py`,
+`methods.py` and `regions.py`), which `web/app.py` uses for the UI.
 `docs/figures.py`, the plots and the tests of @sec-validation still use the pipeline of
-@ch-compute, which is in `pixels/`.
+@ch-compute, which is in `pixels/`. The two never import each other; what both need
+(`ranking_cells.py`, `normal.py`, `voting.py`, `threads.py`) is at the top of the package.
 
-== What each method needs (`shares.py`) <sec-needs>
+== What each method needs (`margin/shares.py`) <sec-needs>
 
 The arrangement of all $C (C - 1) slash 2$ bisectors has $O(C^4)$ cells and edges: 43
 cells and 65 slanted edges for 5 candidates, 272 cells and 468 slanted edges for 8. Most
@@ -1679,7 +1680,7 @@ pairwise shares 4 of 10 half-planes are recomputed with 5 candidates, 7 of 28 wi
 The arrangement gains less: every other bisector is cut by the moving ones, so for 5
 candidates about 60 of its 89 edges are new after each step.
 
-== Tabulated Beta CDF (`beta_tables.py`) <sec-tables>
+== Tabulated Beta CDF (`margin/beta_tables.py`) <sec-tables>
 
 An edge integral evaluates $G_j$ at $Q$ points for every pair of nodes,
 $Q N^2 approx 58 thin 000$ calls of `betainc` at about 400 ns each. The $N$ Beta
@@ -1763,7 +1764,7 @@ and before them:
   table.hline(),
 ))
 
-== Borders as zero sets (`methods.py`, `regions.py`) <sec-zero-sets>
+== Borders as zero sets (`margin/methods.py`, `margin/regions.py`) <sec-zero-sets>
 
 The shares are smooth in the median $m$; only the winner jumps. Each method compares
 continuous functions of the shares, so its borders are where such a comparison is a tie.
