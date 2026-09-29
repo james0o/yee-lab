@@ -6,6 +6,8 @@ A Yee diagram compares voting methods. Candidates are fixed points $c_1, \dots, 
 - every voter ranks the candidates by distance (closest first),
 - the pixel is coloured by the winner of that election.
 
+![The web UI: IRV with five candidates and Beta voters](docs/figures/ui.png)
+
 ## What is different here
 
 In the original Yee diagram the voters of a pixel are normal, $\mathcal{N}(m, \sigma^2 I)$, so some of them end up outside the square. Here each coordinate is Beta distributed instead, so every voter stays inside the square:
@@ -66,3 +68,6 @@ Both have a `methods.py`, each with the methods in the form it needs. What both 
 
 `uv run pytest` runs the tests; `uv run python docs/figures.py` regenerates the figures of [docs/math.pdf](docs/math.pdf).
 
+## License
+
+[MIT](LICENSE). The bundled [KaTeX](src/yeelab/web/ui/vendor/katex/LICENSE) and [uPlot](src/yeelab/web/ui/vendor/uplot/LICENSE) are MIT too.
