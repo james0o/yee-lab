@@ -30,9 +30,9 @@ Yee diagram, the two voter distributions (normal and Beta) and the spread rules 
 fix the Beta distributions. @ch-compute shows how the share of every ranking of the
 candidates is computed exactly for every pixel, and @ch-methods how the voting methods
 turn these shares into winners. @ch-compare explains why Beta and normal voters give
-different diagrams. @ch-shapes asks when a candidate's region is convex or in one piece,
-and how that relates to the monotonicity of the method. @ch-spread compares the spread
-rules and explains why `rms` is the default.
+different diagrams. @ch-spread compares the spread rules and explains why `rms` is the
+default. @ch-shapes asks when a candidate's region is convex or in one piece, and how
+that relates to the monotonicity of the method.
 
 The settings that appear in the mathematics, with their defaults:
 
@@ -1107,6 +1107,235 @@ $D = 0.2$ the B|E border rises by only $0.030$, like normal voters at $D = 0.3$.
 
 #pagebreak()
 
+= Choosing the spread rule <ch-spread>
+
+@sec-spreads defined three spread rules. They agree at the centre pixel and differ only
+in how the spread changes towards the walls. This chapter shows what that changes in
+the diagrams, explains which property of a rule keeps borders straight, and gives the
+evidence for the default `rms`. Unless stated otherwise the numbers use the candidates
+A–E, $D = 0.3$ and $300 times 300$ pixels. `docs/figures.py` reproduces the figures and
+the numbers on the default candidates; the benchmark over random candidate layouts
+(@sec-bench) was run with separate scripts.
+
+== The three rules on the default candidates
+
+#figure(
+  image("figures/spread_rules.png", width: 100%),
+  caption: [The three spread rules of @sec-spreads on the default candidates,
+    $D = 0.3$. Only `mean_abs` has the round IRV edge. Black: no Condorcet winner.],
+) <fig-spread-rules>
+
+#align(center, table(
+  columns: 5,
+  align: (left, right, right, center, right),
+  stroke: none,
+  table.hline(),
+  [voter model], [cycle pixels], [Schulze $!=$ Voronoi], [round IRV edge], [flare of B],
+  table.hline(stroke: 0.5pt),
+  [Beta, `rms`], [1.23 %], [14.2 %], [no], [0.083],
+  [Beta, `tapered`], [1.32 %], [14.9 %], [no], [0.086],
+  [Beta, `mean_abs`], [2.06 %], [20.2 %], [yes], [0.096],
+  [normal], [0], [0], [no], [0.030],
+  table.hline(),
+))
+
+(Flare of B: rise of the B|E border over the last $0.075$ before the left wall,
+@sec-flare.) `rms` and `tapered` give nearly the same diagrams. `mean_abs` has 1.7
+times as many cycle pixels, more distorted Condorcet regions and a round IRV edge. The
+FPTP flare is almost the same under all three rules: it comes from the crowding of
+voters at the wall, which does not depend on the rule.
+
+== The round IRV edge of `mean_abs` <sec-irv-edge>
+
+#figure(
+  image("figures/irv_round.png", width: 100%),
+  caption: [Beta IRV (faded) with the three round 3 tie curves among A, D, E, under
+    `mean_abs` (left) and `rms` (right). The red curve $s_A = s_D$ bounds D's region.
+    Gray: the bisectors D|A and D|E.],
+) <fig-irv-round>
+
+In the upper right part B and C are eliminated first. In round 3 A, D and E remain,
+and D's cell among them is the diagonal band between the bisectors D|A and D|E that
+widens towards the corner $(1, 1)$; A has the bottom right, E the top left. Whoever of
+A and D has fewer votes is eliminated:
+
+- D out: the final is A against E, and E wins;
+- A out: the final is D against E, and D wins near the band (the pull towards the
+  centre again).
+
+So the lower edge of D's region is the round 3 tie $s_A = s_D$ (red in
+@fig-irv-round). Along the column $x = 0.55$ (round 3 shares; winner of the pixel):
+
+#align(center, table(
+  columns: 9,
+  align: right,
+  stroke: none,
+  table.hline(),
+  [], table.cell(colspan: 4, align: center)[`mean_abs`], table.cell(colspan: 4, align: center)[`rms`],
+  [$y$], [winner], [$s_A$], [$s_D$], [$P(Y < 0.2)$], [winner], [$s_A$], [$s_D$], [$P(Y < 0.2)$],
+  table.hline(stroke: 0.5pt),
+  [0.678], [E], [0.327], [0.284], [0.195], [E], [0.316], [0.292], [0.173],
+  [0.738], [E], [0.303], [0.286], [0.185], [D], [0.279], [0.300], [0.146],
+  [0.798], [E], [0.285], [0.284], [0.182], [D], [0.243], [0.307], [0.123],
+  [0.858], [D], [0.274], [0.279], [0.187], [D], [0.209], [0.311], [0.102],
+  [0.918], [D], [0.270], [0.270], [0.199], [E], [0.176], [0.312], [0.087],
+  [0.978], [E], [0.274], [0.254], [0.226], [E], [0.144], [0.307], [0.079],
+  table.hline(),
+))
+
+Under `rms`, going up the column, voters leave A's cell for D's band and E's part of
+the square, $s_A$ falls steadily and the tie $s_A = s_D$ is crossed once, along a
+nearly straight curve. (At the top D still survives round 3 but loses the final to E.)
+Under `mean_abs` $s_A$ stops falling and rises again: as the median of $Y$ approaches
+$1$, the fixed mean absolute deviation pushes the lower half of the voters down
+(@eq-push), $P(Y < 0.2)$ grows from $0.182$ to $0.226$, and those voters are in A's
+cell. D is ahead of A only in a middle band, so the tie curve closes around it into the
+round edge.
+
+== What keeps a border straight <sec-straight>
+
+Every rule is a curve $kappa(m)$ (@sec-spreads). The border between $c_i$ and $c_j$ is
+where the median of the projected voters $nu dot X$ equals the bisector value. That
+median lies at some distance from $nu dot m$, the pull of the pixel towards the centre,
+and the border is straight when the pull changes linearly along it.
+
+*Borders close to an axis (exact).* For a small tilt $epsilon$,
+$F_(X + epsilon Y)(t) = E[F_X (t - epsilon Y)] = F_X (t) - epsilon f_X (t) E[Y] + O(epsilon^2)$,
+so
+
+$ "median"(X + epsilon Y) = "median"(X) + epsilon E[Y] + O(epsilon^2), $
+
+and the pull is $epsilon (E[Y] - "median"(Y))$. Such borders are straight exactly when
+median minus mean grows in proportion to the distance of the median from the centre,
+i.e. when $(m - E X) slash (m - 1/2)$ is constant. No small-spread assumption is needed
+(checked numerically). This ratio for several rules:
+
+#align(center, table(
+  columns: 6,
+  align: (left, right, right, right, right, right),
+  stroke: none,
+  table.hline(),
+  [rule], [$m = 0.6$], [0.7], [0.8], [0.9], [0.98],
+  table.hline(stroke: 0.5pt),
+  [fixed $a + b$], [0.40], [0.39], [0.38], [0.35], [0.27],
+  [`rms`], [0.40], [0.40], [0.39], [0.37], [0.35],
+  [`tapered`, $tau = 0.2$], [0.40], [0.40], [0.40], [0.39], [0.37],
+  [`tapered`, $tau = 0.25$], [0.40], [0.41], [0.41], [0.41], [0.40],
+  [`mean_abs`], [0.41], [0.44], [0.48], [0.54], [0.59],
+  table.hline(),
+))
+
+There are two ways to fail. With a fixed $a + b$ the far tail thins out near a wall,
+the mean catches up with the median and the pull stalls. With a fixed $E|X - m|$ the
+far half is pushed away (@eq-push) and the pull accelerates. `rms` and `tapered` lie in
+between, close to constant.
+
+*Diagonal borders.* At $45 degree$ both coordinates are skewed at once. Exact border
+shapes bend one way for fixed $a + b$ and the other way for fixed $E|X - m|$, confirming
+the two failure modes, but the balance point moves with position: near the centre a
+smaller $tau$ is straighter, towards the corners $tau approx 0.2$–$0.25$. Near-axis
+borders prefer $0.25$, diagonal ones near the centre less, and the benchmark below puts
+the compromise at $0.2$. Above $0.25$ both kinds bend the wrong way, which is why the
+optimum is sharp. The textbook skewness approximation of the median is off by about a
+factor of two at $D = 0.3$, so the exponent has to be found empirically.
+
+*Why cycles survive.* Straightness depends on how the pull changes with the position
+of the pixel, cycles on how it changes with the direction $nu$. Projections of two
+skewed coordinates in different directions do not share one effective centre, so the
+three borders of three candidates can each be straight and still miss each other. No
+spread rule removes cycles without removing the spread.
+
+== Benchmark <sec-bench>
+
+The *bend* of a rule is the largest distance of each pairwise majority border
+$pi_(i j) = 1/2$ from its chord, averaged over the pairs (units of the square; $0$ for
+normal voters). At the same $D = 0.3$, on the default candidates:
+
+#align(center, table(
+  columns: 6,
+  align: (left, right, right, right, right, right),
+  stroke: none,
+  table.hline(),
+  [rule], [$kappa(0.7)$], [$kappa(0.9)$], [$kappa(0.98)$], [bend], [cycle pixels],
+  table.hline(stroke: 0.5pt),
+  [`mean_abs` ($L_1$)], [1.012], [0.554], [0.307], [0.046], [2.06 %],
+  [$L_(1.5)$ from median], [1.096], [0.807], [0.557], [0.015], [1.55 %],
+  [`rms` ($L_2$)], [1.197], [1.062], [0.799], [0.009], [1.23 %],
+  [$L_3$ from median], [1.430], [1.546], [1.250], [0.010], [0.82 %],
+  [$L_4$ from median], [1.684], [1.990], [1.667], [0.011], [0.59 %],
+  [fixed $a + b$], [1.204], [1.204], [1.204], [0.024], [1.21 %],
+  [SD about the mean], [1.086], [0.779], [0.557], [0.015], [1.59 %],
+  [far-side mean distance], [1.826], [1.624], [1.045], [0.012], [0.43 %],
+  [far-side RMS], [2.112], [2.078], [1.514], [0.010], [0.31 %],
+  [far-side median distance], [1.444], [1.096], [0.622], [0.026], [0.75 %],
+  [SD of $logit(X)$], [1.320], [2.262], [8.106], [0.038], [0.98 %],
+  table.hline(),
+))
+
+"Far-side" measures use only the half of the voters towards the centre of the square.
+Too little decrease of $kappa$ (fixed $a + b$) and too much (`mean_abs`) both bend
+borders. But a comparison at the same $D$ mixes the rule with the amount of spread:
+cycles and bend both grow with the spread, and a rule that makes pixels near the walls
+narrower (larger $kappa$) gets fewer cycles and less bend together. The fair
+comparison is the bend at the *same share of cycle pixels*.
+
+The benchmark therefore swept $D in {0.2, 0.25, 0.3, 0.35, 0.4}$ for every rule and
+compared the bend at equal shares of cycle pixels, interpolating in $D$. The score is
+the bend of the _visible_ Condorcet borders (where both candidates beat all others),
+on layouts of 3–6 candidates drawn uniformly from $[0.1, 0.9]^2$. A first screen on 24
+layouts ruled out most rules (bend relative to `rms`): fixed $a + b$ 2.83, `mean_abs`
+2.41, RMS of $arcsin sqrt(X)$ 2.00, $tau = 0.1$ 1.92, far-side RMS 1.84, $L_3$ 1.35,
+$L_(2.5)$ 1.21, $L_(2.25)$ 1.10. The remaining rules were checked on 30 new layouts,
+with 95 % bootstrap intervals over layouts, at three cycle levels (those of `rms` at
+$D = 0.25, 0.3, 0.35$):
+
+#align(center, table(
+  columns: 4,
+  align: (left, right, right, right),
+  stroke: none,
+  table.hline(),
+  [rule], [$D = 0.25$ level], [$D = 0.3$ level], [$D = 0.35$ level],
+  table.hline(stroke: 0.5pt),
+  [`tapered`, $tau = 0.2$], [0.66 [0.62, 0.70]], [0.63 [0.59, 0.70]], [0.56 [0.49, 0.65]],
+  [`tapered`, $tau = 0.25$], [0.76 [0.67, 0.87]], [0.90 [0.75, 1.07]], [1.03 [0.81, 1.28]],
+  [`tapered`, $tau = 0.3$], [1.52], [1.97], [2.14],
+  [`tapered`, $tau = 0.4$], [3.55], [4.49], [4.30],
+  [`tapered`, $tau = 0.5$], [5.94], [7.25], [6.80],
+  [$L_(1.75)$], [1.01 [0.96, 1.05]], [0.92 [0.88, 0.98]], [0.77 [0.73, 0.80]],
+  [$L_(1.5)$], [1.14 [1.05, 1.24]], [0.94 [0.83, 1.08]], [0.67 [0.60, 0.77]],
+  table.hline(),
+))
+
+The whole pairwise borders (visible or not) give the same picture: $tau = 0.2$ at 0.79,
+0.79 and 0.52 of `rms`. In absolute terms the gain is small: at $D = 0.3$ visible
+borders bend by 1.5 pixels on average with `rms` and 1.0 with `tapered` (90th
+percentile 3.1 and 2.0 pixels; the single worst border 4.9 and 7.7 pixels).
+
+== Other ways to fix the spread
+
+- *Median absolute deviation.* For every Beta, $"median"|X - m| < min(m, 1 - m)$: the
+  near half lies entirely within that distance. A fixed median absolute deviation is
+  therefore impossible within $D$ of every wall.
+- *Normal voters clamped to the square* (moved onto the nearest edge when they would
+  leave it) have neither the round IRV edge nor a strong flare (0.023), few cycles
+  (0.10 %) and Schulze $!=$ Voronoi on 7.9 % of the pixels. But they put point masses
+  on the edges, are not a Beta, and their deviation shrinks near the walls.
+
+== Conclusion
+
+- *`rms`* is the default. It fixes a quantity with a clear meaning, pushes the far half
+  of the voters out only by $sqrt(2)$ near a wall, has no round IRV edge, and its
+  borders bend only slightly more than those of the best rule found (1.5 against 1.0
+  pixels on average).
+- *`tapered`* keeps Condorcet borders a little straighter at the same number of cycles
+  and otherwise behaves like `rms`; its exponent is empirical.
+- *`mean_abs`* is kept to reproduce results made with it (caches and plots are kept
+  apart per rule, `cache/beta/<spread>/`, `plots/beta/<spread>/`). By @eq-push it
+  pushes the far half of the voters out twice as far near a wall, which bends borders
+  the most, adds cycles and makes the round IRV edge.
+
+#pagebreak()
+
 = Shapes of win regions <ch-shapes>
 
 A rule of thumb about Yee diagrams links the shape of the regions with monotonicity:
@@ -1367,232 +1596,3 @@ borders close together.
 - So neither the shape nor the connectedness of a region proves anything about
   monotonicity. What holds is weaker: in the random layouts only IRV split regions, and
   for candidates on a line FPTP can never split a region, while IRV does.
-
-#pagebreak()
-
-= Choosing the spread rule <ch-spread>
-
-@sec-spreads defined three spread rules. They agree at the centre pixel and differ only
-in how the spread changes towards the walls. This chapter shows what that changes in
-the diagrams, explains which property of a rule keeps borders straight, and gives the
-evidence for the default `rms`. Unless stated otherwise the numbers use the candidates
-A–E, $D = 0.3$ and $300 times 300$ pixels. `docs/figures.py` reproduces the figures and
-the numbers on the default candidates; the benchmark over random candidate layouts
-(@sec-bench) was run with separate scripts.
-
-== The three rules on the default candidates
-
-#figure(
-  image("figures/spread_rules.png", width: 100%),
-  caption: [The three spread rules of @sec-spreads on the default candidates,
-    $D = 0.3$. Only `mean_abs` has the round IRV edge. Black: no Condorcet winner.],
-) <fig-spread-rules>
-
-#align(center, table(
-  columns: 5,
-  align: (left, right, right, center, right),
-  stroke: none,
-  table.hline(),
-  [voter model], [cycle pixels], [Schulze $!=$ Voronoi], [round IRV edge], [flare of B],
-  table.hline(stroke: 0.5pt),
-  [Beta, `rms`], [1.23 %], [14.2 %], [no], [0.083],
-  [Beta, `tapered`], [1.32 %], [14.9 %], [no], [0.086],
-  [Beta, `mean_abs`], [2.06 %], [20.2 %], [yes], [0.096],
-  [normal], [0], [0], [no], [0.030],
-  table.hline(),
-))
-
-(Flare of B: rise of the B|E border over the last $0.075$ before the left wall,
-@sec-flare.) `rms` and `tapered` give nearly the same diagrams. `mean_abs` has 1.7
-times as many cycle pixels, more distorted Condorcet regions and a round IRV edge. The
-FPTP flare is almost the same under all three rules: it comes from the crowding of
-voters at the wall, which does not depend on the rule.
-
-== The round IRV edge of `mean_abs` <sec-irv-edge>
-
-#figure(
-  image("figures/irv_round.png", width: 100%),
-  caption: [Beta IRV (faded) with the three round 3 tie curves among A, D, E, under
-    `mean_abs` (left) and `rms` (right). The red curve $s_A = s_D$ bounds D's region.
-    Gray: the bisectors D|A and D|E.],
-) <fig-irv-round>
-
-In the upper right part B and C are eliminated first. In round 3 A, D and E remain,
-and D's cell among them is the diagonal band between the bisectors D|A and D|E that
-widens towards the corner $(1, 1)$; A has the bottom right, E the top left. Whoever of
-A and D has fewer votes is eliminated:
-
-- D out: the final is A against E, and E wins;
-- A out: the final is D against E, and D wins near the band (the pull towards the
-  centre again).
-
-So the lower edge of D's region is the round 3 tie $s_A = s_D$ (red in
-@fig-irv-round). Along the column $x = 0.55$ (round 3 shares; winner of the pixel):
-
-#align(center, table(
-  columns: 9,
-  align: right,
-  stroke: none,
-  table.hline(),
-  [], table.cell(colspan: 4, align: center)[`mean_abs`], table.cell(colspan: 4, align: center)[`rms`],
-  [$y$], [winner], [$s_A$], [$s_D$], [$P(Y < 0.2)$], [winner], [$s_A$], [$s_D$], [$P(Y < 0.2)$],
-  table.hline(stroke: 0.5pt),
-  [0.678], [E], [0.327], [0.284], [0.195], [E], [0.316], [0.292], [0.173],
-  [0.738], [E], [0.303], [0.286], [0.185], [D], [0.279], [0.300], [0.146],
-  [0.798], [E], [0.285], [0.284], [0.182], [D], [0.243], [0.307], [0.123],
-  [0.858], [D], [0.274], [0.279], [0.187], [D], [0.209], [0.311], [0.102],
-  [0.918], [D], [0.270], [0.270], [0.199], [E], [0.176], [0.312], [0.087],
-  [0.978], [E], [0.274], [0.254], [0.226], [E], [0.144], [0.307], [0.079],
-  table.hline(),
-))
-
-Under `rms`, going up the column, voters leave A's cell for D's band and E's part of
-the square, $s_A$ falls steadily and the tie $s_A = s_D$ is crossed once, along a
-nearly straight curve. (At the top D still survives round 3 but loses the final to E.)
-Under `mean_abs` $s_A$ stops falling and rises again: as the median of $Y$ approaches
-$1$, the fixed mean absolute deviation pushes the lower half of the voters down
-(@eq-push), $P(Y < 0.2)$ grows from $0.182$ to $0.226$, and those voters are in A's
-cell. D is ahead of A only in a middle band, so the tie curve closes around it into the
-round edge.
-
-== What keeps a border straight <sec-straight>
-
-Every rule is a curve $kappa(m)$ (@sec-spreads). The border between $c_i$ and $c_j$ is
-where the median of the projected voters $nu dot X$ equals the bisector value. That
-median lies at some distance from $nu dot m$, the pull of the pixel towards the centre,
-and the border is straight when the pull changes linearly along it.
-
-*Borders close to an axis (exact).* For a small tilt $epsilon$,
-$F_(X + epsilon Y)(t) = E[F_X (t - epsilon Y)] = F_X (t) - epsilon f_X (t) E[Y] + O(epsilon^2)$,
-so
-
-$ "median"(X + epsilon Y) = "median"(X) + epsilon E[Y] + O(epsilon^2), $
-
-and the pull is $epsilon (E[Y] - "median"(Y))$. Such borders are straight exactly when
-median minus mean grows in proportion to the distance of the median from the centre,
-i.e. when $(m - E X) slash (m - 1/2)$ is constant. No small-spread assumption is needed
-(checked numerically). This ratio for several rules:
-
-#align(center, table(
-  columns: 6,
-  align: (left, right, right, right, right, right),
-  stroke: none,
-  table.hline(),
-  [rule], [$m = 0.6$], [0.7], [0.8], [0.9], [0.98],
-  table.hline(stroke: 0.5pt),
-  [fixed $a + b$], [0.40], [0.39], [0.38], [0.35], [0.27],
-  [`rms`], [0.40], [0.40], [0.39], [0.37], [0.35],
-  [`tapered`, $tau = 0.2$], [0.40], [0.40], [0.40], [0.39], [0.37],
-  [`tapered`, $tau = 0.25$], [0.40], [0.41], [0.41], [0.41], [0.40],
-  [`mean_abs`], [0.41], [0.44], [0.48], [0.54], [0.59],
-  table.hline(),
-))
-
-There are two ways to fail. With a fixed $a + b$ the far tail thins out near a wall,
-the mean catches up with the median and the pull stalls. With a fixed $E|X - m|$ the
-far half is pushed away (@eq-push) and the pull accelerates. `rms` and `tapered` lie in
-between, close to constant.
-
-*Diagonal borders.* At $45 degree$ both coordinates are skewed at once. Exact border
-shapes bend one way for fixed $a + b$ and the other way for fixed $E|X - m|$, confirming
-the two failure modes, but the balance point moves with position: near the centre a
-smaller $tau$ is straighter, towards the corners $tau approx 0.2$–$0.25$. Near-axis
-borders prefer $0.25$, diagonal ones near the centre less, and the benchmark below puts
-the compromise at $0.2$. Above $0.25$ both kinds bend the wrong way, which is why the
-optimum is sharp. The textbook skewness approximation of the median is off by about a
-factor of two at $D = 0.3$, so the exponent has to be found empirically.
-
-*Why cycles survive.* Straightness depends on how the pull changes with the position
-of the pixel, cycles on how it changes with the direction $nu$. Projections of two
-skewed coordinates in different directions do not share one effective centre, so the
-three borders of three candidates can each be straight and still miss each other. No
-spread rule removes cycles without removing the spread.
-
-== Benchmark <sec-bench>
-
-The *bend* of a rule is the largest distance of each pairwise majority border
-$pi_(i j) = 1/2$ from its chord, averaged over the pairs (units of the square; $0$ for
-normal voters). At the same $D = 0.3$, on the default candidates:
-
-#align(center, table(
-  columns: 6,
-  align: (left, right, right, right, right, right),
-  stroke: none,
-  table.hline(),
-  [rule], [$kappa(0.7)$], [$kappa(0.9)$], [$kappa(0.98)$], [bend], [cycle pixels],
-  table.hline(stroke: 0.5pt),
-  [`mean_abs` ($L_1$)], [1.012], [0.554], [0.307], [0.046], [2.06 %],
-  [$L_(1.5)$ from median], [1.096], [0.807], [0.557], [0.015], [1.55 %],
-  [`rms` ($L_2$)], [1.197], [1.062], [0.799], [0.009], [1.23 %],
-  [$L_3$ from median], [1.430], [1.546], [1.250], [0.010], [0.82 %],
-  [$L_4$ from median], [1.684], [1.990], [1.667], [0.011], [0.59 %],
-  [fixed $a + b$], [1.204], [1.204], [1.204], [0.024], [1.21 %],
-  [SD about the mean], [1.086], [0.779], [0.557], [0.015], [1.59 %],
-  [far-side mean distance], [1.826], [1.624], [1.045], [0.012], [0.43 %],
-  [far-side RMS], [2.112], [2.078], [1.514], [0.010], [0.31 %],
-  [far-side median distance], [1.444], [1.096], [0.622], [0.026], [0.75 %],
-  [SD of $logit(X)$], [1.320], [2.262], [8.106], [0.038], [0.98 %],
-  table.hline(),
-))
-
-"Far-side" measures use only the half of the voters towards the centre of the square.
-Too little decrease of $kappa$ (fixed $a + b$) and too much (`mean_abs`) both bend
-borders. But a comparison at the same $D$ mixes the rule with the amount of spread:
-cycles and bend both grow with the spread, and a rule that makes pixels near the walls
-narrower (larger $kappa$) gets fewer cycles and less bend together. The fair
-comparison is the bend at the *same share of cycle pixels*.
-
-The benchmark therefore swept $D in {0.2, 0.25, 0.3, 0.35, 0.4}$ for every rule and
-compared the bend at equal shares of cycle pixels, interpolating in $D$. The score is
-the bend of the _visible_ Condorcet borders (where both candidates beat all others),
-on layouts of 3–6 candidates drawn uniformly from $[0.1, 0.9]^2$. A first screen on 24
-layouts ruled out most rules (bend relative to `rms`): fixed $a + b$ 2.83, `mean_abs`
-2.41, RMS of $arcsin sqrt(X)$ 2.00, $tau = 0.1$ 1.92, far-side RMS 1.84, $L_3$ 1.35,
-$L_(2.5)$ 1.21, $L_(2.25)$ 1.10. The remaining rules were checked on 30 new layouts,
-with 95 % bootstrap intervals over layouts, at three cycle levels (those of `rms` at
-$D = 0.25, 0.3, 0.35$):
-
-#align(center, table(
-  columns: 4,
-  align: (left, right, right, right),
-  stroke: none,
-  table.hline(),
-  [rule], [$D = 0.25$ level], [$D = 0.3$ level], [$D = 0.35$ level],
-  table.hline(stroke: 0.5pt),
-  [`tapered`, $tau = 0.2$], [0.66 [0.62, 0.70]], [0.63 [0.59, 0.70]], [0.56 [0.49, 0.65]],
-  [`tapered`, $tau = 0.25$], [0.76 [0.67, 0.87]], [0.90 [0.75, 1.07]], [1.03 [0.81, 1.28]],
-  [`tapered`, $tau = 0.3$], [1.52], [1.97], [2.14],
-  [`tapered`, $tau = 0.4$], [3.55], [4.49], [4.30],
-  [`tapered`, $tau = 0.5$], [5.94], [7.25], [6.80],
-  [$L_(1.75)$], [1.01 [0.96, 1.05]], [0.92 [0.88, 0.98]], [0.77 [0.73, 0.80]],
-  [$L_(1.5)$], [1.14 [1.05, 1.24]], [0.94 [0.83, 1.08]], [0.67 [0.60, 0.77]],
-  table.hline(),
-))
-
-The whole pairwise borders (visible or not) give the same picture: $tau = 0.2$ at 0.79,
-0.79 and 0.52 of `rms`. In absolute terms the gain is small: at $D = 0.3$ visible
-borders bend by 1.5 pixels on average with `rms` and 1.0 with `tapered` (90th
-percentile 3.1 and 2.0 pixels; the single worst border 4.9 and 7.7 pixels).
-
-== Other ways to fix the spread
-
-- *Median absolute deviation.* For every Beta, $"median"|X - m| < min(m, 1 - m)$: the
-  near half lies entirely within that distance. A fixed median absolute deviation is
-  therefore impossible within $D$ of every wall.
-- *Normal voters clamped to the square* (moved onto the nearest edge when they would
-  leave it) have neither the round IRV edge nor a strong flare (0.023), few cycles
-  (0.10 %) and Schulze $!=$ Voronoi on 7.9 % of the pixels. But they put point masses
-  on the edges, are not a Beta, and their deviation shrinks near the walls.
-
-== Conclusion
-
-- *`rms`* is the default. It fixes a quantity with a clear meaning, pushes the far half
-  of the voters out only by $sqrt(2)$ near a wall, has no round IRV edge, and its
-  borders bend only slightly more than those of the best rule found (1.5 against 1.0
-  pixels on average).
-- *`tapered`* keeps Condorcet borders a little straighter at the same number of cycles
-  and otherwise behaves like `rms`; its exponent is empirical.
-- *`mean_abs`* is kept to reproduce results made with it (caches and plots are kept
-  apart per rule, `cache/beta/<spread>/`, `plots/beta/<spread>/`). By @eq-push it
-  pushes the far half of the voters out twice as far near a wall, which bends borders
-  the most, adds cycles and makes the round IRV edge.
