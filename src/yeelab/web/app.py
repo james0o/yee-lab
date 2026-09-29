@@ -28,8 +28,9 @@ MAX_CANDIDATES = 8
 CANDIDATES = [[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]]
 DEVIATION = 0.2  # default of the deviation slider
 
-# The UI offers the Voronoi diagram (no voters) next to the voting methods.
-DIAGRAMS = ["voronoi", *MARGINS]
+# The UI offers the Voronoi diagram (no voters) as the ideal scenario, below the voting methods.
+IDEALS = ["voronoi"]
+DIAGRAMS = [*MARGINS, *IDEALS]
 # Mean absolute deviation of the voters from their pixel, as offered by the UI; DEVIATION
 # is the default. At 0 every voter is at the pixel, so every method draws the Voronoi diagram.
 DEVIATIONS = [round(0.05 * k, 2) for k in range(9)]
@@ -56,15 +57,8 @@ DISTRIBUTION_INFO = {
 }
 assert set(DISTRIBUTION_INFO) == set(DISTRIBUTIONS)
 # Each Beta spread rule: plain label, LaTeX label (typeset by KaTeX in the UI) and
-# tooltip. All rules agree at the centre pixel.
+# tooltip, in the order the UI lists them. All rules agree at the centre pixel.
 SPREAD_INFO = {
-    "mean_abs": {
-        "label": "mean |X − m| (legacy)",
-        "tex": r"\operatorname{E}|X-m|\ \text{(legacy)}",
-        "description": "The original rule: every pixel has the same mean distance of its voters "
-        "from the median. Near a wall this pushes the voters on the far side of the median "
-        "away, which bends borders and makes round edges.",
-    },
     "rms": {
         "label": "RMS of X − m",
         "tex": r"\sqrt{\operatorname{E}(X-m)^2}",
@@ -77,6 +71,13 @@ SPREAD_INFO = {
         "description": f"a + b shrinks towards the walls like (4m(1 − m))^{TAPER:g} times its "
         "centre value. The exponent is the result of an optimisation: it gave the straightest "
         "Condorcet borders at equal numbers of cycles. It behaves very much like the RMS rule.",
+    },
+    "mean_abs": {
+        "label": "mean |X − m| (legacy)",
+        "tex": r"\operatorname{E}|X-m|\ \text{(legacy)}",
+        "description": "The original rule: every pixel has the same mean distance of its voters "
+        "from the median. Near a wall this pushes the voters on the far side of the median "
+        "away, which bends borders and makes round edges.",
     },
 }
 assert set(SPREAD_INFO) == set(SPREADS)
@@ -136,7 +137,8 @@ def _voters():
 @app.get("/api/config")
 def config():
     return {
-        "methods": DIAGRAMS,
+        "methods": list(MARGINS),
+        "ideals": IDEALS,
         "distributions": [{"name": name, **info} for name, info in DISTRIBUTION_INFO.items()],
         "spreads": [{"name": name, **info} for name, info in SPREAD_INFO.items()],
         "spread": SPREAD,

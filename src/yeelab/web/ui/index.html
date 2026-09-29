@@ -24,6 +24,9 @@
     #square { box-sizing: border-box; border: 1px solid #222; background: #fff; cursor: crosshair; touch-action: none; }
     .choices { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 0 0 1rem; }
     .choices > span { font-size: .9rem; color: #666; }  /* row labels only, not KaTeX spans */
+    #spreads { flex-direction: column; align-items: flex-start; }  /* one rule per line */
+    .choices > label { font-size: .9rem; display: flex; align-items: center; gap: .3rem; cursor: pointer; }
+    .choices input[type=checkbox] { accent-color: #222; margin: 0; }
     #deviation { width: 12rem; accent-color: #222; }
     #deviationValue { font-size: .9rem; min-width: 6rem; }
     button { font: inherit; padding: .4rem .9rem; border: 1px solid #222; border-radius: 4px; background: #fff; cursor: pointer; }
@@ -41,11 +44,16 @@
     </div>
     <div class="controls">
       <div class="choices" id="distributions"><span>Voters:</span></div>
+      <div class="choices"><span>Show voters:</span>
+        <label><input type="checkbox" id="showMarginal" checked>marginal distribution of x</label>
+        <label><input type="checkbox" id="showJoint" checked>joint distribution</label>
+      </div>
       <div class="choices"><span>Deviation:</span><input type="range" id="deviation"><output id="deviationValue"></output></div>
       <div class="choices" id="spreads"><span>Beta spread fixed:</span></div>
-      <div class="choices" id="methods"></div>
+      <div class="choices" id="methods"><span>Voting method:</span></div>
+      <div class="choices" id="ideals"><span>Ideal scenario:</span></div>
       <p>Drag a candidate to move it · click empty space to add one · right-click to remove</p>
-      <p>Hover the square to see the voters of a pixel in 2D and along x (above)</p>
+      <p>Hover the square to see the voters of a pixel along x (above) and in 2D</p>
       <p id="voters"></p>
       <p id="message">Pick a method.</p>
     </div>
@@ -62,12 +70,15 @@
     const ctx = canvas.getContext("2d");
     const message = document.getElementById("message");
     const methods = document.getElementById("methods");
+    const ideals = document.getElementById("ideals");
     const distributions = document.getElementById("distributions");
     const spreads = document.getElementById("spreads");
     const deviationSlider = document.getElementById("deviation");
     const deviationValue = document.getElementById("deviationValue");
     const joint = document.getElementById("joint");
     const votersText = document.getElementById("voters");
+    const showMarginal = document.getElementById("showMarginal");  // the strip above the square
+    const showJoint = document.getElementById("showJoint");        // the shade over it while hovering
     // each curve is scaled so its peak sits at 1 / HEADROOM of the strip, whatever its height
     const HEADROOM = 1.1;
     const SAMPLES = 500;    // points per density curve
@@ -112,7 +123,7 @@
     let voters = {};      // deviation above 0 -> {sigma, beta_params} from the backend, where
                           // beta_params is spread name -> [a, b] along one axis, per pixel
     let hovered = [0.5, 0.5];  // point whose pixel's voters are shown in the strip and the shade
-    let showDensity = false;   // their 2D density over the square, while hovering it
+    let showDensity = false;   // their 2D density over the square, while hovering it (if shown at all)
     let regions = null;   // last computed win regions [{winner, path}], path a Path2D in the unit square
     let dragged = -1;     // index of the candidate being dragged
     let dragGrid = 0, finalGrid = 0;  // grid the backend traces regions on: while dragging, after
@@ -306,12 +317,14 @@
     // Place the square and the strip so that the strip's 0 and 1 line up with the square's edges.
     // The strip reaches OVERHANG beyond the square at both ends, so the square keeps that much
     // space around it, where the 2D density shows too, and DROP more between that and the strip.
+    // A hidden strip takes no space.
     function layout() {
       const span = joint.clientWidth;          // length of the strip
       const side = span / (1 + 2 * OVERHANG);
       const thick = side * STRIP + AXIS;       // thickness of the strip with its labels
       const gap = side * OVERHANG;
-      const top = thick + DROP;                // of the square's surroundings
+      const top = showMarginal.checked ? thick + DROP : 0;  // of the square's surroundings
+      stripX.plot.root.style.display = showMarginal.checked ? "" : "none";
       const place = (element, left, top, width, height) =>
         Object.assign(element.style, { left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
       place(canvas, gap, top + gap, side, side);
@@ -321,6 +334,11 @@
       joint.style.height = `${top + span}px`;
     }
     new ResizeObserver(layout).observe(joint);
+    showMarginal.addEventListener("change", layout);
+    showJoint.addEventListener("change", () => {
+      if (!showJoint.checked) showDensity = false;  // checking it again shows it from the next move
+      draw();
+    });
 
     // Win regions as a Path2D: every ring of every polygon, [x0, y0, x1, y1, ...] in the unit square.
     function toPath(polygons) {
@@ -335,9 +353,10 @@
       return path;
     }
 
-    // What an answer depends on besides the candidates' positions. An answer to other settings
-    // (or to a candidate added or removed since, whose colours shifted) is not drawn.
-    const settings = () => JSON.stringify([method, distribution, spread, deviation, candidates.length]);
+    // What an answer depends on besides the candidates' positions and the deviation. An answer to
+    // other settings (or to a candidate added or removed since, whose colours shifted) is not drawn;
+    // one to an older deviation is, so sliding it shows the newest diagram it can, like a drag.
+    const settings = () => JSON.stringify([method, distribution, spread, candidates.length]);
 
     // Ask the backend for the win regions, traced on `grid` points per axis. While an answer is
     // on its way, only remember that another is needed: it is asked for as soon as the answer is
@@ -357,7 +376,7 @@
 
     async function request(grid) {
       inFlight = true;
-      const asked = settings();
+      const asked = settings(), askedDeviation = deviation;
       if (grid === finalGrid) message.textContent = `Computing ${method}…`;
       const start = performance.now();
       try {
@@ -371,7 +390,7 @@
         if (asked === settings()) {
           regions = answer.regions.map(({ winner, polygons }) => ({ winner, path: toPath(polygons) }));
           draw();
-          describe(Math.round(performance.now() - start), Math.round(answer.ms));
+          describe(askedDeviation, Math.round(performance.now() - start), Math.round(answer.ms));
         }
       } catch (error) {
         if (asked === settings()) message.textContent = `Error: ${error.message}`;
@@ -386,7 +405,7 @@
     }
 
     // What the diagram shows, and how long it took (round trip, and computing it on the backend).
-    function describe(total, server) {
+    function describe(deviation, total, server) {
       const tail = ` · ${candidates.length} candidates · ${total} ms (${server} ms computing)`;
       if (method === "voronoi") {  // nearest candidate, no voters involved
         message.textContent = `voronoi${tail}`;
@@ -424,7 +443,7 @@
         candidates[dragged] = hovered;
         compute(dragGrid);  // follow the drag on a coarser grid; the drop asks for the fine one
       }
-      showDensity = dragged === -1;  // not while dragging, so the diagram stays visible
+      showDensity = dragged === -1 && showJoint.checked;  // not while dragging, so the diagram stays visible
       drawVoters();
     });
 
@@ -461,8 +480,9 @@
     }
 
     // A row of buttons of which one is active; picking one recomputes the diagram.
-    // options: [{name, label, tex, description}], all but name optional.
-    function choices(row, options, pick) {
+    // options: [{name, label, tex, description}], all but name optional. Rows in `group`
+    // share the one active button.
+    function choices(row, options, pick, group = [row]) {
       for (const { name, label = name, tex, description = "" } of options) {
         const button = document.createElement("button");
         if (tex) typeset(button, { label, tex });
@@ -470,7 +490,8 @@
         button.title = description;
         button.addEventListener("click", () => {
           pick(name);
-          for (const b of row.querySelectorAll("button")) b.classList.toggle("active", b === button);
+          for (const r of group)
+            for (const b of r.querySelectorAll("button")) b.classList.toggle("active", b === button);
           compute();
         });
         row.append(button);
@@ -494,7 +515,8 @@
     voters = Object.fromEntries(config.voters.map(({ deviation, ...rest }) => [deviation, rest]));
     choices(distributions, config.distributions, name => { distribution = name; updateSpreads(); drawVoters(); });
     // The slider picks an index into the offered deviations, so the values stay exact. Moving it
-    // updates the voters shown; the diagram is recomputed only once it is let go.
+    // updates the voters shown and recomputes the diagram on the coarser grid, like a drag;
+    // letting go asks for the fine one.
     function pickDeviation() {
       deviation = config.deviations[deviationSlider.valueAsNumber];
       deviationValue.textContent = deviation === 0 ? "0 (voronoi)" : String(deviation);
@@ -504,10 +526,11 @@
     }
     Object.assign(deviationSlider, { min: 0, max: config.deviations.length - 1, step: 1 });
     deviationSlider.value = config.deviations.indexOf(config.deviation);
-    deviationSlider.addEventListener("input", () => { pickDeviation(); drawVoters(); });
-    deviationSlider.addEventListener("change", compute);
+    deviationSlider.addEventListener("input", () => { pickDeviation(); drawVoters(); compute(dragGrid); });
+    deviationSlider.addEventListener("change", () => compute());
     choices(spreads, config.spreads, name => { spread = name; drawVoters(); });
-    choices(methods, named(config.methods), name => method = name);
+    choices(methods, named(config.methods), name => method = name, [methods, ideals]);
+    choices(ideals, named(config.ideals), name => method = name, [methods, ideals]);
     distribution = config.distributions[0].name;
     distributions.querySelector("button").classList.add("active");
     spread = config.spread;
