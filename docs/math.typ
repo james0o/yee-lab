@@ -30,8 +30,9 @@ Yee diagram, the two voter distributions (normal and Beta) and the spread rules 
 fix the Beta distributions. @ch-compute shows how the share of every ranking of the
 candidates is computed exactly for every pixel, and @ch-methods how the voting methods
 turn these shares into winners. @ch-compare explains why Beta and normal voters give
-different diagrams, and @ch-spread compares the spread rules and explains why `rms` is
-the default.
+different diagrams. @ch-shapes asks when a candidate's region is convex or in one piece,
+and how that relates to the monotonicity of the method. @ch-spread compares the spread
+rules and explains why `rms` is the default.
 
 The settings that appear in the mathematics, with their defaults:
 
@@ -833,7 +834,7 @@ $ pi_(i j)(m) = P_m (X dot nu < omega), $
 and it depends only on the one-dimensional projection $X dot nu$ of the voters onto the
 direction from $c_i$ to $c_j$. Every Condorcet method only looks at these numbers.
 
-=== Normal voters: the majority is decided by distance
+=== Normal voters: the majority is decided by distance <sec-normal-majority>
 
 The projection of an isotropic normal is normal,
 $X dot nu tilde cal(N)(m dot nu, sigma^2 |nu|^2)$, so
@@ -1103,6 +1104,269 @@ $D = 0.2$ the B|E border rises by only $0.030$, like normal voters at $D = 0.3$.
 - Beta voters change shape across the square and crowd against the walls, so the blur
   varies from pixel to pixel; near the walls this produces flares such as B's region in
   FPTP.
+
+#pagebreak()
+
+= Shapes of win regions <ch-shapes>
+
+A rule of thumb about Yee diagrams links the shape of the regions with monotonicity:
+methods that are not monotone, such as IRV, draw regions that are not convex and
+sometimes fall into several pieces. This chapter makes the link precise. The shape of a
+region is decided by the method and the voter model together, and the rule of thumb
+holds only in special cases. Monotone methods can have non-convex regions and regions in
+several pieces, and non-monotone methods can have convex regions.
+
+== Regions, shapes and monotonicity
+
+The *win region* $R_i$ of candidate $c_i$ is the set of pixel centres $m in (0, 1)^2$
+where $c_i$ wins. Apart from exact ties, which only happen on curves (@sec-ties), every
+method decides its winner by strict inequalities between continuous functions of $m$:
+first-choice shares, pairwise shares, IRV totals or Schulze path strengths. So $R_i$ is
+an open set. Three shapes, from the strongest to the weakest:
+
+- $R_i$ is *convex* if the segment between any two of its points lies in $R_i$.
+- $R_i$ is *star-shaped* around a point $q$ if the segment from $q$ to any point of $R_i$
+  lies in $R_i$. Star-shaped around the candidate's own position is the natural property
+  between the other two.
+- $R_i$ is *connected* if it is not the union of two disjoint non-empty open sets. For an
+  open set in the plane this is the same as *path-connected*: any two of its points are
+  joined by a continuous path inside it.
+
+A convex region is star-shaped around each of its points, and a star-shaped region is
+connected. On the pixel grid a region is *in pieces* when its pixels fall into groups
+that do not touch, not even at a corner.
+
+*Curved borders.* Two neighbouring regions can both be convex only if the border between
+them is straight: two disjoint open convex sets are separated by a line (the separation
+theorem), so their common border lies on that line. Hence *a curved border always has a
+non-convex region on at least one side*, and every method that draws curved borders has
+non-convex regions.
+
+*Monotonicity.* A method is *monotone* if a winner stays the winner when some voters
+raise them on their ballots and the order of the other candidates stays the same. FPTP,
+Borda and Schulze are monotone, and a Condorcet winner stays the Condorcet winner when
+raised. IRV is not monotone: raising the winner can change who is eliminated first, and
+so give the winner a stronger opponent in the final.
+
+== Why monotonicity does not fix the shape <sec-shape-why>
+
+Monotonicity compares two electorates that differ in one way only: some voters raise one
+candidate. Moving the pixel is a different change. Every voter moves, and the rankings
+change among all candidates, including pairs that do not involve the winner. Even moving
+the pixel towards a candidate is not the same as raising that candidate, because the
+voters beyond the candidate move away from it. So monotonicity says nothing about the
+winners of neighbouring pixels.
+
+Another property that might seem to fit does not help either. A *consistent* method
+(FPTP and Borda are consistent) that elects $c_i$ in two electorates also elects $c_i$
+when the two electorates are pooled. But the voters of the midpoint between two pixels
+are not the pooled voters of the two pixels: for normal voters they are one Gaussian
+bump at the midpoint, not two bumps.
+
+== Where the regions are convex
+
+=== Condorcet methods and symmetric voters
+
+For normal voters, and more generally for voters that are centrally symmetric about the
+pixel centre, every Condorcet method draws the Voronoi diagram (@sec-normal-majority),
+whose regions are convex polygons. This includes Condorcet methods that are not
+monotone, such as Baldwin's and Nanson's methods: they elect the Condorcet winner
+whenever there is one, and for these voters there always is one. So a non-monotone
+method can have convex regions. Their convexity comes from the Condorcet criterion
+together with the symmetry of the voters, not from monotonicity.
+
+=== Candidates on a line: FPTP versus IRV <sec-collinear>
+
+Let the candidates lie on a line with unit direction $u$. Their Voronoi cells are strips
+perpendicular to the line, $V_i = {p : p dot u in I_i}$, with intervals
+$I_1 < I_2 < dots$ in the order of the candidates. For normal voters the projection
+$X dot u$ is $cal(N)(t, sigma^2)$ with $t = m dot u$, so every share depends only on $t$,
+and every region is a union of strips.
+
+*FPTP regions are single strips.* For $t < t'$ the ratio of the two projected densities,
+
+$ L(x) = phi((x - t') slash sigma) / phi((x - t) slash sigma) = exp(((t' - t) x - (t'^2 - t^2) slash 2) / sigma^2), $
+
+increases in $x$. Moving the pixel from $t$ to $t'$ multiplies the share of cell $k$ by
+the average of $L$ over $I_k$, and for $i < j$ the interval $I_j$ lies to the right of
+$I_i$, so the share of $c_j$ grows by a larger factor than that of $c_i$: the ratio
+$s_j (t) slash s_i (t)$ never decreases. Hence $c_i$ beats $c_j$ on a half-line of $t$,
+to the left of some point for $j > i$ and to the right of some point for $j < i$. The
+FPTP region of $c_i$ is the intersection of these half-lines, one interval of $t$: a
+strip, which is convex. The argument only uses that $L$ increases, which holds whenever
+the voters of a pixel are one fixed log-concave density moved to the pixel. Beta voters
+are not of this kind, and near the walls they are not even stochastically ordered
+(@sec-stochastic), so the argument does not carry over to them.
+
+*IRV splits the middle candidate.* Take L $= (0.2, 0.5)$, M $= (0.5, 0.5)$ and
+R $= (0.8, 0.5)$ with normal voters, $D = 0.3$ ($sigma = 0.376$). At the centre, M is the
+nearest candidate and the Condorcet winner, but it has the fewest first choices,
+$2 Phi(0.15 slash sigma) - 1 = 0.310$ against $0.345$ each for L and R. So M is
+eliminated first: the _centre squeeze_. At $x = 0.4$ the shares are L 0.445, M 0.300 and
+R 0.254, so R is eliminated first and M beats L in the final. M therefore wins IRV on
+two strips, $0.35 < x < 0.46$ and $0.54 < x < 0.65$, but not between them, and the regions
+of L and R are in two pieces as well (@fig-collinear). FPTP gives L and R one strip each
+and M nothing.
+
+Here the rule of thumb is exactly right: the monotone method keeps every region in one
+piece and the non-monotone one does not. Both properties of IRV have the same cause:
+who meets whom in the final depends on who is eliminated first.
+
+#figure(
+  image("figures/collinear.png", width: 100%),
+  caption: [Three candidates on a line, normal voters, $D = 0.3$. FPTP gives every
+    candidate at most one strip. In IRV the middle candidate M is squeezed out near the
+    centre, where it has the fewest first choices (right), so M wins two separate strips,
+    and so do L and R.],
+) <fig-collinear>
+
+== Monotone methods with non-convex regions
+
+*How often.* The random layouts below count a region as non-convex when its convex hull
+contains pixels that are more than 3 pixels away from the region; pixelation alone
+cannot cause that. @tab-shapes counts, on 100 random layouts of 3–6 candidates in
+$[0.05, 0.95]^2$ ($150 times 150$ pixels, `docs/figures.py search`), the layouts with at
+least one such region, and the layouts with a region in pieces.
+
+#figure(
+  table(
+    columns: 6,
+    align: (left, center, right, right, right, right),
+    stroke: none,
+    table.hline(),
+    [], [], table.cell(colspan: 2, align: center)[normal voters],
+    table.cell(colspan: 2, align: center)[Beta voters (`rms`)],
+    [method], [monotone], [non-convex], [in pieces], [non-convex], [in pieces],
+    table.hline(stroke: 0.5pt),
+    [FPTP], [yes], [42 / 21], [0 / 0], [34 / 47], [0 / 0],
+    [Borda], [yes], [35 / 24], [0 / 0], [53 / 52], [0 / 0],
+    [Schulze], [yes], [0 / 0], [0 / 0], [8 / 49], [0 / 0],
+    [IRV], [no], [90 / 95], [25 / 45], [94 / 98], [26 / 45],
+    table.hline(),
+  ),
+  caption: [Layouts out of 100 with at least one non-convex region, or with a region in
+    pieces (more than one piece of at least 20 pixels), at $D = 0.2$ / $D = 0.3$.],
+) <tab-shapes>
+
+*Normal voters.* The FPTP and Borda borders are contour lines of blurred cells and are
+curved (@sec-round-edges), so by the argument above some of their regions are not
+convex. The dent is often only a few pixels deep. Schulze draws the Voronoi diagram and
+is always convex.
+
+*Beta voters and Schulze.* Under Beta voters Schulze regions are not convex either.
+@fig-schulze-notch shows an example with $c_1 = (0.457, 0.407)$, $c_2 = (0.254, 0.289)$,
+$c_3 = (0.334, 0.641)$ and $c_4 = (0.235, 0.464)$, `rms` and $D = 0.3$. $c_1$ wins at both
+ends of the segment, $c_4$ in most of it. The notch is not a bend of a pairwise border:
+along the whole segment $c_4$ beats $c_1$ head to head, with $0.508$ to $0.516$ of the
+voters, and in the middle $c_4$ is the Condorcet winner. The two ends lie in pockets of
+Condorcet cycles; in each the fourth candidate loses to the other three:
+
+- at the upper end $c_1 > c_3 > c_4 > c_1$, with $0.512$, $0.528$ and $0.508$ of the voters;
+- at the lower end $c_1 > c_2 > c_4 > c_1$, with $0.530$, $0.537$ and $0.516$.
+
+In a cycle of three candidates Schulze elects the candidate beaten by the weakest of
+the three defeats. Next to the tie line of $c_1$ and $c_4$ the weakest defeat is that of
+$c_1$ by $c_4$, barely above one half. So Schulze gives $c_1$ the part of each pocket along that line, on $c_4$'s side of
+it. In general Schulze splits a cycle pocket among its three candidates, each winning
+the part next to the tie line of its own defeat. Every Schulze region therefore reaches
+across its pairwise borders into the neighbouring pockets, and between two such pockets
+the region has a notch. Normal voters have no pockets: their three pairwise borders meet
+in one point, the Voronoi vertex.
+
+#figure(
+  image("figures/schulze_notch.png", width: 100%),
+  caption: [Left: Schulze with Beta voters (`rms`, $D = 0.3$). $c_1$ (blue) wins at both
+    ends of the segment, $c_4$ (red) in between. Right: detail with the Condorcet winner
+    (black: cycles). $c_1$'s Schulze region, to the right of the white line, reaches
+    across the tie line of $c_1$ and $c_4$ (yellow) into two cycle pockets.],
+) <fig-schulze-notch>
+
+== Monotone methods with regions in pieces <sec-pieces>
+
+FPTP can split a region, already under normal voters. Take seven candidates:
+A $= (0.5, 0.5)$; N $= (0.5, 0.6)$ and S $= (0.5, 0.4)$ just above and below it; and
+NW $= (0.3, 0.95)$, NE $= (0.7, 0.95)$, SW $= (0.3, 0.05)$, SE $= (0.7, 0.05)$ far above
+and below. A's Voronoi cell is the thin strip $0.45 < y < 0.55$.
+
+With normal voters and $D = 0.12$ ($sigma = 0.150$), N and S are strongest in the middle
+column: at A's own position A has $0.260$ of the first choices and N and S have $0.320$
+each, and along the whole column $x = 1/2$ A trails the best rival by at least $0.060$.
+Further out, the voters above the strip are split between N and NW or NE, and those
+below between S and SW or SE. Every rival is weaker there, and A wins. So A's region is
+in two pieces, $0.13 < x < 0.28$ and $0.72 < x < 0.87$ (both at $0.46 < y < 0.54$),
+separated by the column where A never wins (@fig-disconnected). Beta voters (`rms`, same
+$D$) give the same picture, with pieces at $0.08 < x < 0.25$ and $0.75 < x < 0.92$; along
+the column A trails by at least $0.081$.
+
+A does not win at its own position, so its region is not even star-shaped around A. The
+regions of NW, NE, SW and SE are not convex either: the domes of N and S bite into them.
+Layouts like this one are rare. In the random layouts of @tab-shapes no region of a
+monotone method is in pieces, while IRV has regions in pieces in a quarter to a half of
+them.
+
+#figure(
+  image("figures/disconnected_fptp.png", width: 90%),
+  caption: [FPTP with normal and Beta voters, $D = 0.12$. Dashed: Voronoi borders;
+    dotted: the column $x = 1/2$, where A (red) never wins. A's region is in two pieces.],
+) <fig-disconnected>
+
+== Condorcet methods under Beta voters <sec-stochastic>
+
+For Condorcet methods under Beta voters, the random layouts gave non-convex regions but
+never regions in pieces. Whether Beta voters can split a Condorcet region is open. This
+section collects what is known.
+
+*Two candidates.* Every method then elects the majority winner, and the region of $c_i$
+is ${pi_(i j) > 1/2}$, bounded by one bent border. Suppose that the voters of a pixel
+become stochastically larger in each coordinate as its median grows, i.e. that
+$P(X <= t)$ never increases with the median, for any $t$. Then $nu dot X$ becomes
+stochastically larger as $m_x$ grows if $nu_x > 0$ and smaller if $nu_x < 0$, and likewise
+for $m_y$. So $pi_(i j)$ is monotone in each coordinate of the pixel, and with every pixel
+the region contains the whole rectangle between that pixel and one corner of the square.
+Any two points of the region are then joined through that corner: the region is
+connected, and its border is the graph of a monotone function. Normal voters have this
+property, because they only shift.
+
+Beta voters do not quite have it. As the median moves towards a wall, the far half of
+the voters is pushed out (@sec-spreads), and $P(X <= t)$ grows for some $t$. The table
+gives, for medians up to $1 - 1 slash 800$ (the last pixel of a $400 times 400$ grid), the
+median from which $P(X <= t)$ first grows, and the largest increase of $P(X <= t)$
+between two medians, over all $t$.
+
+#align(center, table(
+  columns: 5,
+  align: (left, right, right, right, right),
+  stroke: none,
+  table.hline(),
+  [], table.cell(colspan: 2, align: center)[$D = 0.2$], table.cell(colspan: 2, align: center)[$D = 0.3$],
+  [rule], [grows from], [largest rise], [grows from], [largest rise],
+  table.hline(stroke: 0.5pt),
+  [`rms`], [0.773], [0.011], [0.900], [0.018],
+  [`tapered`], [0.885], [0.013], [0.884], [0.036],
+  [`mean_abs`], [0.673], [0.097], [0.654], [0.146],
+  table.hline(),
+))
+
+So the argument does not apply. Numerically, no two-candidate region was in pieces: 0 of
+900 layouts (9 directions of the bisector times 100 positions) for each of `rms` and
+`mean_abs` at $D = 0.2$, $0.3$ and $0.4$.
+
+*More candidates.* The Condorcet region of $c_i$ is the intersection of its pairwise
+regions. For it to fall into pieces, two of its borders would have to cross each other
+twice. They are bent by only a few pixels, so this would need two nearly parallel
+borders close together.
+
+== Summary
+
+- Convex regions come from the voter model and the method together. Under normal voters
+  every Condorcet method, monotone or not, draws convex regions, and FPTP does for
+  candidates on a line.
+- Monotone methods can have non-convex regions (FPTP and Borda under both models,
+  Schulze under Beta voters, @fig-schulze-notch) and regions in pieces (FPTP,
+  @fig-disconnected).
+- So neither the shape nor the connectedness of a region proves anything about
+  monotonicity. What holds is weaker: in the random layouts only IRV split regions, and
+  for candidates on a line FPTP can never split a region, while IRV does.
 
 #pagebreak()
 

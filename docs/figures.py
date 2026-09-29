@@ -3,6 +3,8 @@
 Run from the repository root: `uv run python docs/figures.py`.
 Writes docs/figures/*.png and prints the numbers quoted in the text. Beta voters use
 the default spread rule (ranking_cells.SPREAD) except where the rules are compared.
+`uv run python docs/figures.py search` runs only the slow search over random candidate
+layouts of the chapter on the shapes of win regions.
 """
 
 import sys
@@ -16,12 +18,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import ListedColormap
+from matplotlib.path import Path as MplPath
+from scipy import ndimage
+from scipy.spatial import ConvexHull
 from scipy.special import betainc, ndtr, ndtri
 from scipy.stats import beta as beta_dist
 
 import normal
 import ranking_cells
-from methods import CYCLE, condorcet_cycle, fptp, irv, schulze, voronoi
+from methods import CYCLE, _pairwise_preferences, borda, condorcet_cycle, fptp, irv, schulze, voronoi
 
 # candidates A-E of the document
 CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
@@ -371,8 +376,242 @@ def voters_wall(n=6000):
     fig.savefig(FIGURES / "voters_wall.png", dpi=150)
     plt.close(fig)
 
+# ---------------------------------------------------------------- shapes of win regions
+
+EIGHT = np.ones((3, 3), bool)  # 8-neighbour pixels count as connected
+
+
+def pieces(mask, minsize=1):
+    """Sizes of the 8-connected pieces of a pixel mask, largest first."""
+    labels, n = ndimage.label(mask, structure=EIGHT)
+    sizes = ndimage.sum(mask, labels, range(1, n + 1))
+    return sorted((int(s) for s in sizes if s >= minsize), reverse=True), labels
+
+
+def concave_pixels(mask, margin=3):
+    """Pixels inside the convex hull of the region, not in it, and more than `margin`
+    pixels away from it. For a convex region pixelation leaves only pixels within about
+    one pixel of it, so any such pixel shows that the region is not convex."""
+    points = np.argwhere(mask)
+    if len(points) < 3 or np.linalg.matrix_rank(points - points[0]) < 2:
+        return 0
+    hull = MplPath(points[ConvexHull(points).vertices])
+    inside = hull.contains_points(np.argwhere(np.ones_like(mask))).reshape(mask.shape)
+    return int(np.sum(inside & (ndimage.distance_transform_edt(~mask) > margin)))
+
+
+def spans(labels, k, medians):
+    where = np.argwhere(labels == k)
+    lo, hi = medians[where.min(axis=0)], medians[where.max(axis=0)]
+    return f"x {lo[0]:.3f}-{hi[0]:.3f}, y {lo[1]:.3f}-{hi[1]:.3f}"
+
+
+# three candidates on a line: IRV squeezes the middle one out
+LINE = np.array([(0.2, 0.5), (0.5, 0.5), (0.8, 0.5)])
+LINE_NAMES = "LMR"
+LINE_PALETTE = ["#4e79a7", "#e15759", "#59a14f"]
+
+
+def collinear():
+    """FPTP and IRV for three collinear candidates, normal voters (centre squeeze)."""
+    deviation, pixels = 0.3, 300
+    rankings, probs = normal.ranking_probabilities(LINE, pixels, deviation, 0)
+    m = ranking_cells.pixel_medians(pixels)
+    row = pixels // 2
+    shares = {c: probs[:, row, rankings[:, 0] == c].sum(-1) for c in range(3)}
+    fig, axes = plt.subplots(1, 3, figsize=(12, 3.9), gridspec_kw={"width_ratios": [1, 1, 1.35]})
+    for ax, (label, method) in zip(axes, (("FPTP", fptp), ("IRV", irv))):
+        winners = method(rankings, probs)
+        ax.imshow(winners.T, cmap=ListedColormap(LINE_PALETTE), vmin=0, vmax=2, origin="lower",
+                  extent=(0, 1, 0, 1), interpolation="nearest")
+        voronoi_lines(ax, LINE, colors="k", linewidths=0.8, linestyles="--")
+        ax.scatter(*LINE.T, c=LINE_PALETTE, s=45, edgecolors="k", zorder=3)
+        for name, (x, y) in zip(LINE_NAMES, LINE):
+            ax.annotate(name, (x + 0.015, y + 0.03), weight="bold", fontsize=9)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_title(f"normal {label}, D = {deviation} (dashed: Voronoi)", fontsize=10)
+        line = winners[:, row]
+        runs = [(m[i], m[j - 1], LINE_NAMES[line[i]]) for i, j in
+                zip(np.r_[0, np.flatnonzero(np.diff(line)) + 1], np.r_[np.flatnonzero(np.diff(line)) + 1, pixels])]
+        print(f"collinear {label}: " + ", ".join(f"{w} on x {a:.3f}-{b:.3f}" for a, b, w in runs))
+    ax = axes[2]
+    for c, style in zip(range(3), ("-", "--", ":")):
+        ax.plot(m, shares[c], color=LINE_PALETTE[c], linestyle=style, lw=2, label=f"$s_{LINE_NAMES[c]}$")
+    squeezed = irv(rankings, probs)[:, row] == 1
+    ax.fill_between(m, 0, 1, where=squeezed, color=LINE_PALETTE[1], alpha=0.12, lw=0,
+                    label="M wins IRV")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 0.8)
+    ax.set_xlabel("pixel median x (any y)", fontsize=9)
+    ax.set_title("first-choice shares", fontsize=10)
+    ax.legend(fontsize=8, frameon=False, loc="lower center", ncol=2)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(FIGURES / "collinear.png", dpi=150)
+    plt.close(fig)
+    for x in (0.4, 0.5):
+        i = np.argmin(abs(m - x))
+        print(f"  x = {m[i]:.3f}: " + "  ".join(f"{LINE_NAMES[c]} {shares[c][i]:.3f}" for c in range(3)))
+
+
+# A in a thin strip between N and S; NW, NE, SW, SE take the voters far above and below
+SPLIT = np.array([(0.5, 0.5), (0.5, 0.6), (0.5, 0.4), (0.3, 0.95), (0.7, 0.95), (0.3, 0.05), (0.7, 0.05)])
+SPLIT_NAMES = ["A", "N", "S", "NW", "NE", "SW", "SE"]
+SPLIT_PALETTE = ["#e15759", "#4e79a7", "#59a14f", "#9cb9d6", "#76b7b2", "#b3d6ad", "#edc948"]
+
+
+def disconnected_fptp():
+    """FPTP region of A in two pieces, normal and Beta voters, D = 0.12."""
+    deviation, pixels = 0.12, 401  # odd: the middle pixel column is x = 1/2
+    m = ranking_cells.pixel_medians(pixels)
+    fig, axes = plt.subplots(1, 2, figsize=(9, 4.6))
+    for ax, (name, model, options) in zip(axes, (("normal", normal, {}),
+                                                 (f"Beta ({SPREAD})", ranking_cells, {"spread": SPREAD}))):
+        nodes = 0 if model is normal else ranking_cells.NODES
+        rankings, probs = model.ranking_probabilities(SPLIT, pixels, deviation, nodes, **options)
+        winners = fptp(rankings, probs)
+        sizes, labels = pieces(winners == 0)
+        print(f"split {name}: FPTP region of A in {len(sizes)} pieces {sizes}: "
+              + "; ".join(spans(labels, k, m) for k in range(1, len(sizes) + 1)))
+        # the whole pixel column x = 1/2
+        i = pixels // 2
+        column = np.stack([probs[i][:, rankings[:, 0] == c].sum(-1) for c in range(len(SPLIT))])
+        lead = column[0] - column[1:].max(axis=0)
+        print(f"  column x = {m[i]}: A's largest lead over the best rival {lead.max():+.4f} "
+              f"(y = {m[lead.argmax()]:.3f}); at A's own position A {column[0, i]:.3f}, "
+              f"best rival {SPLIT_NAMES[1 + column[1:, i].argmax()]} {column[1:, i].max():.3f}")
+        ax.imshow(winners.T, cmap=ListedColormap(SPLIT_PALETTE), vmin=0, vmax=6, origin="lower",
+                  extent=(0, 1, 0, 1), interpolation="nearest")
+        voronoi_lines(ax, SPLIT, colors="k", linewidths=0.6, linestyles="--")
+        ax.axvline(0.5, color="k", lw=0.8, ls=":")
+        ax.scatter(*SPLIT.T, c=SPLIT_PALETTE, s=40, edgecolors="k", zorder=3)
+        for label, (x, y) in zip(SPLIT_NAMES, SPLIT):
+            ax.annotate(label, (x + 0.015, y + 0.015), weight="bold", fontsize=9)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_title(f"{name} FPTP, D = {deviation}", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(FIGURES / "disconnected_fptp.png", dpi=150)
+    plt.close(fig)
+
+
+# c_1, ..., c_4 of the Schulze example
+NOTCH = np.array([(0.457, 0.407), (0.254, 0.289), (0.334, 0.641), (0.235, 0.464)])
+NOTCH_SEGMENT = np.array([(0.351, 0.519), (0.314, 0.342)])
+
+
+def schulze_notch():
+    """Beta Schulze region of c_1 that is not convex, and the cycle pockets behind it."""
+    deviation, pixels = 0.3, PIXELS
+    rankings, probs = ranking_cells.ranking_probabilities(NOTCH, pixels, deviation, spread=SPREAD)
+    sch, cyc = schulze(rankings, probs), condorcet_cycle(rankings, probs)
+    pairwise = _pairwise_preferences(rankings, probs)
+    print(f"notch: concave pixels of c_1's Schulze region {concave_pixels(sch == 0)}, "
+          f"cycle pixels {np.sum(cyc == CYCLE)}")
+    # exact values along the segment
+    t = np.linspace(0, 1, 11)
+    points = NOTCH_SEGMENT[0] + t[:, None] * (NOTCH_SEGMENT[1] - NOTCH_SEGMENT[0])
+    medians = np.unique(points.round(6))
+    r, p = ranking_cells.compute_ranking_probabilities(
+        NOTCH, ranking_cells.beta_params_at(medians, deviation, SPREAD))
+    s, c, d = schulze(r, p), condorcet_cycle(r, p), _pairwise_preferences(r, p)
+    for tt, (x, y) in zip(t, points):
+        i, j = np.searchsorted(medians, round(x, 6)), np.searchsorted(medians, round(y, 6))
+        dd = d[i, j]
+        defeats = ", ".join(f"c_{u + 1}>c_{v + 1} {dd[u, v]:.3f}" for u in range(4) for v in range(4)
+                            if dd[u, v] > 0.5)
+        print(f"  t = {tt:.1f} ({x:.3f}, {y:.3f}): Schulze c_{s[i, j] + 1}, Condorcet "
+              f"{'cycle' if c[i, j] == CYCLE else f'c_{c[i, j] + 1}'}; {defeats}")
+
+    x, y = np.meshgrid(MEDIANS, MEDIANS, indexing="ij")
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.9))
+    for ax, winners, title in ((axes[0], sch, f"Beta ({SPREAD}) Schulze, D = {deviation}"),
+                               (axes[1], cyc, "Condorcet winner (black: cycle), detail")):
+        ax.imshow(np.where(winners == CYCLE, 5, winners).T, cmap=ListedColormap(PALETTE), vmin=0, vmax=5,
+                  origin="lower", extent=(0, 1, 0, 1), interpolation="nearest")
+        ax.scatter(*NOTCH.T, c=PALETTE[:4], s=45, edgecolors="k", zorder=3)
+        for k, (cx, cy) in enumerate(NOTCH):
+            ax.annotate(f"$c_{k + 1}$", (cx + 0.012, cy + 0.012), weight="bold", fontsize=10)
+        ax.set_title(title, fontsize=10)
+    axes[0].plot(*NOTCH_SEGMENT.T, color="k", lw=1.5, marker="o", ms=4)
+    axes[0].set_xlim(0, 1)
+    axes[0].set_ylim(0, 1)
+    ax = axes[1]
+    ax.contour(x, y, (sch == 0).astype(float), levels=[0.5], colors="white", linewidths=2)
+    ax.contour(x, y, pairwise[..., 0, 3] - 0.5, levels=[0], colors="#edc948", linewidths=1.5, linestyles="--")
+    ax.scatter(*NOTCH_SEGMENT.T, c="white", edgecolors="k", s=30, zorder=4)
+    ax.plot([], [], color="white", lw=2, label="border of $c_1$'s Schulze region")
+    ax.plot([], [], color="#edc948", lw=1.5, ls="--", label="$c_1$ and $c_4$ tie head to head")
+    ax.scatter([], [], c="white", edgecolors="k", s=30, label="ends of the segment")
+    ax.legend(fontsize=8, loc="lower right", facecolor="0.85")
+    ax.set_xlim(0.2, 0.45)
+    ax.set_ylim(0.28, 0.58)
+    fig.tight_layout()
+    fig.savefig(FIGURES / "schulze_notch.png", dpi=150)
+    plt.close(fig)
+
+
+def stochastic_order():
+    """Is P(X <= t) non-increasing in the median for every t? Largest violation for medians
+    that a 400-pixel grid reaches."""
+    m = np.linspace(0.5, 1 - 1 / 800, 8000)
+    t = np.linspace(0.001, 0.999, 999)
+    for spread in RULES:
+        for deviation in (0.2, 0.3):
+            ab = ranking_cells.beta_params_at(m, deviation, spread)
+            F = betainc(ab[:, :1], ab[:, 1:], t)
+            later_max = np.maximum.accumulate(F[::-1], axis=0)[::-1]   # max of F over larger medians
+            gain = later_max - F
+            start = m[1:][(np.diff(F, axis=0) > 1e-12).any(axis=1)].min()  # first local rise
+            print(f"stochastic order, {spread:8s} D = {deviation}: P(X <= t) grows with the median "
+                  f"from median {start:.3f} on, by at most {gain.max():.3f}")
+
+
+def shape_search(layouts=100, seed=1):
+    """Random layouts of 3-6 candidates: how often is a region non-convex or in pieces?
+    Slow (several minutes); run with `uv run python docs/figures.py search`."""
+    pixels, minsize = 150, 20
+    methods = {"FPTP": fptp, "Borda": borda, "Schulze": schulze, "IRV": irv}
+    for name, model, options in (("normal", normal, {}), (f"beta {SPREAD}", ranking_cells, {"spread": SPREAD})):
+        for deviation in (0.2, 0.3):
+            rng = np.random.default_rng(seed)
+            concave, split = dict.fromkeys(methods, 0), dict.fromkeys(methods, 0)
+            for _ in range(layouts):
+                candidates = rng.uniform(0.05, 0.95, (rng.integers(3, 7), 2))
+                rankings, probs = model.ranking_probabilities(candidates, pixels, deviation, **options)
+                for label, method in methods.items():
+                    winners = method(rankings, probs)
+                    masks = [winners == c for c in range(len(candidates))]
+                    concave[label] += any(concave_pixels(mask) > 0 for mask in masks)
+                    split[label] += any(len(pieces(mask, minsize)[0]) > 1 for mask in masks)
+            print(f"search {name} D = {deviation}, {layouts} layouts: non-convex "
+                  + ", ".join(f"{k} {v}" for k, v in concave.items())
+                  + "; in pieces " + ", ".join(f"{k} {v}" for k, v in split.items()), flush=True)
+    # two candidates: every method is the majority between them
+    pixels = 200
+    for spread in ("rms", "mean_abs"):
+        for deviation in (0.2, 0.3, 0.4):
+            medians, params = ranking_cells.node_params(pixels, ranking_cells.NODES, deviation, spread)
+            count = split = 0
+            for theta in np.radians(np.arange(5, 90, 10)):
+                u = np.array([np.cos(theta), np.sin(theta)])
+                for q in np.stack(np.meshgrid(*[np.linspace(0.05, 0.95, 10)] * 2), -1).reshape(-1, 2):
+                    rankings, probs = ranking_cells.compute_ranking_probabilities(
+                        np.array([q - 0.05 * u, q + 0.05 * u]), params)
+                    share = ranking_cells.interpolate_to_pixels(probs, medians, pixels)[..., rankings[:, 0] == 0].sum(-1)
+                    split += len(pieces(share > 0.5, 5)[0]) > 1 or len(pieces(share < 0.5, 5)[0]) > 1
+                    count += 1
+            print(f"search two candidates, beta {spread} D = {deviation}: {split} of {count} layouts "
+                  "with a majority region in pieces", flush=True)
+
+
 if __name__ == "__main__":
     FIGURES.mkdir(exist_ok=True)
+    if sys.argv[1:] == ["search"]:
+        shape_search()
+        sys.exit()
     spread_shapes()
     spread_densities()
     cycle_counts()
@@ -386,3 +625,7 @@ if __name__ == "__main__":
     blur_corner()
     seven_fptp()
     voters_wall()
+    collinear()
+    disconnected_fptp()
+    schulze_notch()
+    stochastic_order()
