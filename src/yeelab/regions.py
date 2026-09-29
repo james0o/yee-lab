@@ -21,15 +21,15 @@ of another winner).
 import contourpy
 import numpy as np
 
-from methods import (
+from yeelab.methods import (
     borda_margin,
     condorcet_margin,
     fptp_margin,
     irv_margin,
     schulze_margin,
 )
-from ranking_cells import interpolate_to
-from shares import Model, first_choice_shares, pairwise_shares, ranking_shares, voronoi_cells
+from yeelab.ranking_cells import interpolate_to
+from yeelab.shares import Model, first_choice_shares, pairwise_shares, ranking_shares, voronoi_cells
 
 DIGITS = 6  # decimals of the vertices sent to the UI
 TINY = 1e-12  # rings with less area are dropped (collapsed onto a grid point)
@@ -106,7 +106,7 @@ def contour_regions(coords, winner, margin):
 
 
 def voronoi_regions(candidates):
-    """Exact regions of methods.voronoi: straight borders, no grid."""
+    """Exact regions of pixels.methods.voronoi: straight borders, no grid."""
     return [{"winner": c, "polygons": [[_ring(cell)]]}
             for c, cell in enumerate(voronoi_cells(candidates)) if cell is not None]
 

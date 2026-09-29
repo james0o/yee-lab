@@ -10,8 +10,6 @@ layouts of the chapter on the shapes of win regions.
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 import matplotlib
 
 matplotlib.use("Agg")
@@ -24,9 +22,10 @@ from scipy.spatial import ConvexHull
 from scipy.special import betainc, ndtr, ndtri
 from scipy.stats import beta as beta_dist
 
-import normal
-import ranking_cells
-from methods import CYCLE, _pairwise_preferences, borda, condorcet_cycle, fptp, irv, schulze, voronoi
+from yeelab import normal, ranking_cells
+from yeelab.methods import CYCLE
+from yeelab.pixels import beta as pixel_beta, normal as pixel_normal
+from yeelab.pixels.methods import _pairwise_preferences, borda, condorcet_cycle, fptp, irv, schulze, voronoi
 
 # candidates A-E of the document
 CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
@@ -48,7 +47,7 @@ A, B, C, D, E = range(5)
 PALETTE = ["#4e79a7", "#f28e2b", "#59a14f", "#e15759", "#b07aa1", "#000000"]
 FIGURES = Path(__file__).parent / "figures"
 MEDIANS = ranking_cells.pixel_medians(PIXELS)
-MODELS = {"beta": ranking_cells, "normal": normal}
+MODELS = {"beta": pixel_beta, "normal": pixel_normal}
 
 
 def profile(name, spread=SPREAD):
@@ -136,7 +135,7 @@ def cycle_counts():
     tie, nearest = _ties(), voronoi(CANDIDATES, PIXELS)
     print(f"pixels on a bisector (ties): {tie.sum()} of {tie.size}")
     for deviation in (0.2, DEVIATION):
-        models = [("normal", normal, {})] + [(f"beta {s}", ranking_cells, {"spread": s}) for s in RULES]
+        models = [("normal", pixel_normal, {})] + [(f"beta {s}", pixel_beta, {"spread": s}) for s in RULES]
         for label, model, options in models:
             rankings, probs = model.ranking_probabilities(CANDIDATES, PIXELS, deviation, **options)
             sch, cyc = schulze(rankings, probs), condorcet_cycle(rankings, probs)
@@ -238,7 +237,7 @@ def fptp_edge(profiles):
 
     models = [("normal", profiles["normal"])] + [(f"beta {s}", profile("beta", s)) for s in RULES]
     models.append((f"beta {SPREAD}, deviation 0.2",
-                   ranking_cells.ranking_probabilities(CANDIDATES, PIXELS, 0.2, spread=SPREAD)))
+                   pixel_beta.ranking_probabilities(CANDIDATES, PIXELS, 0.2, spread=SPREAD)))
     for label, (rankings, probs) in models:
         winners = fptp(rankings, probs)
         print(f"{label}: FPTP borders of B near the left edge")
@@ -260,7 +259,7 @@ SEVEN_PALETTE = ["#4e79a7", "#76b7b2", "#e15759", "#b07aa1", "#59a14f", "#edc948
 
 
 def voronoi_lines(ax, candidates, **style):
-    """Borders of the Voronoi cells (methods.voronoi), drawn as contours."""
+    """Borders of the Voronoi cells (pixels.methods.voronoi), drawn as contours."""
     t = np.linspace(0, 1, 800)
     x, y = np.meshgrid(t, t, indexing="ij")
     nearest = np.linalg.norm(np.stack([x, y], -1)[..., None, :] - candidates, axis=-1).argmin(-1)
@@ -278,7 +277,7 @@ def blur_corner():
     three = np.array([(0.5 - a / 2, 0.5 - a / 2), (0.5 + a / 2, 0.5 - a / 2), (0.5 - a / 2, 0.5 + a / 2)])
     colors = ["#4e79a7", "#e15759", "#59a14f"]
     pixels = 200
-    rankings, probs = normal.ranking_probabilities(three, pixels, deviation, 0)
+    rankings, probs = pixel_normal.ranking_probabilities(three, pixels, deviation, 0)
     m = ranking_cells.pixel_medians(pixels)
     x, y = np.meshgrid(m, m, indexing="ij")
     quadrant = ndtr((0.5 - x) / sigma) * ndtr((0.5 - y) / sigma)
@@ -317,9 +316,9 @@ def seven_fptp():
     """FPTP for seven candidates: Voronoi, normal with a small and a large blur, Beta."""
     pixels = 200
     fig, axes = plt.subplots(1, 4, figsize=(14, 3.9))
-    panels = [("Voronoi (no blur)", None, None, {}), ("normal, D = 0.1", normal, 0.1, {}),
-              ("normal, D = 0.3", normal, 0.3, {}),
-              (f"Beta ({SPREAD}), D = 0.3", ranking_cells, 0.3, {"spread": SPREAD})]
+    panels = [("Voronoi (no blur)", None, None, {}), ("normal, D = 0.1", pixel_normal, 0.1, {}),
+              ("normal, D = 0.3", pixel_normal, 0.3, {}),
+              (f"Beta ({SPREAD}), D = 0.3", pixel_beta, 0.3, {"spread": SPREAD})]
     for ax, (title, model, deviation, options) in zip(axes, panels):
         if model is None:
             winners = voronoi(SEVEN, pixels)
@@ -415,7 +414,7 @@ LINE_PALETTE = ["#4e79a7", "#e15759", "#59a14f"]
 def collinear():
     """FPTP and IRV for three collinear candidates, normal voters (centre squeeze)."""
     deviation, pixels = 0.3, 300
-    rankings, probs = normal.ranking_probabilities(LINE, pixels, deviation, 0)
+    rankings, probs = pixel_normal.ranking_probabilities(LINE, pixels, deviation, 0)
     m = ranking_cells.pixel_medians(pixels)
     row = pixels // 2
     shares = {c: probs[:, row, rankings[:, 0] == c].sum(-1) for c in range(3)}
@@ -467,9 +466,9 @@ def disconnected_fptp():
     deviation, pixels = 0.12, 401  # odd: the middle pixel column is x = 1/2
     m = ranking_cells.pixel_medians(pixels)
     fig, axes = plt.subplots(1, 2, figsize=(9, 4.6))
-    for ax, (name, model, options) in zip(axes, (("normal", normal, {}),
-                                                 (f"Beta ({SPREAD})", ranking_cells, {"spread": SPREAD}))):
-        nodes = 0 if model is normal else ranking_cells.NODES
+    for ax, (name, model, options) in zip(axes, (("normal", pixel_normal, {}),
+                                                 (f"Beta ({SPREAD})", pixel_beta, {"spread": SPREAD}))):
+        nodes = 0 if model is pixel_normal else ranking_cells.NODES
         rankings, probs = model.ranking_probabilities(SPLIT, pixels, deviation, nodes, **options)
         winners = fptp(rankings, probs)
         sizes, labels = pieces(winners == 0)
@@ -505,7 +504,7 @@ NOTCH_SEGMENT = np.array([(0.351, 0.519), (0.314, 0.342)])
 def schulze_notch():
     """Beta Schulze region of c_1 that is not convex, and the cycle pockets behind it."""
     deviation, pixels = 0.3, PIXELS
-    rankings, probs = ranking_cells.ranking_probabilities(NOTCH, pixels, deviation, spread=SPREAD)
+    rankings, probs = pixel_beta.ranking_probabilities(NOTCH, pixels, deviation, spread=SPREAD)
     sch, cyc = schulze(rankings, probs), condorcet_cycle(rankings, probs)
     pairwise = _pairwise_preferences(rankings, probs)
     print(f"notch: concave pixels of c_1's Schulze region {concave_pixels(sch == 0)}, "
@@ -514,7 +513,7 @@ def schulze_notch():
     t = np.linspace(0, 1, 11)
     points = NOTCH_SEGMENT[0] + t[:, None] * (NOTCH_SEGMENT[1] - NOTCH_SEGMENT[0])
     medians = np.unique(points.round(6))
-    r, p = ranking_cells.compute_ranking_probabilities(
+    r, p = pixel_beta.compute_ranking_probabilities(
         NOTCH, ranking_cells.beta_params_at(medians, deviation, SPREAD))
     s, c, d = schulze(r, p), condorcet_cycle(r, p), _pairwise_preferences(r, p)
     for tt, (x, y) in zip(t, points):
@@ -574,7 +573,7 @@ def shape_search(layouts=100, seed=1):
     Slow (several minutes); run with `uv run python docs/figures.py search`."""
     pixels, minsize = 150, 20
     methods = {"FPTP": fptp, "Borda": borda, "Schulze": schulze, "IRV": irv}
-    for name, model, options in (("normal", normal, {}), (f"beta {SPREAD}", ranking_cells, {"spread": SPREAD})):
+    for name, model, options in (("normal", pixel_normal, {}), (f"beta {SPREAD}", pixel_beta, {"spread": SPREAD})):
         for deviation in (0.2, 0.3):
             rng = np.random.default_rng(seed)
             concave, split = dict.fromkeys(methods, 0), dict.fromkeys(methods, 0)
@@ -598,9 +597,9 @@ def shape_search(layouts=100, seed=1):
             for theta in np.radians(np.arange(5, 90, 10)):
                 u = np.array([np.cos(theta), np.sin(theta)])
                 for q in np.stack(np.meshgrid(*[np.linspace(0.05, 0.95, 10)] * 2), -1).reshape(-1, 2):
-                    rankings, probs = ranking_cells.compute_ranking_probabilities(
+                    rankings, probs = pixel_beta.compute_ranking_probabilities(
                         np.array([q - 0.05 * u, q + 0.05 * u]), params)
-                    share = ranking_cells.interpolate_to_pixels(probs, medians, pixels)[..., rankings[:, 0] == 0].sum(-1)
+                    share = pixel_beta.interpolate_to_pixels(probs, medians, pixels)[..., rankings[:, 0] == 0].sum(-1)
                     split += len(pieces(share > 0.5, 5)[0]) > 1 or len(pieces(share < 0.5, 5)[0]) > 1
                     count += 1
             print(f"search two candidates, beta {spread} D = {deviation}: {split} of {count} layouts "

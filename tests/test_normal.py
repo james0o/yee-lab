@@ -1,4 +1,4 @@
-"""Theoretical checks of normal.py.
+"""Theoretical checks of normal.py and pixels/normal.py.
 
 For voters N(m, sigma^2 I) the share preferring c_i to c_j has a closed form,
 Phi(distance of m from their bisector / sigma), for bisectors in every direction
@@ -16,18 +16,18 @@ from scipy.integrate import quad
 from scipy.special import ndtr, owens_t
 from scipy.stats import norm
 
-from methods import CYCLE, condorcet_cycle, schulze, voronoi
-from normal import (
+from yeelab.methods import CYCLE
+from yeelab.normal import (
     BOX,
     NODES,
-    compute_ranking_probabilities,
-    interpolate_to_pixels,
     node_medians,
     normal_cells,
     sigma_from_deviation,
     triangle_terms,
 )
-from ranking_cells import pixel_medians
+from yeelab.pixels.methods import condorcet_cycle, schulze, voronoi
+from yeelab.pixels.normal import compute_ranking_probabilities, interpolate_to_pixels
+from yeelab.ranking_cells import pixel_medians
 
 CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
 PIXELS = 20

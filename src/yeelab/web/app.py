@@ -15,12 +15,11 @@ from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from distributions import DISTRIBUTIONS, Distribution
-from methods import METHODS
-from normal import sigma_from_deviation
-from ranking_cells import SPREAD, SPREADS, TAPER, Spread, beta_params
-from regions import regions
-from shares import PIXELS, Model
+from yeelab.distributions import DISTRIBUTIONS, Distribution
+from yeelab.normal import sigma_from_deviation
+from yeelab.ranking_cells import SPREAD, SPREADS, TAPER, Spread, beta_params
+from yeelab.regions import MARGINS, regions
+from yeelab.shares import PIXELS, Model
 
 # Methods follow a drag within ~5-30 ms; IRV needs every ranking cell and takes up to
 # ~0.1 s for 8 candidates (see docs/math.typ).
@@ -30,7 +29,7 @@ CANDIDATES = [[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]]
 DEVIATION = 0.2  # default of the deviation slider
 
 # The UI offers the Voronoi diagram (no voters) next to the voting methods.
-DIAGRAMS = ["voronoi", *METHODS]
+DIAGRAMS = ["voronoi", *MARGINS]
 # Mean absolute deviation of the voters from their pixel, as offered by the UI; DEVIATION
 # is the default. At 0 every voter is at the pixel, so every method draws the Voronoi diagram.
 DEVIATIONS = [round(0.05 * k, 2) for k in range(9)]

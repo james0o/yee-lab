@@ -1,6 +1,6 @@
 """Voter shares that a voting method needs, fast enough to follow a dragged candidate.
 
-The ranking probabilities of ranking_cells.py and normal.py are a complete profile,
+The ranking probabilities of pixels/beta.py and pixels/normal.py are a complete profile,
 enough for every method, but they need all cells of the bisector arrangement:
 O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far less:
 
@@ -14,7 +14,7 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
 below c, so c's expected score is sum_e d[c, e].)
 
 Every share of a polygon is a sum over its edges: Green's theorem edge integrals
-(ranking_cells._edge_integral, compiled on the tabulated CDFs of beta_tables.py) for
+(pixels.beta._edge_integral, compiled on the tabulated CDFs of beta_tables.py) for
 Beta voters, signed triangles with Owen's T (normal.triangle_terms) for normal voters. An edge
 term depends only on the edge, so they are cached by their endpoints: dragging one
 candidate moves only its C - 1 bisectors, and only edges on those are new.
@@ -33,12 +33,10 @@ from functools import cached_property, lru_cache
 import numpy as np
 from scipy.special import logit, ndtr
 
-import normal
-import ranking_cells
-import threads
-from beta_tables import TabulatedBeta
-from distributions import Distribution
-from ranking_cells import NODES, QUAD_NODES, Spread, _clip
+from yeelab import normal, ranking_cells, threads
+from yeelab.beta_tables import TabulatedBeta
+from yeelab.distributions import Distribution
+from yeelab.ranking_cells import NODES, QUAD_NODES, Spread, _clip
 
 PIXELS = 300  # the outermost medians are 1/2 and 1 - 1/2 pixel from the walls
 CACHE_BYTES = 64 * 2**20  # edge integrals kept between requests
@@ -247,7 +245,7 @@ def first_choice_shares(candidates, model: Model) -> np.ndarray:
 
 
 def ranking_shares(candidates, model: Model):
-    """(rankings (R, C), shares (N, N, R)) as ranking_cells / normal
+    """(rankings (R, C), shares (N, N, R)) as pixels.beta / pixels.normal
     compute_ranking_probabilities return them: the cells of the bisector arrangement,
     with their edges from the edge cache."""
     candidates = np.asarray(candidates, dtype=np.float64)

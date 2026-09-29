@@ -9,9 +9,10 @@ import numpy as np
 import pytest
 from scipy.special import expit
 
-from beta_tables import ExactBeta, TabulatedBeta
-from ranking_cells import SPREADS, _edge_integral, node_params
-from shares import PIXELS, node_count
+from yeelab.beta_tables import ExactBeta, TabulatedBeta
+from yeelab.pixels.beta import _edge_integral
+from yeelab.ranking_cells import SPREADS, node_params
+from yeelab.shares import PIXELS, node_count
 
 # every double y in (0, 1), including the tails below the table, and both walls
 POINTS = np.concatenate([expit(np.linspace(-745, 37, 4001)), [0.0, 1.0]])
@@ -57,7 +58,7 @@ EDGES = {
 
 
 def test_edge_integrals_match_exact(betas):
-    """The compiled edge integrals of the tables against ranking_cells._edge_integral
+    """The compiled edge integrals of the tables against pixels.beta._edge_integral
     with scipy, for every kind of edge at once."""
     exact, table = betas
     nodes, weights = np.polynomial.legendre.leggauss(24)

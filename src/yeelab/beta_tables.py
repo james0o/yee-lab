@@ -1,6 +1,6 @@
 """Beta CDF and quantile of the node distributions, exact or from tables.
 
-The edge integrals of ranking_cells.py evaluate, for a fixed list of N Beta
+The edge integrals of pixels/beta.py evaluate, for a fixed list of N Beta
 distributions (the voters of the interpolation nodes along one axis), the CDF of
 every node at every quadrature point: O(N^2) `betainc` calls per edge, which is
 nearly all of their cost. The N distributions never change for a given deviation
@@ -36,7 +36,7 @@ import numpy as np
 from numba import njit
 from scipy.special import betainc, betaincinv, betaln, log_expit
 
-import threads
+from yeelab import threads
 
 CDF_RANGE = 40.0  # the CDF table spans logit(y) in [-CDF_RANGE, CDF_RANGE] ...
 CDF_STEP = 0.01   # ... with this step
@@ -149,7 +149,7 @@ def _edge_part(xs, ys, xe, ye, out, cdf, tail_a, tail_scale, ppf, left, right, n
                weights, scratch):
     """out += integral of omega over (xs, ys) -> (xe, ye), a segment that is not
     vertical and does not touch both kinds of wall: the forms of
-    ranking_cells._edge_integral with the same quadrature, on the tables."""
+    pixels.beta._edge_integral with the same quadrature, on the tables."""
     size = out.shape[0]
     start, end, values = scratch[0], scratch[1], scratch[2]
     if abs(ys - ye) < 1e-9:  # horizontal: -G(y) (F(xe) - F(xs))
@@ -199,7 +199,7 @@ def _edge_part(xs, ys, xe, ye, out, cdf, tail_a, tail_scale, ppf, left, right, n
 @_kernel
 def _edge_terms(segments, out, cdf, tail_a, tail_scale, ppf, left, right, nodes, weights):
     """out[e] += integral of omega over segment e = (xs, ys, xe, ye), each (N, N):
-    ranking_cells._edge_integral for many edges at once."""
+    pixels.beta._edge_integral for many edges at once."""
     scratch = np.empty((5, cdf.shape[1]))
     for e in range(segments.shape[0]):
         xs, ys, xe, ye = segments[e, 0], segments[e, 1], segments[e, 2], segments[e, 3]
@@ -298,7 +298,7 @@ class TabulatedBeta:
 
     def edge_terms(self, segments, nodes, weights):
         """Integrals of omega over the segments (E, 4) = (xs, ys, xe, ye), shape
-        (E, N, N): ranking_cells._edge_integral with the Gauss-Legendre `nodes` and
+        (E, N, N): pixels.beta._edge_integral with the Gauss-Legendre `nodes` and
         `weights`, compiled, on chunks of the edges in parallel threads."""
         segments = np.ascontiguousarray(segments, dtype=np.float64).reshape(-1, 4)
         out = np.zeros((len(segments), self._size, self._size))

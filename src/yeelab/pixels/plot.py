@@ -1,3 +1,5 @@
+"""Yee diagrams as PNGs in plots/: uv run python -m yeelab.pixels.plot -h."""
+
 import time
 from functools import partial
 from pathlib import Path
@@ -20,9 +22,11 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from distributions import Distribution, model
-from methods import CYCLE, METHODS, voronoi
-from ranking_cells import NODES, SPREAD, Spread, effective_nodes
+from yeelab.distributions import Distribution
+from yeelab.methods import CYCLE
+from yeelab.pixels import beta, normal
+from yeelab.pixels.methods import METHODS, voronoi
+from yeelab.ranking_cells import NODES, SPREAD, Spread, effective_nodes
 
 PIXELS = 400  # per axis, default of --pixels
 DEVIATION = 0.2  # default of --deviation
@@ -39,6 +43,14 @@ app = typer.Typer(
     add_completion=False,
     context_settings={"help_option_names": ["-h", "--help"]},
 )
+
+
+def model(distribution: Distribution, spread: Spread = SPREAD):
+    """(module, keyword options) for a voter distribution, used as
+    module.ranking_probabilities(candidates, pixels, deviation, nodes, **options)."""
+    if distribution == "beta":
+        return beta, {"spread": spread}
+    return normal, {}
 
 
 def plot_yee_diagram(

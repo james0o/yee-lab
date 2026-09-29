@@ -1,17 +1,17 @@
 """Checks of the shares that single methods need (shares.py).
 
 They are compared with the same shares aggregated from the complete ranking
-probabilities (ranking_cells / normal compute_ranking_probabilities, exact), and the
-edge cache is checked to recompute only what a dragged candidate moves.
+probabilities (pixels.beta / pixels.normal compute_ranking_probabilities, exact), and
+the edge cache is checked to recompute only what a dragged candidate moves.
 """
 
 import numpy as np
 import pytest
 
-import normal
-import ranking_cells
-from methods import _pairwise_preferences
-from shares import (
+from yeelab import ranking_cells
+from yeelab.pixels import beta as pixel_beta, normal as pixel_normal
+from yeelab.pixels.methods import _pairwise_preferences
+from yeelab.shares import (
     Model,
     _edge_key,
     _half_plane,
@@ -31,8 +31,8 @@ def exact(request):
     model = request.param
     if model.distribution == "beta":
         params = ranking_cells.node_params(model.pixels, model.nodes, model.deviation, model.spread)[1]
-        return model, *ranking_cells.compute_ranking_probabilities(CANDIDATES, params)
-    return model, *normal.compute_ranking_probabilities(CANDIDATES, model.medians, model.deviation)
+        return model, *pixel_beta.compute_ranking_probabilities(CANDIDATES, params)
+    return model, *pixel_normal.compute_ranking_probabilities(CANDIDATES, model.medians, model.deviation)
 
 
 def _tolerance(model):

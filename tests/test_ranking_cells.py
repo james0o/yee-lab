@@ -1,4 +1,4 @@
-"""Theoretical checks of ranking_cells.
+"""Theoretical checks of ranking_cells.py and pixels/beta.py.
 
 Beta parameters: the median and the quantity each spread rule fixes (mean absolute
 deviation, RMS distance from the median, tapered a + b) are verified,
@@ -13,20 +13,22 @@ import pytest
 from scipy.integrate import quad
 from scipy.special import beta as beta_fn, betainc
 
-from ranking_cells import (
+from yeelab.pixels.beta import (
+    compute_ranking_probabilities,
+    generate_ranking_probabilities,
+    interpolate_to_pixels,
+    rankings_path,
+    read_cached_ranking_probabilities,
+)
+from yeelab.ranking_cells import (
     NODES,
     SPREADS,
     TAPER,
     beta_params,
     beta_params_at,
     centre_shape,
-    compute_ranking_probabilities,
-    generate_ranking_probabilities,
-    interpolate_to_pixels,
     node_medians,
     ranking_cells,
-    rankings_path,
-    read_cached_ranking_probabilities,
 )
 
 CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])

@@ -29,17 +29,17 @@ Requires [uv](https://docs.astral.sh/uv/).
 
 ### Plots
 
-[plot.py](plot.py) saves one PNG per method into `plots/`:
+[yeelab/pixels/plot.py](src/yeelab/pixels/plot.py) saves one PNG per method into `plots/`:
 
 ```sh
-uv run python plot.py                         # all methods, Beta voters
-uv run python plot.py -m irv -m schulze       # only some methods
-uv run python plot.py --distribution normal   # original Yee model
-uv run python plot.py -d 0.3 -p 800           # deviation 0.3, 800x800 pixels
-uv run python plot.py -h                      # all options
+uv run python -m yeelab.pixels.plot                         # all methods, Beta voters
+uv run python -m yeelab.pixels.plot -m irv -m schulze       # only some methods
+uv run python -m yeelab.pixels.plot --distribution normal   # original Yee model
+uv run python -m yeelab.pixels.plot -d 0.3 -p 800           # deviation 0.3, 800x800 pixels
+uv run python -m yeelab.pixels.plot -h                      # all options
 ```
 
-Ranking probabilities are cached in `cache/`, so a second run with the same settings is fast (`--regenerate` ignores the cache). Candidates are set in [plot.py](plot.py).
+Ranking probabilities are cached in `cache/`, so a second run with the same settings is fast (`--regenerate` ignores the cache). Candidates are set in [yeelab/pixels/plot.py](src/yeelab/pixels/plot.py).
 
 ### Web UI
 
@@ -47,11 +47,21 @@ Ranking probabilities are cached in `cache/`, so a second run with the same sett
 uv run fastapi dev
 ```
 
-Then open http://127.0.0.1:8000. [main.py](main.py) serves the page in [ui/index.html](ui/index.html) and computes the diagrams. The diagram is drawn as curves, not pixels: the backend returns the region of every winner as polygons (`POST /api/regions`). It computes only the shares the method needs, caches everything a drag does not change, runs the hot loops as compiled [numba](https://numba.pydata.org/) kernels, and traces each border as the zero set of the winner's margin. The details are in the last chapter of [docs/math.pdf](docs/math.pdf). The very first start compiles the kernels, which takes a few seconds; numba caches them afterwards.
+Then open http://127.0.0.1:8000. [yeelab/web/app.py](src/yeelab/web/app.py) serves the page in [yeelab/web/ui/index.html](src/yeelab/web/ui/index.html) and computes the diagrams. The diagram is drawn as curves, not pixels: the backend returns the region of every winner as polygons (`POST /api/regions`). It computes only the shares the method needs, caches everything a drag does not change, runs the hot loops as compiled [numba](https://numba.pydata.org/) kernels, and traces each border as the zero set of the winner's margin. The details are in the last chapter of [docs/math.pdf](docs/math.pdf). The very first start compiles the kernels, which takes a few seconds; numba caches them afterwards.
 
 - **Candidates:** drag one to move it, click empty space to add one (up to 8), right-click to remove one. The diagram follows the drag, typically within 5–40 ms; IRV with 8 candidates, which needs every ranking cell, within about 0.1–0.2 s.
 - **Method:** Voronoi (no voters, the reference), FPTP, IRV, Borda, Schulze or Condorcet cycle.
 - **Voters:** Beta, or normal for the original Yee model.
 - **Deviation:** $D$ from $0$ to $0.4$. At $0$ every voter sits at their pixel, so every method draws the Voronoi diagram.
 - **Hover** over the square to see the voters of that pixel: their 2D density over the square and their distribution along $x$ above it.
+
+## Code
+
+The code is the package `yeelab` in [src/yeelab/](src/yeelab/):
+
+- `yeelab/` — what the web UI computes with: voters, ranking cells, shares, methods on shares, regions as polygons.
+- `yeelab/web/` — the FastAPI app and the page.
+- `yeelab/pixels/` — the complete ranking profile of every pixel, its cache, the methods on it and the plot CLI. [docs/figures.py](docs/figures.py) and the tests use it; the UI does not.
+
+`uv run pytest` runs the tests; `uv run python docs/figures.py` regenerates the figures of [docs/math.pdf](docs/math.pdf).
 

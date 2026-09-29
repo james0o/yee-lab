@@ -35,7 +35,8 @@ default. @ch-shapes asks when a candidate's region is convex or in one piece, an
 that relates to the monotonicity of the method. @ch-realtime shows how the web UI draws
 the regions as curves fast enough to follow a dragged candidate.
 
-The settings that appear in the mathematics, with their defaults:
+The settings that appear in the mathematics, with their defaults (file names are in the
+package `src/yeelab/`):
 
 #align(center, table(
   columns: 4,
@@ -44,14 +45,14 @@ The settings that appear in the mathematics, with their defaults:
   table.hline(),
   [quantity], [symbol], [set by], [default],
   table.hline(stroke: 0.5pt),
-  [pixels per axis], [$n$], [`--pixels` (`plot.py`), `PIXELS` (`shares.py`)], [400 / 300],
+  [pixels per axis], [$n$], [`--pixels` (`pixels/plot.py`), `PIXELS` (`shares.py`)], [400 / 300],
   [deviation], [$D$], [`--deviation`, _Deviation_ slider], [0.2],
   [voter distribution], [], [`--distribution`, _Voters_], [Beta],
   [Beta spread rule], [], [`--spread`, _Beta spread fixed_], [`rms`],
   [interpolation nodes per axis], [$N$], [`--nodes` (`NODES`)], [49],
   [Gauss–Legendre points per edge], [$Q$], [`QUAD_NODES`], [24],
   [exponent of `tapered`], [$tau$], [`TAPER`], [0.2],
-  [contour grid per axis (UI)], [$G$], [`DRAG_GRID` / `FINAL_GRID` (`main.py`)], [160 / 320],
+  [contour grid per axis (UI)], [$G$], [`DRAG_GRID` / `FINAL_GRID` (`web/app.py`)], [160 / 320],
   table.hline(),
 ))
 
@@ -86,7 +87,7 @@ have no Monte Carlo noise. A voter can only be tied between two candidates on a 
 
 If every voter sat exactly at the pixel centre, every method would elect the candidate
 nearest to $m$, and the diagram would be the *Voronoi diagram* of the candidates
-(`methods.voronoi`, and deviation $0$ in the web UI). It is the reference against which
+(`pixels.methods.voronoi`, and deviation $0$ in the web UI). It is the reference against which
 the other diagrams are compared.
 
 == Normal voters <sec-normal-model>
@@ -305,8 +306,9 @@ symmetry, and that a lone median gets the same parameters as a full sweep.
 
 = Exact ranking probabilities <ch-compute>
 
-This chapter computes the shares (@eq-share) for Beta voters (`ranking_cells.py`,
-@sec-cells to @sec-interpolation) and for normal voters (`normal.py`, @sec-normal).
+This chapter computes the shares (@eq-share) for Beta voters (`ranking_cells.py` and
+`pixels/beta.py`, @sec-cells to @sec-interpolation) and for normal voters (`normal.py`
+and `pixels/normal.py`, @sec-normal).
 The only approximations are Gauss–Legendre quadrature and polynomial interpolation,
 both of which converge exponentially fast; the normal model needs no quadrature at all.
 For Beta voters the steps are:
@@ -608,8 +610,8 @@ made with; interpolation happens on every load.
 
 == Normal voters (`normal.py`) <sec-normal>
 
-`normal.py` computes the same shares for normal voters (@sec-normal-model), with the
-same interface.
+`normal.py` and `pixels/normal.py` compute the same shares for normal voters
+(@sec-normal-model), with the same interface as for Beta voters.
 
 === Cells in a larger box (`normal_cells`)
 
@@ -712,7 +714,7 @@ independently:
 
 #pagebreak()
 
-= Voting methods (`methods.py`) <ch-methods>
+= Voting methods (`pixels/methods.py`) <ch-methods>
 
 Every method receives the rankings (an $R times C$ array, best first, one row per
 cell) and the shares $P(r)$ of every pixel (an $n times n times R$ array), and returns
@@ -1634,9 +1636,9 @@ on the number of pixels at all. Drawing the diagram as curves instead of pixels
 from computing fewer integrals (@sec-needs), keeping those a drag does not change
 (@sec-edge-cache), making each one cheaper (@sec-tables), and compiling the loops that
 remain (@sec-compiled). This chapter describes `shares.py`, `beta_tables.py` and
-`regions.py`, which `main.py` uses for the UI.
-`plot.py`, `docs/figures.py` and the tests of @sec-validation still use the pipeline of
-@ch-compute.
+`regions.py`, which `web/app.py` uses for the UI.
+`docs/figures.py`, the plots and the tests of @sec-validation still use the pipeline of
+@ch-compute, which is in `pixels/`.
 
 == What each method needs (`shares.py`) <sec-needs>
 
