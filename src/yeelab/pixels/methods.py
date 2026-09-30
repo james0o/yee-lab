@@ -3,8 +3,8 @@
 Every method takes
     rankings: (R, C) candidate indices from best to worst, one row per ballot type
     probs:    (pixels, pixels, R) share of voters with each ballot type
-and returns the winner per pixel, shape (pixels, pixels). The *_margin variants of
-margin/methods.py pick the same winners from only the shares a method needs.
+and returns the winner per pixel, shape (pixels, pixels). The methods of yeelab.build
+pick the same winners from only the shares a method needs.
 
 voronoi() is the reference diagram, not a method: it needs no voters at all.
 """

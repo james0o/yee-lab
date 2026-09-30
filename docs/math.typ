@@ -812,6 +812,34 @@ over the sets $S$ of the rounds, with $"score"_((1))^S <= "score"_((2))^S$ the t
 lowest. The winner changes only where the decision of some round flips, a tie of the
 two lowest or a score at the mean, and there the gap of that round is $0$.
 
+== Minimax and Black (`minimax`, `black`) <sec-minimax-black>
+
+These two are only in the web UI as well, built from blocks as
+`Highest(Weakest(Margins(Pairwise())))` and
+`Fallback(Unbeaten(Margins(Pairwise())), Highest(Tally(BordaCount())))`. Both compare
+candidates by the margins of their head-to-head results,
+
+$ ell_(i j) = pi_(i j) - pi_(j i) = 2 pi_(i j) - 1 = -ell_(j i), $ <eq-link>
+
+which are positive where $c_i$ beats $c_j$.
+
+*Minimax.* The score of $c_i$ is its weakest link, its narrowest win or, if it loses
+somewhere, minus its worst defeat,
+
+$ "weak"_i = min_(j != i) ell_(i j), $
+
+and the highest score wins (ties: the first): the winner is the candidate whose worst
+defeat is the smallest. A Condorcet winner has a positive score and every other
+candidate a negative one, as it loses to the Condorcet winner, so minimax elects the
+Condorcet winner whenever there is one. In a cycle it elects the candidate with the
+smallest worst defeat, which is the candidate that the Condorcet winner method finds
+closest to being one (@sec-zero-sets), so minimax extends it to cycles. Unlike Schulze it
+looks at a single defeat and not at paths of defeats.
+
+*Black.* The Condorcet winner if there is one, otherwise the Borda winner. Every pixel
+has a winner, never a cycle, and like Schulze, Baldwin and Nanson, Black differs from
+the Condorcet winner diagram only where there is a cycle.
+
 == Ties <sec-ties>
 
 Exact ties are broken by the order of the candidates: `argmax` and `argmin` take the
@@ -1669,9 +1697,9 @@ on the number of pixels at all. Drawing the diagram as curves instead of pixels
 (@sec-zero-sets) is the right output, but on its own it saves little. The speed comes
 from computing fewer integrals (@sec-needs), keeping those a drag does not change
 (@sec-edge-cache), making each one cheaper (@sec-tables), and compiling the loops that
-remain (@sec-compiled). This chapter describes `margin/` (`shares.py`, `beta_tables.py`,
-`methods.py` and `regions.py`) and the methods built from blocks in `build/`, which
-`web/app.py` uses for the UI.
+remain (@sec-compiled). This chapter describes `margin/` (`shares.py`, `beta_tables.py`
+and `regions.py`) and the methods built from blocks in `build/`, which `web/app.py`
+uses for the UI.
 `docs/figures.py` (apart from the examples of @sec-zero-sets), the plots and the tests of
 @sec-validation still use the pipeline of @ch-compute, which is in `pixels/`. The two never import each other; what both need
 (`ranking_cells.py`, `normal.py`, `voting.py`, `threads.py`) is at the top of the package.
@@ -1682,7 +1710,7 @@ The arrangement of all $C (C - 1) slash 2$ bisectors has $O(C^4)$ cells and edge
 cells and 65 slanted edges for 5 candidates, 272 cells and 468 slanted edges for 8. Most
 methods need much less than the share of every cell.
 
-*Pairwise shares.* Schulze and the Condorcet winner only use $pi_(i j)$
+*Pairwise shares.* Schulze, Minimax, Black and the Condorcet winner only use $pi_(i j)$
 (@eq-pairwise). Borda does too: $C - 1 - "pos"_r (i)$ is the number of candidates below
 $c_i$ in ranking $r$, so
 
@@ -1804,7 +1832,7 @@ and before them:
   table.hline(),
 ))
 
-== Borders as zero sets (`margin/methods.py`, `margin/regions.py`) <sec-zero-sets>
+== Borders as zero sets (`build/`, `margin/regions.py`) <sec-zero-sets>
 
 The shares are smooth in the median $m$; only the winner jumps. Each method compares
 continuous functions of the shares, so its borders are where such a comparison is a tie.
@@ -1824,33 +1852,83 @@ $psi_c$ below changes only with the winner:
   [FPTP, Borda], [lead of the top score over the second],
   [Condorcet winner], [$min_(j != w) (pi_(w j) - pi_(j w))$; in a cycle $-max_i min_(j != i) (pi_(i j) - pi_(j i))$],
   [Schulze], [$min_(e != w) max_f (p_(f e) - p_(e f))$],
+  [Minimax], [lead of the top weakest link over the second],
+  [Black], [as the Condorcet winner; in a cycle the smaller of that and the margin of Borda],
   [IRV], [smallest gap between the two lowest tallies over all rounds],
   [Baldwin], [smallest gap between the two lowest Borda scores over all rounds],
   [Nanson], [smallest distance of a Borda score from the mean over all rounds],
   table.hline(),
 ))
 
-All methods but the Condorcet winner are built from blocks (`yeelab.build`), and the
-margin is never put together by hand: every block that decides computes the gap of its
-decision (`Highest` the lead of the top score, `Eliminate` the gap of each round), and
-the margin is the smallest of them. Baldwin and Nanson are in @sec-baldwin-nanson.
+All methods are built from blocks (`yeelab.build`), and the margin is never put together
+by hand: every block that decides computes the gap of its decision, and the margin is the
+smallest of them. `Highest` has the lead of the top score, `Eliminate` the gap of each
+round, `Unbeaten` the gaps below and `Fallback` those of the method that decides.
+Baldwin and Nanson are in @sec-baldwin-nanson, Minimax and Black in @sec-minimax-black.
 
 *IRV.* On each side of a curve where some round's two lowest tallies tie, the gap of
 that round tends to $0$. So $mu$ is continuous, and it vanishes on every curve where an
 elimination changes, whether or not the winner changes there.
 
-*Schulze.* With complete rankings $pi_(i j) + pi_(j i) = 1$, so the margin
-$pi_(i j) - pi_(j i) = 2 pi_(i j) - 1$ orders the links exactly like the winning votes
-$pi_(i j)$ of @ch-methods, and the winners are the same. Unlike winning votes, the link
-strengths $max(pi_(i j) - pi_(j i), 0)$ are continuous in $pi$, and so are the path
-strengths $p$. The winner $w$ is the candidate no one beats ($p_(e w) <= p_(w e)$ for all
-$e$). It changes only where another candidate becomes unbeaten, hence the margin in
-the table. The simpler $min_e (p_(w e) - p_(e w))$ does not work: it can be $0$ on a
-whole area, where the widest paths from $w$ to $e$ and back share their weakest link.
-Where a Condorcet winner exists it is the Schulze winner. There the Condorcet margin
-stands in for the Schulze margin: it is positive, at most the Schulze margin, and $0$ on
-the border of the Condorcet region. So the widest paths are only computed at the
-points without a Condorcet winner.
+*Unbeaten.* The Condorcet winner and Schulze both elect a candidate that no one beats,
+from links $ell_(i j) = -ell_(j i)$ in which $c_i$ beats $c_j$ where $ell_(i j) > 0$: the
+margins of @eq-link, or the strongest paths below. Let
+
+$ "beaten"_e = max_(f != e) ell_(f e) $
+
+be the strongest link into $c_e$, negative if $c_e$ beats everyone and positive if
+someone beats it. The winner $w$ has the smallest $"beaten"_e$ (ties: the first). It
+changes only where another candidate becomes unbeaten, that is, where some
+$"beaten"_e$ with $e != w$ crosses $0$, so the margin is how far the closest of the
+others is from that:
+
+$ mu = min_(e != w) max("beaten"_e, 0). $ <eq-unbeaten>
+
+*Weak and strict winners.* What the winner must be depends on the links. On the
+strongest paths, "beats" ($p_(i j) > p_(j i)$) has no cycles, as Schulze proved, so
+someone is unbeaten, $"beaten"_w <= 0$, and the winner is a _weak_ winner:
+$p_(w e) >= p_(e w)$ for all $e$, as in @ch-methods, which may tie some candidates. The margins
+$ell_(i j) = pi_(i j) - pi_(j i)$ can form a cycle. There the winner must be a _strict_
+winner, a Condorcet winner with $"beaten"_w < 0$ who beats everyone; where the smallest
+$"beaten"_w$ is not negative, the point is a cycle and marked `CYCLE`. That decision
+flips where $"beaten"_w$ crosses $0$, so $abs("beaten"_w)$ is a gap as well:
+
+$ mu = min(min_(e != w) max("beaten"_e, 0), abs("beaten"_w)) . $
+
+For antisymmetric links the second term is never larger than the first. With a
+Condorcet winner, $"beaten"_e >= ell_(w e) >= min_f ell_(w f) = -"beaten"_w$ for every
+other $e$. In a cycle, $"beaten"_e >= "beaten"_w >= 0$. So $mu = abs("beaten"_w)$: the
+narrowest win of the Condorcet winner, and, in a cycle, how far every candidate is from
+beating everyone, as in the table.
+For Schulze's links the gap is left out. There $"beaten"_w$ is $0$ on whole areas, where
+the widest paths from $w$ to another candidate and back share their weakest link, and the
+margin would vanish on an area where no border runs.
+
+*Strongest paths.* With complete rankings $pi_(i j) + pi_(j i) = 1$, so the margin
+$ell_(i j) = 2 pi_(i j) - 1$ orders the links exactly like the winning votes $pi_(i j)$
+of @ch-methods, and the winners are the same. Unlike winning votes, the link strengths
+$max(ell_(i j), 0)$ are continuous in $pi$, and so are the path strengths $p_(i j)$ built
+from them. `StrongestPaths` returns the links $p_(i j) - p_(j i)$, which make
+$"beaten"_e = max_(f != e) (p_(f e) - p_(e f))$, the expression of the table.
+
+Where a Condorcet winner $w$ exists it is the Schulze winner: $p_(w e) >= ell_(w e) > 0$,
+and no link leads into $w$, so $p_(e w) = 0$. The widest paths are therefore only
+computed at the points without a Condorcet winner. Elsewhere the winner and margin of the
+margins themselves stand in: the margin is positive, at most the margin on the paths
+(as $p_(w e) >= ell_(w e)$), and $0$ on the border of the Condorcet region, so it
+vanishes on the same borders.
+
+*Fallback.* `Fallback(first, second)` elects the winner of `first`, and where `first`
+elects no one (`CYCLE`), the winner of `second`; Black is the Condorcet winner with Borda
+as the second. The winner changes where the decision of the method in charge flips, so
+outside the cycles the margin is that of `first`, and inside a cycle the smaller of the
+two:
+
+$ mu = cases(mu_"first" & "where" "first" "elects someone", min(mu_"first", mu_"second") & "in a cycle of" "first") . $
+
+In a cycle $mu_"first"$ is how far the point is from having a Condorcet winner, so it
+vanishes on the border of the cycle, where `second` hands over to `first`, and
+$mu_"second"$ on the borders `second` draws inside the cycle.
 
 === Example: margins at two medians <sec-margin-example>
 
@@ -1905,6 +1983,8 @@ difference of two entries can be off by one in the last digit.
     [Nanson], [D], [0.1051], [E], [0.0046],
     [Condorcet winner], [D], [0.2727], [none (cycle)], [0.0125],
     [Schulze], [D], [0.2727], [E], [0.0093],
+    [Minimax], [D], [0.5455], [E], [0.0093],
+    [Black], [D], [0.2727], [D], [0.0125],
     [IRV], [D], [0.0138], [E], [0.0016],
     table.hline(),
   ),
@@ -1916,8 +1996,10 @@ difference of two entries can be off by one in the last digit.
 elects A with $mu = s_A - s_D = 0.2697 - 0.2565 = 0.0132$. The Borda scores are the row
 sums of $pi$ (@sec-needs), and D leads A by $2.7301 - 2.1051 = 0.6250$. D beats every
 candidate head to head, most narrowly A: the Condorcet margin is
-$pi_(D A) - pi_(A D) = 0.2727$, and Schulze, which elects the Condorcet winner, uses the
-same margin. IRV eliminates B, C, E and A in turn:
+$pi_(D A) - pi_(A D) = 0.2727$, and Schulze and Black, which elect the Condorcet winner,
+use the same margin. Minimax elects D too: its weakest link is $0.2727$, A's is the best
+of the others, $-0.2727$, and $mu$ is the lead $0.5455$. IRV eliminates B, C, E and A in
+turn:
 
 #align(center, table(
   columns: 8,
@@ -1956,6 +2038,13 @@ the margin, each other candidate $e$ is beaten by $max_f (p_(f e) - p_(e f))$: B
 by $0.0218 - 0.0125 = 0.0093$; D by B, by $0.0412 - 0.0125 = 0.0287$ (and by E, by
 $0.0093$); A and C by $0.5832$ and $0.3175$. The smallest of these, $mu = 0.0093$, says
 that B is the candidate closest to being unbeaten.
+
+Minimax elects E as well, whose worst defeat, $0.0125$, is the smallest (B's is $0.0218$,
+D's $0.0412$); $mu = -0.0125 - (-0.0218) = 0.0093$ is its lead over B. Black has no
+Condorcet winner to elect here and takes the Borda winner D, with
+$mu = min(0.0125, 0.0481) = 0.0125$, the smaller of the Condorcet margin and Borda's:
+the cycle would end, and D lose its place to a Condorcet winner, if E's deficit against
+D closed.
 
 Borda elects D, but Baldwin and Nanson resolve the cycle like Schulze. They drop A and C
 first (Baldwin one at a time) and are left with B, D and E, whose Borda scores among the

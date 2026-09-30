@@ -1,5 +1,5 @@
-"""What pixels/methods.py and margin/methods.py share: the winner code of a Condorcet
-cycle, and the rounds of instant runoff, compiled.
+"""What pixels/methods.py and build/ share: the winner code of a Condorcet cycle, and
+the rounds of instant runoff, compiled.
 
 The rounds give the IRV winner and its margin together; the margin costs nothing extra,
 irv of yeelab.build (Eliminate(Tally(Plurality()), how="min")) returns both and

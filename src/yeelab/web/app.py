@@ -58,6 +58,10 @@ METHOD_INFO = {
                 "widest paths of head-to-head margins."},
     "condorcet_cycle": {"label": "Condorcet cycle", "description": "The Condorcet winner, who beats "
                         "every other candidate head to head; black where there is none (a cycle)."},
+    "minimax": {"label": "Minimax", "description": "Minimax: the candidate whose worst head-to-head "
+                "defeat is the smallest, measured by the margin of votes."},
+    "black": {"label": "Black", "description": "Black: the Condorcet winner if there is one, "
+              "otherwise the Borda winner."},
     "voronoi": {"label": "Voronoi", "description": "The nearest candidate to the pixel, without "
                 "voters: what every method draws when all voters are at their pixel."},
 }

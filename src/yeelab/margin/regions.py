@@ -1,9 +1,9 @@
 """Win regions of a Yee diagram as polygons instead of pixels.
 
 A method's winner is decided by comparing shares that are smooth in the median; only
-the winner jumps. Every method of MARGINS (the methods built in yeelab.build, and the
-Condorcet winner) returns, next to the winner, a margin that is continuous and 0 on
-every border between two winners. So for each winner c
+the winner jumps. Every method of MARGINS (the methods built in yeelab.build) returns,
+next to the winner, a margin that is continuous and 0 on every border between two
+winners. So for each winner c
 
     psi_c = margin where c wins, -margin elsewhere
 
@@ -19,13 +19,10 @@ A region can have several polygons (FPTP flares at the walls) and holes (an isla
 of another winner).
 """
 
-from dataclasses import dataclass
-
 import contourpy
 import numpy as np
 
 from yeelab.build import FIRST, METHODS, PAIRWISE, PROFILE, Share, Voters
-from yeelab.margin.methods import condorcet_margin
 from yeelab.margin.shares import (
     Model,
     first_choice_shares,
@@ -39,19 +36,8 @@ DIGITS = 6  # decimals of the vertices sent to the UI
 TINY = 1e-12  # rings with less area are dropped (collapsed onto a grid point)
 
 
-@dataclass(frozen=True)
-class _CondorcetCycle:
-    """condorcet_margin with the interface of a built method (needs, evaluate); it
-    marks cycles rather than electing someone, so it is no block of yeelab.build."""
-
-    needs = frozenset({PAIRWISE})
-
-    def evaluate(self, voters: Voters) -> tuple[np.ndarray, np.ndarray]:
-        return condorcet_margin(voters.pairwise)
-
-
 # method -> its winner and margin (evaluate) from the shares it needs (needs)
-MARGINS = {**METHODS, "condorcet_cycle": _CondorcetCycle()}
+MARGINS = METHODS
 
 
 def grid(size: int, pixels: int):

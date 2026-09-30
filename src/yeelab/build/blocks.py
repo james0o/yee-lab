@@ -1,25 +1,34 @@
 """The blocks voting methods are built from, like in Scratch but as constructors:
 
-    Highest(Tally(BordaCount()))                Borda count
-    Eliminate(Tally(Plurality()), how="min")    instant runoff
+    Highest(Tally(BordaCount()))                    Borda count
+    Eliminate(Tally(Plurality()), how="min")        instant runoff
+    Unbeaten(StrongestPaths(Margins(Pairwise())))   Schulze
 
 Every block has one type of output:
 
     Ballot   Plurality(), BordaCount()          points one voter gives a candidate
-    Scores   Tally(ballot)                      mean points of each candidate over the
-                                                voters of a point
-    Winner   Highest(scores), Schulze(),        winner and margin at every point
-             Eliminate(scores, how=...)
+    Scores   Tally(ballot), Weakest(links)      a score of each candidate at a point
+    Duels    Pairwise()                         share of the voters ranking c above e
+    Links    Margins(duels),                    how strongly c beats e (antisymmetric)
+             StrongestPaths(links)
+    Winner   Highest(scores), Unbeaten(links),  winner and margin at every point
+             Eliminate(scores, how=...),
+             Fallback(first, second)
 
 A ballot gives weight(k, C) points to the candidate at position k (0 = closest) of C;
 both count only the remaining candidates, and a higher score is better. Each ballot
 also knows the cheapest formula for its mean over the voters (Ballot.tally), from the
-shares in voters.Voters.
+shares in voters.Voters. Tally averages them over the voters of a point.
 
-A Winner returns (winner, margin) like margin/methods.py: the margin is >= 0,
-continuous in the shares and 0 on every border between two winners, since
-margin/regions.py draws the borders as its zero set. Each decision a block takes has
-a gap, 0 where the decision flips, and the margin is the smallest gap of all of them.
+A link s[c, e] = -s[e, c] says that c beats e where it is positive. Links are
+transitive (Links.transitive) if the candidates that beat each other cannot form a
+cycle: Margins are not, StrongestPaths are.
+
+A Winner returns (winner, margin): the margin is >= 0, continuous in the shares and 0
+on every border between two winners, since margin/regions.py draws the borders as its
+zero set. Each decision a block takes has a gap, 0 where the decision flips, and the
+margin is the smallest gap of all of them. Where no one is elected, the winner is
+voting.CYCLE.
 
 Blocks are frozen dataclasses, so equal blocks are equal methods and hash alike, and
 repr(block) is the expression that builds it: eval(repr(block)) == block.
@@ -32,8 +41,7 @@ import numpy as np
 
 from yeelab.build.rounds import drop_below_mean, drop_lowest
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Share, Voters
-from yeelab.margin.methods import schulze_margin
-from yeelab.voting import irv_rounds
+from yeelab.voting import CYCLE, irv_rounds
 
 Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) at every point
 HOW = ("min", "mean")  # what Eliminate drops each round
@@ -63,6 +71,38 @@ def _top_two(scores: np.ndarray) -> Result:
     """Highest score (winner; ties: the lowest index) and its lead over the second."""
     top = np.partition(scores, -2, axis=-1)
     return scores.argmax(axis=-1), top[..., -1] - top[..., -2]
+
+
+def _off_diagonal(links: np.ndarray, fill: float) -> np.ndarray:
+    """links (..., C, C) with the diagonal, a candidate against itself, replaced by fill
+    (inf or -inf), so that min and max are over the other candidates only."""
+    return np.where(np.eye(links.shape[-1], dtype=bool), fill, links)
+
+
+def _paths(links: np.ndarray) -> np.ndarray:
+    """p - p^T for links s (..., C, C), where p[c, e] is the strength of the strongest
+    path from c to e over the links max(s, 0): the largest, over the paths, of the
+    smallest link along it (Floyd-Warshall)."""
+    p = np.maximum(links, 0.0)
+    through = np.empty_like(p)
+    for k in range(p.shape[-1]):  # in place: row and column k do not change in step k (p[k, k] = 0)
+        np.minimum(p[..., :, k, None], p[..., None, k, :], out=through)
+        np.maximum(p, through, out=p)
+    return p - np.swapaxes(p, -1, -2)
+
+
+def _unbeaten(links: np.ndarray, transitive: bool) -> Result:
+    """Winner and margin of Unbeaten for links s (..., C, C) (see there)."""
+    n = links.shape[-1]
+    beaten = _off_diagonal(links, -np.inf).max(axis=-2)  # [..., e] = max_{f != e} s[f, e]
+    winner = beaten.argmin(axis=-1)
+    others = np.where(np.arange(n) == winner[..., None], np.inf, np.maximum(beaten, 0.0))
+    margin = others.min(axis=-1)
+    if not transitive:
+        best = beaten.min(axis=-1)  # the winner's: negative if it beats everyone
+        margin = np.minimum(margin, np.abs(best))
+        winner = np.where(best < 0, winner, CYCLE)
+    return winner, margin
 
 # ---------------------------------------------------------------- Ballot
 
@@ -138,6 +178,111 @@ class BordaCount(Ballot):
         weights = alive.astype(d.dtype)
         return np.einsum("...ce,...e->...c", d, weights) * weights
 
+# ---------------------------------------------------------------- Duels
+
+
+class Duels(Block):
+    """For every pair of candidates, the share of the voters who rank one above the other."""
+
+    kind = "Duels"
+    needs: frozenset[Share]
+
+    def evaluate(self, voters: Voters) -> np.ndarray:
+        """d (..., C, C): d[c, e] = share ranking c above e, d[c, c] = 0."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class Pairwise(Duels):
+    """The pairwise shares of the voters, as they are."""
+
+    needs = frozenset({PAIRWISE})
+
+    def evaluate(self, voters: Voters) -> np.ndarray:
+        return voters.pairwise
+
+# ---------------------------------------------------------------- Links
+
+
+class Links(Block):
+    """How strongly each candidate beats each other one: s[c, e] = -s[e, c], and c beats
+    e where s[c, e] > 0. `transitive` is True if the links cannot form a cycle, c beating
+    e beating f and f beating c, which is what Unbeaten needs to elect someone always."""
+
+    kind = "Links"
+    needs: frozenset[Share]
+    transitive: bool
+
+    def evaluate(self, voters: Voters) -> np.ndarray:
+        """s (..., C, C), s[c, c] = 0."""
+        raise NotImplementedError
+
+    def unbeaten(self, voters: Voters) -> Result | None:
+        """Unbeaten(self) by a formula of the links' own, or None to decide on evaluate()."""
+        return None
+
+
+@dataclass(frozen=True)
+class Margins(Links):
+    """d - d^T: how much more of the voters rank c above e than e above c. Not transitive,
+    the majorities can go round in a cycle."""
+
+    duels: Duels
+    transitive = False
+
+    def __post_init__(self):
+        _expect(self, self.duels, Duels, "Duels")
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return self.duels.needs
+
+    def evaluate(self, voters: Voters) -> np.ndarray:
+        d = self.duels.evaluate(voters)
+        return d - np.swapaxes(d, -1, -2)
+
+    def __repr__(self):
+        return f"Margins({self.duels!r})"
+
+
+@dataclass(frozen=True)
+class StrongestPaths(Links):
+    """p - p^T, where p[c, e] is the strength of the strongest path from c to e over the
+    links that say a candidate beats another (see _paths). Transitive: c beats e where
+    p[c, e] > p[e, c], and that relation has no cycles.
+
+    A candidate c who beats everyone directly is unbeaten on the paths as well: p[c, e] >=
+    s[c, e] > 0, and no link leads into c, so p[e, c] = 0. Unbeaten(self) therefore only
+    computes the paths where there is no such candidate."""
+
+    links: Links
+    transitive = True
+
+    def __post_init__(self):
+        _expect(self, self.links, Links, "Links")
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return self.links.needs
+
+    def evaluate(self, voters: Voters) -> np.ndarray:
+        return _paths(self.links.evaluate(voters))
+
+    def unbeaten(self, voters: Voters) -> Result:
+        """Unbeaten(self), with the paths only at the points where no candidate beats
+        everyone directly. Elsewhere that candidate wins, with the margin of the links
+        themselves: positive, at most the margin on the paths, and 0 on the border of
+        that region."""
+        s = self.links.evaluate(voters)
+        winner, margin = _unbeaten(s, transitive=False)
+        cycle = winner == CYCLE
+        if cycle.any():
+            winner[cycle], margin[cycle] = _unbeaten(_paths(s[cycle]), transitive=True)
+        return winner, margin
+
+    def __repr__(self):
+        return f"StrongestPaths({self.links!r})"
+
 # ---------------------------------------------------------------- Scores
 
 
@@ -175,6 +320,27 @@ class Tally(Scores):
 
     def __repr__(self):
         return f"Tally({self.ballot!r})"
+
+
+@dataclass(frozen=True)
+class Weakest(Scores):
+    """The weakest link of a candidate, min_{e != c} s[c, e]: its narrowest win, or,
+    if it loses somewhere, minus its worst defeat."""
+
+    links: Links
+
+    def __post_init__(self):
+        _expect(self, self.links, Links, "Links")
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return self.links.needs
+
+    def evaluate(self, voters: Voters) -> np.ndarray:
+        return _off_diagonal(self.links.evaluate(voters), np.inf).min(axis=-1)
+
+    def __repr__(self):
+        return f"Weakest({self.links!r})"
 
 # ---------------------------------------------------------------- Winner
 
@@ -261,11 +427,68 @@ class Eliminate(Winner):
 
 
 @dataclass(frozen=True)
-class Schulze(Winner):
-    """Schulze method on pairwise shares: winner and margin of
-    margin.methods.schulze_margin."""
+class Unbeaten(Winner):
+    """The candidate no one beats, or the one beaten the least. beaten[e] = max_{f != e}
+    s[f, e] is the strongest link into e: negative if e beats everyone, positive if
+    someone beats e. The winner has the lowest beaten (ties: the lowest index).
 
-    needs = frozenset({PAIRWISE})
+    Its margin is the smallest max(beaten[e], 0) over the other candidates e: how far
+    the closest of them is from being unbeaten, which is when the winner would change.
+
+    Links that are not transitive can form a cycle. Then the winner must also beat
+    everyone (beaten < 0), or the point is a voting.CYCLE, and since that flips where
+    the winner's beaten crosses 0, |beaten| of the winner is a gap too: the margin is at
+    most that. Transitive links leave it out: someone is always unbeaten, and on
+    strongest paths the winner's beaten is 0 on whole areas, where the widest paths to
+    and from another candidate share their weakest link."""
+
+    links: Links
+
+    def __post_init__(self):
+        _expect(self, self.links, Links, "Links")
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return self.links.needs
 
     def evaluate(self, voters: Voters) -> Result:
-        return schulze_margin(voters.pairwise)
+        result = self.links.unbeaten(voters)
+        return self.decide(voters) if result is None else result
+
+    def decide(self, voters: Voters) -> Result:
+        """evaluate() on the links as they are, whatever formula they have of their own
+        (Links.unbeaten)."""
+        return _unbeaten(self.links.evaluate(voters), self.links.transitive)
+
+    def __repr__(self):
+        return f"Unbeaten({self.links!r})"
+
+
+@dataclass(frozen=True)
+class Fallback(Winner):
+    """The winner of `first`, or where it elects no one (voting.CYCLE), the winner of
+    `second`. The margin is first's where it elects someone, and the smaller of the two
+    in a cycle of first: the winner changes where either one would."""
+
+    first: Winner
+    second: Winner
+
+    def __post_init__(self):
+        _expect(self, self.first, Winner, "a Winner")
+        _expect(self, self.second, Winner, "a Winner")
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return self.first.needs | self.second.needs
+
+    def evaluate(self, voters: Voters) -> Result:
+        winner, margin = self.first.evaluate(voters)
+        cycle = winner == CYCLE
+        if cycle.any():
+            other, gap = self.second.evaluate(voters)
+            winner = np.where(cycle, other, winner)
+            margin = np.where(cycle, np.minimum(margin, gap), margin)
+        return winner, margin
+
+    def __repr__(self):
+        return f"Fallback({self.first!r}, {self.second!r})"

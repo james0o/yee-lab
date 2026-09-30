@@ -625,7 +625,7 @@ def margin_example():
         lead = d - d.T
         print("  narrowest head-to-head result " + "  ".join(
             f"{NAMES[i]} {np.delete(lead[i], i).min():+.4f}" for i in range(5)))
-        # Schulze path strengths from the margins d - d^T (margin.methods._schulze_paths)
+        # Schulze path strengths from the margins d - d^T (build.blocks.StrongestPaths)
         p = np.maximum(lead, 0.0)
         for k in range(5):
             p = np.maximum(p, np.minimum(p[:, k, None], p[None, k, :]))
@@ -638,7 +638,8 @@ def margin_example():
         voters = Voters(first[None], d[None], rankings, probs[None])
         for name, method in (("FPTP", "fptp"), ("Borda", "borda"), ("Baldwin", "baldwin"),
                              ("Nanson", "nanson"), ("Condorcet", "condorcet_cycle"),
-                             ("Schulze", "schulze"), ("IRV", "irv")):
+                             ("Schulze", "schulze"), ("Minimax", "minimax"), ("Black", "black"),
+                             ("IRV", "irv")):
             winner, margin = MARGINS[method].evaluate(voters)
             print(f"  {name:9s} winner {'cycle' if winner[0] == CYCLE else NAMES[winner[0]]}, "
                   f"margin {margin[0]:.4f}")

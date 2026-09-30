@@ -4,8 +4,8 @@ The ranking probabilities of pixels/beta.py and pixels/normal.py are a complete 
 enough for every method, but they need all cells of the bisector arrangement:
 O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far less:
 
-    borda, condorcet_cycle, schulze   pairwise shares d[c, e] = P(c ranked above e),
-                                      one half-plane per pair (C (C - 1) / 2 edges)
+    borda, baldwin, nanson, schulze,  pairwise shares d[c, e] = P(c ranked above e),
+    condorcet_cycle, minimax, black   one half-plane per pair (C (C - 1) / 2 edges)
     fptp                              first-choice shares, the C Voronoi cells
     irv                               the whole profile (first choices among every
                                       remaining set)

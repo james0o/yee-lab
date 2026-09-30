@@ -1,14 +1,33 @@
 """The voting methods built from blocks (blocks.py), by name, in the order the web UI
 lists them (margin/regions.py MARGINS)."""
 
-from yeelab.build.blocks import BordaCount, Eliminate, Highest, Plurality, Schulze, Tally, Winner
+from yeelab.build.blocks import (
+    BordaCount,
+    Eliminate,
+    Fallback,
+    Highest,
+    Margins,
+    Pairwise,
+    Plurality,
+    StrongestPaths,
+    Tally,
+    Unbeaten,
+    Weakest,
+    Winner,
+)
 
 fptp = Highest(Tally(Plurality()))                   # first past the post
 irv = Eliminate(Tally(Plurality()), how="min")       # instant runoff
 borda = Highest(Tally(BordaCount()))                 # Borda count
 baldwin = Eliminate(Tally(BordaCount()), how="min")  # the lowest Borda score out
 nanson = Eliminate(Tally(BordaCount()), how="mean")  # every Borda score <= the mean out
-schulze = Schulze()                                  # margin.methods.schulze_margin
+
+P = Pairwise()
+M = Margins(P)
+schulze = Unbeaten(StrongestPaths(M))                # no one beats them along the strongest paths
+condorcet_cycle = Unbeaten(M)                        # the Condorcet winner; CYCLE where there is none
+minimax = Highest(Weakest(M))                        # the smallest worst defeat
+black = Fallback(condorcet_cycle, borda)             # the Condorcet winner, else Borda
 
 METHODS: dict[str, Winner] = {
     "fptp": fptp,
@@ -17,4 +36,7 @@ METHODS: dict[str, Winner] = {
     "baldwin": baldwin,
     "nanson": nanson,
     "schulze": schulze,
+    "condorcet_cycle": condorcet_cycle,
+    "minimax": minimax,
+    "black": black,
 }
