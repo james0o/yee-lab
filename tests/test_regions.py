@@ -164,8 +164,11 @@ def test_first_choice_regions_tile_even_with_normal_voters_outside():
 
 def test_config_lists_every_method():
     """The UI makes a button of each; a built method's tooltip ends with its expression."""
-    methods = TestClient(app).get("/api/config").json()["methods"]
+    config = TestClient(app).get("/api/config").json()
+    methods = config["methods"]
     assert [m["name"] for m in methods] == list(MARGINS)
+    assert [m["label"] for m in methods + config["ideals"]] == [
+        "FPTP", "IRV", "Borda", "Baldwin", "Nanson", "Schulze", "Condorcet cycle", "Voronoi"]
     nanson = next(m for m in methods if m["name"] == "nanson")
     assert nanson["description"].endswith('\nEliminate(Tally(BordaCount()), how="mean")')
 

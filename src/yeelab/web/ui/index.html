@@ -116,6 +116,7 @@
     let maxCandidates = 0;
     let pixels = 0;       // voters of pixel k (of pixels per axis) have median (k + 1/2) / pixels
     let method = null;    // name of the selected method
+    let labels = {};      // method name -> label shown in the UI (FPTP, Borda, ...)
     let distribution = null;  // name of the selected voter distribution
     let spread = null;    // name of the selected Beta spread rule
     let spreadInfo = {};  // spread name -> {label, tex, description} from the backend
@@ -377,7 +378,7 @@
     async function request(grid) {
       inFlight = true;
       const asked = settings(), askedDeviation = deviation;
-      if (grid === finalGrid) message.textContent = `Computing ${method}…`;
+      if (grid === finalGrid) message.textContent = `Computing ${labels[method]}…`;
       const start = performance.now();
       try {
         const response = await fetch("/api/regions", {
@@ -407,16 +408,17 @@
     // What the diagram shows, and how long it took (round trip, and computing it on the backend).
     function describe(deviation, total, server) {
       const tail = ` · ${candidates.length} candidates · ${total} ms (${server} ms computing)`;
+      const name = labels[method];
       if (method === "voronoi") {  // nearest candidate, no voters involved
-        message.textContent = `voronoi${tail}`;
+        message.textContent = `${name}${tail}`;
       } else if (deviation === 0) {
-        message.textContent = `${method} · deviation 0: every voter at their pixel, so voronoi${tail}`;
+        message.textContent = `${name} · deviation 0: every voter at their pixel, so Voronoi${tail}`;
       } else if (distribution === "beta") {
         const formula = document.createElement("span");
         typeset(formula, spreadInfo[spread]);
-        message.replaceChildren(`${method} · beta voters, deviation ${deviation}, `, formula, tail);
+        message.replaceChildren(`${name} · beta voters, deviation ${deviation}, `, formula, tail);
       } else {
-        message.textContent = `${method} · ${distribution} voters, deviation ${deviation}${tail}`;
+        message.textContent = `${name} · ${distribution} voters, deviation ${deviation}${tail}`;
       }
     }
 
@@ -497,7 +499,6 @@
         row.append(button);
       }
     }
-    const named = names => names.map(name => ({ name }));
 
     // The spread rules only apply to Beta voters that spread at all.
     function updateSpreads() {
@@ -519,7 +520,7 @@
     // letting go asks for the fine one.
     function pickDeviation() {
       deviation = config.deviations[deviationSlider.valueAsNumber];
-      deviationValue.textContent = deviation === 0 ? "0 (voronoi)" : String(deviation);
+      deviationValue.textContent = deviation === 0 ? "0 (Voronoi)" : String(deviation);
       deviationSlider.title = deviation === 0 ? "Every voter at their pixel: every method draws the Voronoi diagram" :
         `Voters at a mean distance of ${deviation} from their pixel along each axis (at the centre pixel for Beta)`;
       updateSpreads();
@@ -530,7 +531,8 @@
     deviationSlider.addEventListener("change", () => compute());
     choices(spreads, config.spreads, name => { spread = name; drawVoters(); });
     choices(methods, config.methods, name => method = name, [methods, ideals]);
-    choices(ideals, named(config.ideals), name => method = name, [methods, ideals]);
+    choices(ideals, config.ideals, name => method = name, [methods, ideals]);
+    labels = Object.fromEntries([...config.methods, ...config.ideals].map(({ name, label }) => [name, label]));
     distribution = config.distributions[0].name;
     distributions.querySelector("button").classList.add("active");
     spread = config.spread;
