@@ -15,6 +15,7 @@ from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
+from yeelab.build import Winner
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.regions import MARGINS, regions
 from yeelab.margin.shares import PIXELS, Model
@@ -41,6 +42,24 @@ DRAG_GRID = 160
 FINAL_GRID = 320
 
 Coordinate = Annotated[float, Field(ge=0, le=1)]
+# Tooltip of each method; the methods built from blocks (yeelab.build) add the
+# expression that builds them.
+METHOD_INFO = {
+    "fptp": "First past the post: the most first choices wins.",
+    "irv": "Instant runoff: the candidate with the fewest first choices among the remaining "
+    "ones is eliminated, round by round, until one is left.",
+    "borda": "Borda count: a voter gives C − 1 points to their first choice, C − 2 to the "
+    "second, …, 0 to the last; the most points win.",
+    "baldwin": "Baldwin: the candidate with the lowest Borda score among the remaining ones "
+    "is eliminated, round by round, until one is left.",
+    "nanson": "Nanson: every candidate with a Borda score at most the mean of the remaining "
+    "ones is eliminated, round by round, until one is left.",
+    "schulze": "Schulze: the candidate no one beats along the widest paths of head-to-head "
+    "margins.",
+    "condorcet_cycle": "The Condorcet winner, who beats every other candidate head to head; "
+    "black where there is none (a cycle).",
+}
+assert set(METHOD_INFO) == set(MARGINS)
 # Each voter distribution along one axis, per pixel: plain label, LaTeX label (typeset
 # by KaTeX in the UI) and tooltip.
 DISTRIBUTION_INFO = {
@@ -137,7 +156,11 @@ def _voters():
 @app.get("/api/config")
 def config():
     return {
-        "methods": list(MARGINS),
+        "methods": [
+            {"name": name, "description": METHOD_INFO[name]
+             + (f"\n{method!r}" if isinstance(method, Winner) else "")}
+            for name, method in MARGINS.items()
+        ],
         "ideals": IDEALS,
         "distributions": [{"name": name, **info} for name, info in DISTRIBUTION_INFO.items()],
         "spreads": [{"name": name, **info} for name, info in SPREAD_INFO.items()],

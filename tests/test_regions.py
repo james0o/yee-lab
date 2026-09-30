@@ -1,7 +1,7 @@
-"""Checks of the win regions as polygons (methods.*_margin, regions.py, /api/regions).
+"""Checks of the win regions as polygons (the methods of MARGINS, regions.py, /api/regions).
 
-The margin variants must pick the same winners as the pixel methods (pixels.methods),
-and their margins must vanish at every border, since the borders are traced as their zero
+The methods must pick the same winners as the pixel methods (pixels.methods), and
+their margins must vanish at every border, since the borders are traced as their zero
 set. The polygons, filled even-odd, must reproduce the pixel diagram and tile the
 square, with outer rings counter-clockwise and holes clockwise.
 """
@@ -11,10 +11,11 @@ import pytest
 from fastapi.testclient import TestClient
 from matplotlib.path import Path as MplPath
 
-from yeelab.margin import methods
+from yeelab.build import Voters
 from yeelab.margin.regions import MARGINS, grid, regions, winners
 from yeelab.margin.shares import Model, first_choice_shares
 from yeelab.pixels import beta as pixel_beta, methods as pixel_methods, normal as pixel_normal
+from yeelab.voting import irv_rounds
 from yeelab.web.app import DIAGRAMS, app
 
 CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
@@ -23,12 +24,19 @@ MODELS = [Model("beta", 0.2, "rms"), Model("normal", 0.2)]
 PIXELS = 150
 
 
-def _shares(rankings, probs):
-    """What each margin variant takes, from a complete profile."""
+def _voters(rankings, probs):
+    """Every share a method may need, from a complete profile."""
     first = probs @ np.eye(rankings.shape[1], dtype=probs.dtype)[rankings[:, 0]]
     d = pixel_methods._pairwise_preferences(rankings, probs)
-    return {"fptp": (first,), "irv": (rankings, probs), "borda": (d,), "schulze": (d,),
-            "condorcet_cycle": (d,)}
+    return Voters(first, d, rankings, probs)
+
+
+def _pixel_winners(method, rankings, probs):
+    """Winner of every pixel: pixels.methods, or, for the methods only yeelab.build has
+    (checked in test_build.py), the method on the complete profile."""
+    if method in pixel_methods.METHODS:
+        return pixel_methods.METHODS[method](rankings, probs)
+    return MARGINS[method].evaluate(_voters(rankings, probs))[0]
 
 
 def _irv_reference(rankings, probs):
@@ -55,7 +63,7 @@ def _irv_reference(rankings, probs):
 @pytest.mark.parametrize("candidates", [CANDIDATES, SEVEN], ids=["five", "seven"])
 def test_irv_kernel_matches_transfer_matrices(candidates):
     rankings, probs = pixel_beta.ranking_probabilities(candidates, 80, 0.2)
-    winner, margin = methods.irv_margin(rankings, probs)
+    winner, margin = irv_rounds(rankings, probs)
     expected_winner, expected_margin = _irv_reference(rankings, probs)
     np.testing.assert_array_equal(winner, expected_winner)
     np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-6)  # float32 sums
@@ -64,8 +72,9 @@ def test_irv_kernel_matches_transfer_matrices(candidates):
 @pytest.mark.parametrize("candidates", [CANDIDATES, SEVEN], ids=["five", "seven"])
 def test_margin_variants_pick_the_same_winners(candidates):
     rankings, probs = pixel_beta.ranking_probabilities(candidates, 60, 0.2)
-    for name, inputs in _shares(rankings, probs).items():
-        winner, margin = MARGINS[name][1](*inputs)
+    voters = _voters(rankings, probs)
+    for name in pixel_methods.METHODS:  # the others: test_build.py
+        winner, margin = MARGINS[name].evaluate(voters)
         np.testing.assert_array_equal(winner, pixel_methods.METHODS[name](rankings, probs), err_msg=name)
         assert (margin >= 0).all(), name
 
@@ -120,7 +129,7 @@ def test_regions_reproduce_pixel_diagram(profile, method):
     shapes = regions(method, CANDIDATES, model, 300)
     got = _rasterize(shapes, PIXELS)
     # Pixels may differ only right at a border (and where it runs through pixel centres).
-    assert (got == pixel_methods.METHODS[method](rankings, probs)).mean() > 0.995
+    assert (got == _pixel_winners(method, rankings, probs)).mean() > 0.995
     assert (got == -2).mean() < 1e-3
     rings = [(polygon[0], polygon[1:]) for region in shapes for polygon in region["polygons"]]
     assert all(_area(outer) > 0 for outer, _ in rings)
@@ -151,6 +160,14 @@ def test_first_choice_regions_tile_even_with_normal_voters_outside():
     sum to one (the cells cover the box around it)."""
     first = first_choice_shares(CANDIDATES, MODELS[1])
     np.testing.assert_allclose(first.sum(axis=-1), 1.0, atol=1e-9)
+
+
+def test_config_lists_every_method():
+    """The UI makes a button of each; a built method's tooltip ends with its expression."""
+    methods = TestClient(app).get("/api/config").json()["methods"]
+    assert [m["name"] for m in methods] == list(MARGINS)
+    nanson = next(m for m in methods if m["name"] == "nanson")
+    assert nanson["description"].endswith('\nEliminate(Tally(BordaCount()), how="mean")')
 
 
 @pytest.mark.parametrize("distribution", ["beta", "normal"])

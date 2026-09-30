@@ -1,8 +1,9 @@
 """Win regions of a Yee diagram as polygons instead of pixels.
 
 A method's winner is decided by comparing shares that are smooth in the median; only
-the winner jumps. methods.*_margin returns, next to the winner, a margin that is
-continuous and 0 on every border between two winners. So for each winner c
+the winner jumps. Every method of MARGINS (the methods built in yeelab.build, and the
+Condorcet winner) returns, next to the winner, a margin that is continuous and 0 on
+every border between two winners. So for each winner c
 
     psi_c = margin where c wins, -margin elsewhere
 
@@ -18,16 +19,13 @@ A region can have several polygons (FPTP flares at the walls) and holes (an isla
 of another winner).
 """
 
+from dataclasses import dataclass
+
 import contourpy
 import numpy as np
 
-from yeelab.margin.methods import (
-    borda_margin,
-    condorcet_margin,
-    fptp_margin,
-    irv_margin,
-    schulze_margin,
-)
+from yeelab.build import FIRST, METHODS, PAIRWISE, PROFILE, Share, Voters
+from yeelab.margin.methods import condorcet_margin
 from yeelab.margin.shares import (
     Model,
     first_choice_shares,
@@ -40,14 +38,20 @@ from yeelab.ranking_cells import interpolate_to
 DIGITS = 6  # decimals of the vertices sent to the UI
 TINY = 1e-12  # rings with less area are dropped (collapsed onto a grid point)
 
-# method -> shares it needs at the nodes, margin method on them
-MARGINS = {
-    "fptp": (first_choice_shares, fptp_margin),
-    "irv": (ranking_shares, irv_margin),
-    "borda": (pairwise_shares, borda_margin),
-    "schulze": (pairwise_shares, schulze_margin),
-    "condorcet_cycle": (pairwise_shares, condorcet_margin),
-}
+
+@dataclass(frozen=True)
+class _CondorcetCycle:
+    """condorcet_margin with the interface of a built method (needs, evaluate); it
+    marks cycles rather than electing someone, so it is no block of yeelab.build."""
+
+    needs = frozenset({PAIRWISE})
+
+    def evaluate(self, voters: Voters) -> tuple[np.ndarray, np.ndarray]:
+        return condorcet_margin(voters.pairwise)
+
+
+# method -> its winner and margin (evaluate) from the shares it needs (needs)
+MARGINS = {**METHODS, "condorcet_cycle": _CondorcetCycle()}
 
 
 def grid(size: int, pixels: int):
@@ -59,30 +63,40 @@ def grid(size: int, pixels: int):
     return coords, np.clip(coords, 0.5 / pixels, 1 - 0.5 / pixels)
 
 
-def winners(method: str, candidates, model: Model, size: int):
-    """(coordinates (G,), winner (G, G), margin (G, G)) with G = size + 2 on the grid();
-    [i, j] is the point (coordinates[i], coordinates[j])."""
-    shares, margin_method = MARGINS[method]
-    coords, medians = grid(size, model.pixels)
+def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Voters:
+    """The shares in `needs` (yeelab.build.voters) at the points of grid(size),
+    computed at the nodes and interpolated; [i, j] is the point (coordinates[i],
+    coordinates[j])."""
+    medians = grid(size, model.pixels)[1]
 
     def interpolate(values):
         return interpolate_to(values, model.medians, medians, model.transform)
 
-    if shares is ranking_shares:
-        rankings, node_shares = shares(candidates, model)
-        return coords, *margin_method(rankings, interpolate(node_shares))
-    if shares is pairwise_shares:  # d[e, c] = 1 - d[c, e]: interpolate one triangle
+    shares = {}
+    if FIRST in needs:
+        shares["first"] = interpolate(first_choice_shares(candidates, model))
+    if PAIRWISE in needs:  # d[e, c] = 1 - d[c, e]: interpolate one triangle
         n = len(candidates)
         c, e = np.triu_indices(n, 1)
-        above = interpolate(shares(candidates, model)[..., c, e])
+        above = interpolate(pairwise_shares(candidates, model)[..., c, e])
         # d gathered from [0, above, 1 - above]: much faster than assigning into its last axes
         index = np.zeros((n, n), dtype=np.intp)
         index[c, e], index[e, c] = 1 + np.arange(len(c)), 1 + len(c) + np.arange(len(c))
         zero = np.zeros((*above.shape[:2], 1), dtype=above.dtype)
         values = np.concatenate([zero, above, 1 - above], axis=-1)
-        d = np.take(values, index.ravel(), axis=-1).reshape(*above.shape[:2], n, n)
-        return coords, *margin_method(d)
-    return coords, *margin_method(interpolate(shares(candidates, model)))
+        shares["pairwise"] = np.take(values, index.ravel(), axis=-1).reshape(*above.shape[:2], n, n)
+    if PROFILE in needs:
+        shares["rankings"], node_shares = ranking_shares(candidates, model)
+        shares["probs"] = interpolate(node_shares)
+    return Voters(**shares)
+
+
+def winners(method: str, candidates, model: Model, size: int):
+    """(coordinates (G,), winner (G, G), margin (G, G)) with G = size + 2 on the grid();
+    [i, j] is the point (coordinates[i], coordinates[j])."""
+    rule = MARGINS[method]
+    coords = grid(size, model.pixels)[0]
+    return coords, *rule.evaluate(voters(rule.needs, candidates, model, size))
 
 
 def _ring(points):

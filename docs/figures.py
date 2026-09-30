@@ -24,8 +24,8 @@ from scipy.special import betainc, ndtr, ndtri
 from scipy.stats import beta as beta_dist
 
 from yeelab import normal, ranking_cells
-from yeelab.margin import methods as margin_methods
-from yeelab.margin.regions import regions, winners
+from yeelab.build import Voters
+from yeelab.margin.regions import MARGINS, regions, winners
 from yeelab.margin.shares import Model
 from yeelab.pixels import beta as pixel_beta, normal as pixel_normal
 from yeelab.pixels.methods import _pairwise_preferences, borda, condorcet_cycle, fptp, irv, schulze, voronoi
@@ -588,7 +588,8 @@ def _signed_area(ring):
 
 
 def margin_example():
-    """Shares, winner and margin of every method (margin/methods.py) at MARGIN_POINTS."""
+    """Shares, winner and margin of every method (margin/regions.py MARGINS) at
+    MARGIN_POINTS."""
     for label, point in MARGIN_POINTS.items():
         rankings, probs = pixel_beta.compute_ranking_probabilities(
             CANDIDATES, ranking_cells.beta_params_at(np.array(point), UI_DEVIATION, SPREAD))
@@ -608,10 +609,23 @@ def margin_example():
             print("  IRV round " + "  ".join(f"{NAMES[c]} {tally[c]:.4f}" for c in alive)
                   + f": {NAMES[low]} out, gap to {NAMES[second]} {tally[second] - tally[low]:.4f}")
             alive.remove(low)
+        # Baldwin and Nanson round by round: Borda scores among the remaining, sums of d
+        for rule, below_mean in (("Baldwin", False), ("Nanson", True)):
+            alive = list(range(5))
+            while len(alive) > 1:
+                score = {c: sum(d[c, e] for e in alive if e != c) for c in alive}
+                mean = sum(score.values()) / len(alive)
+                out = [c for c in alive if score[c] <= mean] if below_mean else [min(alive, key=score.get)]
+                gap = (min(abs(s - mean) for s in score.values()) if below_mean
+                       else sorted(score.values())[1] - score[out[0]])
+                print(f"  {rule} round " + "  ".join(f"{NAMES[c]} {score[c]:.4f}" for c in alive)
+                      + (f" (mean {mean:.4f})" if below_mean else "")
+                      + f": {', '.join(NAMES[c] for c in out)} out, gap {gap:.4f}")
+                alive = [c for c in alive if c not in out] or alive[:1]
         lead = d - d.T
         print("  narrowest head-to-head result " + "  ".join(
             f"{NAMES[i]} {np.delete(lead[i], i).min():+.4f}" for i in range(5)))
-        # Schulze path strengths from the margins d - d^T (margin_methods._schulze_paths)
+        # Schulze path strengths from the margins d - d^T (margin.methods._schulze_paths)
         p = np.maximum(lead, 0.0)
         for k in range(5):
             p = np.maximum(p, np.minimum(p[:, k, None], p[None, k, :]))
@@ -621,12 +635,11 @@ def margin_example():
                                              for i in range(5) for j in range(5) if i != j and p[i, j] > 0))
         print("  beaten by (max_f p_fe - p_ef) " + "  ".join(
             f"{NAMES[e]} {(p[:, e] - p[e, :]).max():.4f}" for e in range(5)))
-        for name, method, args in (("FPTP", margin_methods.fptp_margin, (first,)),
-                                   ("Borda", margin_methods.borda_margin, (d,)),
-                                   ("Condorcet", margin_methods.condorcet_margin, (d,)),
-                                   ("Schulze", margin_methods.schulze_margin, (d,)),
-                                   ("IRV", margin_methods.irv_margin, (rankings, probs))):
-            winner, margin = method(*[a[None] if a is not rankings else a for a in args])
+        voters = Voters(first[None], d[None], rankings, probs[None])
+        for name, method in (("FPTP", "fptp"), ("Borda", "borda"), ("Baldwin", "baldwin"),
+                             ("Nanson", "nanson"), ("Condorcet", "condorcet_cycle"),
+                             ("Schulze", "schulze"), ("IRV", "irv")):
+            winner, margin = MARGINS[method].evaluate(voters)
             print(f"  {name:9s} winner {'cycle' if winner[0] == CYCLE else NAMES[winner[0]]}, "
                   f"margin {margin[0]:.4f}")
 

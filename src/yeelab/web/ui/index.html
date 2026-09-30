@@ -504,7 +504,7 @@
       for (const button of spreads.querySelectorAll("button")) button.disabled = distribution !== "beta" || deviation === 0;
     }
 
-    // Start: default candidates, distributions and method names come from the backend.
+    // Start: default candidates, distributions and methods (names, tooltips) come from the backend.
     const config = await (await fetch("/api/config")).json();
     candidates = config.candidates;
     maxCandidates = config.max_candidates;
@@ -529,7 +529,7 @@
     deviationSlider.addEventListener("input", () => { pickDeviation(); drawVoters(); compute(dragGrid); });
     deviationSlider.addEventListener("change", () => compute());
     choices(spreads, config.spreads, name => { spread = name; drawVoters(); });
-    choices(methods, named(config.methods), name => method = name, [methods, ideals]);
+    choices(methods, config.methods, name => method = name, [methods, ideals]);
     choices(ideals, named(config.ideals), name => method = name, [methods, ideals]);
     distribution = config.distributions[0].name;
     distributions.querySelector("button").classList.add("active");

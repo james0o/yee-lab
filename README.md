@@ -23,7 +23,7 @@ $D$ is the `--deviation` of the plots and the *Deviation* slider of the UI (defa
 
 Why it matters: with normal voters every Condorcet method draws exactly the Voronoi diagram of the candidates. With Beta voters the median is a median only along the axes, so the skew of the distribution decides diagonal head-to-head races. Condorcet regions get pulled towards the centre and Condorcet cycles appear.
 
-Voting methods: FPTP, IRV, Borda, Schulze, and `condorcet_cycle`, which marks pixels without a Condorcet winner in black. How the ranking probabilities are computed (exactly, without sampling voters) is described in [docs/math.pdf](docs/math.pdf).
+Voting methods: FPTP, IRV, Borda, Baldwin, Nanson, Schulze, and `condorcet_cycle`, which marks pixels without a Condorcet winner in black. Baldwin and Nanson are in the web UI only, where every method is [built from blocks](#methods-from-blocks). How the ranking probabilities are computed (exactly, without sampling voters) is described in [docs/math.pdf](docs/math.pdf).
 
 ## Running it
 
@@ -52,7 +52,7 @@ uv run fastapi dev
 Then open http://127.0.0.1:8000. [yeelab/web/app.py](src/yeelab/web/app.py) serves the page in [yeelab/web/ui/index.html](src/yeelab/web/ui/index.html) and computes the diagrams. The diagram is drawn as curves, not pixels: the backend returns the region of every winner as polygons (`POST /api/regions`). It computes only the shares the method needs, caches everything a drag does not change, runs the hot loops as compiled [numba](https://numba.pydata.org/) kernels, and traces each border as the zero set of the winner's margin. The details are in the last chapter of [docs/math.pdf](docs/math.pdf). The very first start compiles the kernels, which takes a few seconds; numba caches them afterwards.
 
 - **Candidates:** drag one to move it, click empty space to add one (up to 8), right-click to remove one. The diagram follows the drag, typically within 5–40 ms; IRV with 8 candidates, which needs every ranking cell, within about 0.1–0.2 s.
-- **Method:** Voronoi (no voters, the reference), FPTP, IRV, Borda, Schulze or Condorcet cycle.
+- **Method:** Voronoi (no voters, the reference), FPTP, IRV, Borda, Baldwin, Nanson, Schulze or Condorcet cycle. The tooltip of a method says what it does and which blocks it is built from.
 - **Voters:** Beta, or normal for the original Yee model.
 - **Deviation:** $D$ from $0$ to $0.4$. At $0$ every voter sits at their pixel, so every method draws the Voronoi diagram.
 - **Hover** over the square to see the voters of that pixel: their 2D density over the square and their distribution along $x$ above it.
@@ -61,12 +61,32 @@ Then open http://127.0.0.1:8000. [yeelab/web/app.py](src/yeelab/web/app.py) serv
 
 The code is the package `yeelab` in [src/yeelab/](src/yeelab/). It computes a diagram in two ways, which never import each other:
 
-- `yeelab/margin/` — the web UI's way: only the shares each method needs, a winner with a margin that is 0 on every border, and the regions as polygons traced along that zero set.
-- `yeelab/pixels/` — the original way: the complete ranking profile of every pixel, cached on disk, the winner of every pixel, and the plot CLI. [docs/figures.py](docs/figures.py) and the tests use it, the tests as the reference for `margin/`.
+- `yeelab/margin/` — the web UI's way: only the shares each method needs, a winner with a margin that is 0 on every border, and the regions as polygons traced along that zero set. Its methods are built from blocks in `yeelab/build/` (below).
+- `yeelab/pixels/` — the original way: the complete ranking profile of every pixel, cached on disk, the winner of every pixel, and the plot CLI. [docs/figures.py](docs/figures.py) and the tests use it, the tests as the reference for `margin/` and `build/`.
 
-Both have a `methods.py`, each with the methods in the form it needs. What both use is at the top of the package: the voter models and ranking cells (`ranking_cells.py`, `normal.py`), `voting.py` (the IRV rounds and the Condorcet-cycle code) and `threads.py`. `yeelab/web/` is the FastAPI app and the page, on top of `margin/`.
+`pixels/methods.py` has the methods on the complete profile. The web UI's are in `build/`, on top of `margin/methods.py` (Schulze and the Condorcet winner on pairwise shares). What `margin/` and `pixels/` both use is at the top of the package: the voter models and ranking cells (`ranking_cells.py`, `normal.py`), `voting.py` (the IRV rounds and the Condorcet-cycle code) and `threads.py`. `yeelab/web/` is the FastAPI app and the page, on top of `margin/`.
 
 `uv run pytest` runs the tests; `uv run python docs/figures.py` regenerates the figures of [docs/math.pdf](docs/math.pdf).
+
+### Methods from blocks
+
+[yeelab/build/](src/yeelab/build/) puts a voting method together from small blocks, like Scratch does, but with plain Python constructors:
+
+```python
+from yeelab.build import Tally, BordaCount, Plurality, Schulze
+from yeelab.build import Highest, Eliminate
+
+borda   = Highest(Tally(BordaCount()))
+fptp    = Highest(Tally(Plurality()))
+irv     = Eliminate(Tally(Plurality()), how="min")
+baldwin = Eliminate(Tally(BordaCount()), how="min")
+nanson  = Eliminate(Tally(BordaCount()), how="mean")
+schulze = Schulze()
+```
+
+A **ballot** (`Plurality`, `BordaCount`) gives a candidate points by their position among the remaining candidates, `Tally` averages those points over the voters of a pixel into **scores**, and a **winner** block decides: `Highest` takes the highest score, and `Eliminate` drops the lowest score (`how="min"`) or every score at most the mean (`how="mean"`) round by round until one candidate is left. `Schulze()` is a ready-made winner. A block checks its input when it is built (`Highest(BordaCount())` raises `TypeError: Highest expects Scores, got a Ballot`), and `repr` gives back the expression.
+
+Each method computes only the shares it needs (`method.needs`): first choices for FPTP, pairwise shares for Borda, Baldwin, Nanson and Schulze (the Borda score of $c$ among the remaining candidates $S$ is $\sum_{e \in S} d_{ce}$, with $d_{ce}$ the share ranking $c$ above $e$), and the whole profile for IRV, which runs on the compiled rounds of `voting.py`. Every block that decides also computes its own gap, and the margin is the smallest of them, so the borders of a built method are traced like any other. `method.evaluate(voters)` returns the winner and the margin; `margin/regions.py` draws the methods of `yeelab.build.METHODS`.
 
 ## License
 

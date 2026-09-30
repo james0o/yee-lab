@@ -778,6 +778,40 @@ a candidate with $p_(i j) >= p_(j i)$ for all $j$. Schulze elects the Condorcet 
 whenever there is one, so its diagram differs from the Condorcet winner diagram only on
 the black pixels, where it resolves the cycle.
 
+== Baldwin and Nanson (`baldwin`, `nanson`) <sec-baldwin-nanson>
+
+These two are only in the web UI (@ch-realtime), where they are built from blocks
+(`yeelab/build/`) as `Eliminate(Tally(BordaCount()), how="min")` and `how="mean"`.
+Both repeat the Borda count among the remaining candidates $S$. There a ballot gives
+$c_i$ one point per remaining candidate below it, and the expected number of those is
+the sum of the chances of being above each of them:
+
+$ "score"_i^S = sum_r P(r) (|S| - 1 - "pos"_r^S (i)) = sum_(j in S, j != i) pi_(i j), $ <eq-borda-pairwise>
+
+with $"pos"_r^S (i)$ the position of $c_i$ among $S$ in ranking $r$. For $S$ = all
+candidates this is the Borda score, so Borda, Baldwin and Nanson need only the pairwise
+shares. As
+$pi_(i j) + pi_(j i) = 1$, the scores in $S$ add up to the number of pairs, and their
+mean is $(|S| - 1) slash 2$.
+
+*Baldwin* drops the candidate with the lowest score (ties: the first) and counts again,
+until one is left. *Nanson* drops, in every round, each candidate whose score is at
+most the mean; if that is all of them, all scores are equal and the first candidate
+wins (a set of zero area). A Condorcet winner beats every other remaining candidate,
+so its score is above the mean, and both methods elect it: like Schulze, they differ
+from the Condorcet winner only where there is a cycle.
+
+Their margins (@sec-zero-sets) are the smallest gap of any round: for Baldwin the gap
+between the two lowest scores, as for IRV, and for Nanson the distance of the score
+closest to the mean,
+
+$ mu_"Baldwin" = min_S ("score"_((2))^S - "score"_((1))^S), quad
+  mu_"Nanson" = min_S min_(i in S) abs("score"_i^S - (|S| - 1) / 2), $
+
+over the sets $S$ of the rounds, with $"score"_((1))^S <= "score"_((2))^S$ the two
+lowest. The winner changes only where the decision of some round flips, a tie of the
+two lowest or a score at the mean, and there the gap of that round is $0$.
+
 == Ties <sec-ties>
 
 Exact ties are broken by the order of the candidates: `argmax` and `argmin` take the
@@ -1636,7 +1670,8 @@ on the number of pixels at all. Drawing the diagram as curves instead of pixels
 from computing fewer integrals (@sec-needs), keeping those a drag does not change
 (@sec-edge-cache), making each one cheaper (@sec-tables), and compiling the loops that
 remain (@sec-compiled). This chapter describes `margin/` (`shares.py`, `beta_tables.py`,
-`methods.py` and `regions.py`), which `web/app.py` uses for the UI.
+`methods.py` and `regions.py`) and the methods built from blocks in `build/`, which
+`web/app.py` uses for the UI.
 `docs/figures.py` (apart from the examples of @sec-zero-sets), the plots and the tests of
 @sec-validation still use the pipeline of @ch-compute, which is in `pixels/`. The two never import each other; what both need
 (`ranking_cells.py`, `normal.py`, `voting.py`, `threads.py`) is at the top of the package.
@@ -1652,6 +1687,9 @@ methods need much less than the share of every cell.
 $c_i$ in ranking $r$, so
 
 $ "score"_i = sum_r P(r) (C - 1 - "pos"_r (i)) = sum_(j != i) pi_(i j) . $
+
+Baldwin and Nanson take the same sum over the remaining candidates in every round
+(@eq-borda-pairwise), so they need nothing else either.
 
 Each $pi_(i j)$ is the share of one half-plane, the part of the square on $c_i$'s side
 of the bisector: a convex polygon with one slanted edge. For 8 candidates that makes 28
@@ -1734,7 +1772,9 @@ remain are therefore compiled with numba:
 - the clipping of a polygon by a bisector (`ranking_cells`), which with a vectorized
   test of which cells a bisector crosses takes the arrangement of 8 candidates from
   120 ms to 5 ms;
-- the rounds of IRV (@ch-methods).
+- the rounds of IRV (@ch-methods);
+- which candidates a round of Baldwin or Nanson drops (`build/rounds.py`); their Borda
+  scores (@eq-borda-pairwise) are one `einsum` of numpy per round.
 
 The kernels release the interpreter lock but are not parallel themselves; `threads.py`
 runs chunks of their work (edges, pixels) in a pool of threads. A kernel with numba's
@@ -1768,7 +1808,7 @@ and before them:
 
 The shares are smooth in the median $m$; only the winner jumps. Each method compares
 continuous functions of the shares, so its borders are where such a comparison is a tie.
-The `*_margin` variants of the methods return, next to the winner, a *margin* $mu >= 0$
+The methods of the web UI return, next to the winner, a *margin* $mu >= 0$
 that is continuous in the shares and $0$ on every border between two winners. It is the
 smallest gap in a comparison that could change the winner, so it can also vanish where
 such a comparison ties but the winner stays; that makes no border, because the sign of
@@ -1785,8 +1825,15 @@ $psi_c$ below changes only with the winner:
   [Condorcet winner], [$min_(j != w) (pi_(w j) - pi_(j w))$; in a cycle $-max_i min_(j != i) (pi_(i j) - pi_(j i))$],
   [Schulze], [$min_(e != w) max_f (p_(f e) - p_(e f))$],
   [IRV], [smallest gap between the two lowest tallies over all rounds],
+  [Baldwin], [smallest gap between the two lowest Borda scores over all rounds],
+  [Nanson], [smallest distance of a Borda score from the mean over all rounds],
   table.hline(),
 ))
+
+All methods but the Condorcet winner are built from blocks (`yeelab.build`), and the
+margin is never put together by hand: every block that decides computes the gap of its
+decision (`Highest` the lead of the top score, `Eliminate` the gap of each round), and
+the margin is the smallest of them. Baldwin and Nanson are in @sec-baldwin-nanson.
 
 *IRV.* On each side of a curve where some round's two lowest tallies tie, the gap of
 that round tends to $0$. So $mu$ is continuous, and it vanishes on every curve where an
@@ -1854,13 +1901,15 @@ difference of two entries can be off by one in the last digit.
     table.hline(stroke: 0.5pt),
     [FPTP], [A], [0.0132], [E], [0.1363],
     [Borda], [D], [0.6250], [D], [0.0481],
+    [Baldwin], [D], [0.0347], [E], [0.0190],
+    [Nanson], [D], [0.1051], [E], [0.0046],
     [Condorcet winner], [D], [0.2727], [none (cycle)], [0.0125],
     [Schulze], [D], [0.2727], [E], [0.0093],
     [IRV], [D], [0.0138], [E], [0.0016],
     table.hline(),
   ),
-  caption: [Winners and margins at $m_1$ and $m_2$, as returned by the `*_margin`
-    methods.],
+  caption: [Winners and margins at $m_1$ and $m_2$, as returned by the methods of the
+    web UI.],
 ) <tab-margins>
 
 *At $m_1$.* D sits at the median of the voters, but A has the most first choices, so FPTP
@@ -1885,7 +1934,10 @@ same margin. IRV eliminates B, C, E and A in turn:
 ))
 
 The gap between the two lowest tallies is smallest in the first round, between B and C,
-so $mu = 0.0138$.
+so $mu = 0.0138$. Baldwin drops E, B, C and A, the first with the smallest gap,
+$1.6919 - 1.6572 = 0.0347$ to B. Nanson drops B, C and E at once, whose scores are below
+the mean $2$, with A closest to it ($mu = 2.1051 - 2 = 0.1051$), and then A. Both elect
+the Condorcet winner D.
 
 *At $m_2$.* B, D and E each beat A and C, but among themselves they form a cycle: B beats
 D ($pi_(B D) = 0.5206$), D beats E ($0.5062$) and E beats B ($0.5109$). The narrowest
@@ -1904,6 +1956,13 @@ the margin, each other candidate $e$ is beaten by $max_f (p_(f e) - p_(e f))$: B
 by $0.0218 - 0.0125 = 0.0093$; D by B, by $0.0412 - 0.0125 = 0.0287$ (and by E, by
 $0.0093$); A and C by $0.5832$ and $0.3175$. The smallest of these, $mu = 0.0093$, says
 that B is the candidate closest to being unbeaten.
+
+Borda elects D, but Baldwin and Nanson resolve the cycle like Schulze. They drop A and C
+first (Baldwin one at a time) and are left with B, D and E, whose Borda scores among the
+three are $1.0097$, $0.9856$ and $1.0046$, with mean $1$ (@eq-borda-pairwise). Both drop
+D, and then B, which E beats. Nanson's margin $mu = 1.0046 - 1 = 0.0046$ is how close E
+came to going out with D; Baldwin's $mu = 1.0046 - 0.9856 = 0.0190$ how close E came to
+being the lowest instead of D.
 
 In the first round of IRV, A ($0.1243$) and C ($0.1227$) nearly tie for last place,
 so $mu = 0.0016$. E wins whichever of the two goes out first: $m_2$ lies next to a curve

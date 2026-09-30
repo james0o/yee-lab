@@ -1,6 +1,6 @@
 """One thread pool for the compiled kernels (margin/beta_tables.py, normal.py,
-voting.py) and for scipy's special functions (the tables of margin/beta_tables.py),
-which all release the GIL.
+voting.py, build/rounds.py) and for scipy's special functions (the tables of
+margin/beta_tables.py), which all release the GIL.
 
 The kernels are not parallel themselves: a parallel numba kernel called from two
 threads at once, as two requests of the web UI can, aborts with numba's default

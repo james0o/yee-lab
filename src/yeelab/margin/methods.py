@@ -1,11 +1,9 @@
-"""Voting methods on the shares they need (shares.py).
+"""The Condorcet winner and Schulze on pairwise shares d (..., C, C), d[..., c, e] =
+share ranking c above e (shares.py). The other methods are built from blocks in
+yeelab.build, whose Schulze() is schulze_margin. pixels/methods.py has the same
+methods on the complete profile of every pixel, winners only.
 
-Every *_margin function returns (winner, margin) and takes first-choice shares
-(..., C), pairwise shares d (..., C, C), d[..., c, e] = share ranking c above e, or,
-for IRV, the whole profile: rankings (R, C) and their shares (..., R). pixels/methods.py
-has the same methods on the complete profile of every pixel, winners only.
-
-The margin is >= 0, continuous in the
+Both *_margin functions return (winner, margin). The margin is >= 0, continuous in the
 shares, and 0 on every border between two winners: the winner is decided by
 comparing continuous functions of the shares, and the margin is the smallest gap
 in a comparison that could change it. (It may also be 0 where such a comparison
@@ -14,30 +12,7 @@ ties but the winner stays.) regions.py draws the borders as its zero set.
 
 import numpy as np
 
-from yeelab.voting import CYCLE, irv_rounds
-
-
-def _top_two(scores: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Highest score (winner) and its lead over the second."""
-    top = np.partition(scores, -2, axis=-1)
-    return scores.argmax(axis=-1), top[..., -1] - top[..., -2]
-
-
-def fptp_margin(first: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """First past the post on first-choice shares (..., C)."""
-    return _top_two(first)
-
-
-def irv_margin(rankings: np.ndarray, probs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Instant runoff on the whole profile; the margin is the smallest gap between the
-    two lowest tallies of any round (voting.irv_rounds)."""
-    return irv_rounds(rankings, probs)
-
-
-def borda_margin(d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Borda count on pairwise shares: a ballot gives c one point per candidate
-    ranked below c, so c scores sum_e d[..., c, e]."""
-    return _top_two(d.sum(axis=-1))
+from yeelab.voting import CYCLE
 
 
 def condorcet_margin(d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

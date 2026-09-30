@@ -2,7 +2,8 @@
 cycle, and the rounds of instant runoff, compiled.
 
 The rounds give the IRV winner and its margin together; the margin costs nothing extra,
-margin.methods.irv_margin returns both and pixels.methods.irv only the winner.
+irv of yeelab.build (Eliminate(Tally(Plurality()), how="min")) returns both and
+pixels.methods.irv only the winner.
 """
 
 import numpy as np
