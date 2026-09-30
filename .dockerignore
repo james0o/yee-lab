@@ -1,0 +1,8 @@
+.git
+.venv
+.pytest_cache
+**/__pycache__
+docs
+tests
+src/yeelab/pixels/cache
+src/yeelab/pixels/plots

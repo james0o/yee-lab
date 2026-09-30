@@ -57,6 +57,13 @@ Then open http://127.0.0.1:8000. [yeelab/web/app.py](src/yeelab/web/app.py) serv
 - **Deviation:** $D$ from $0$ to $0.4$. At $0$ every voter sits at their pixel, so every method draws the Voronoi diagram.
 - **Hover** over the square to see the voters of that pixel: their 2D density over the square and their distribution along $x$ above it.
 
+Or in Docker, without uv:
+
+```sh
+docker build -t yee-lab .
+docker run -p 8000:8000 yee-lab
+```
+
 ## Code
 
 The code is the package `yeelab` in [src/yeelab/](src/yeelab/). It computes a diagram in two ways, which never import each other:
@@ -66,7 +73,7 @@ The code is the package `yeelab` in [src/yeelab/](src/yeelab/). It computes a di
 
 `pixels/methods.py` has the methods on the complete profile. The web UI's are in `build/`. What `margin/` and `pixels/` both use is at the top of the package: the voter models and ranking cells (`ranking_cells.py`, `normal.py`), `voting.py` (the IRV rounds and the Condorcet-cycle code) and `threads.py`. `yeelab/web/` is the FastAPI app and the page, on top of `margin/`.
 
-`uv run pytest` runs the tests; `uv run python docs/figures.py` regenerates the figures of [docs/math.pdf](docs/math.pdf).
+`uv run pytest` runs the tests (GitHub Actions runs them on every push and pull request, and builds the Docker image); `uv run python docs/figures.py` regenerates the figures of [docs/math.pdf](docs/math.pdf).
 
 ### Methods from blocks
 
