@@ -2,7 +2,7 @@
 
 On the complete profile of every pixel (pixels/), the built fptp, irv, borda, schulze
 and condorcet must pick the winners of pixels.methods, and every elimination the
-winners and margins of a plain Python reference that follows the definition: scores
+winners and margins of a plain Python reference that follows the definition: totals
 from weight(k, C) among the remaining candidates, one point at a time. The fast tally
 of every ballot must be that same sum over the profile, for any remaining candidates.
 
@@ -55,7 +55,7 @@ VOTERS = [("beta", 0.1, "rms"), ("beta", 0.3, "mean_abs"), ("normal", 0.1, None)
 CANDIDATES = [(3, 0), (5, 1), (7, 2)]
 BALLOTS = [Plurality(), BordaCount()]
 # the blocks below the methods that are no method themselves, and Weakest
-LINK_BLOCKS = [Pairwise(), Margins(Pairwise()), StrongestPaths(Margins(Pairwise())),
+PAIR_BLOCKS = [Pairwise(), Margins(Pairwise()), StrongestPaths(Margins(Pairwise())),
                StrongestPaths(StrongestPaths(Margins(Pairwise()))), Weakest(Margins(Pairwise()))]
 # every elimination: the four methods and the one other combination of these blocks
 ELIMINATIONS = [METHODS["irv"], METHODS["baldwin"], METHODS["nanson"],
@@ -104,16 +104,16 @@ def _reference(ballot, how, rankings, probs):
             if key not in weights:
                 weights[key] = _weights(ballot, rankings, alive)
             remaining = np.flatnonzero(alive)
-            scores = (probs[point].astype(np.float64) @ weights[key])[remaining]
+            totals = (probs[point].astype(np.float64) @ weights[key])[remaining]
             if how == "min":
-                order = np.argsort(scores, kind="stable")  # ties: the lowest index goes
-                gaps.append(scores[order[1]] - scores[order[0]])
+                order = np.argsort(totals, kind="stable")  # ties: the lowest index goes
+                gaps.append(totals[order[1]] - totals[order[0]])
                 alive[remaining[order[0]]] = False
             else:
-                mean = scores.mean()
-                gaps.append(np.abs(scores - mean).min())
-                out = (scores <= mean) | (scores == scores.min())  # min: in case of rounding
-                if out.all():  # all scores equal: the lowest index stays
+                mean = totals.mean()
+                gaps.append(np.abs(totals - mean).min())
+                out = (totals <= mean) | (totals == totals.min())  # min: in case of rounding
+                if out.all():  # all totals equal: the lowest index stays
                     out[0] = False
                 alive[remaining[out]] = False
         winner[point], margin[point] = np.flatnonzero(alive)[0], min(gaps)
@@ -220,8 +220,8 @@ def _first_choices(n, count=500, seed=0):
     return first
 
 
-def _runoff_reference(links, first, second):
-    """Runoff point by point from its rule, for the links s (..., C, C) and the (winner,
+def _runoff_reference(diffs, first, second):
+    """Runoff point by point from its rule, for the diffs s (..., C, C) and the (winner,
     margin) of both finalists: the second wins where s[second][first] > 0, otherwise the
     first, and a point where either is CYCLE stays one. The margin is the smallest of the
     finalists' margins and, where they are two candidates, |s[first][second]|."""
@@ -229,7 +229,7 @@ def _runoff_reference(links, first, second):
     winner = np.empty(a.shape, dtype=np.int64)
     margin = np.empty(a.shape)
     for point in np.ndindex(*a.shape):
-        x, y, s = int(a[point]), int(b[point]), links[point].tolist()
+        x, y, s = int(a[point]), int(b[point]), diffs[point].tolist()
         gaps = [float(margin_a[point]), float(margin_b[point])]
         if CYCLE in (x, y):
             winner[point] = CYCLE
@@ -286,7 +286,7 @@ def test_condorcet_methods_are_the_former_functions_on_random_shares(d, name):
 
 @pytest.mark.parametrize("d", TOURNAMENTS, ids=lambda d: f"{d.shape[-1]}-candidates")
 def test_schulze_paths_are_only_needed_in_cycles(d):
-    """Unbeaten(StrongestPaths(...)) takes the winner and margin of the direct links where
+    """Unbeaten(StrongestPaths(...)) takes the winner and margin of the direct diffs where
     there is a Condorcet winner. The paths everywhere (decide) elect the same and have a
     margin at least as large."""
     schulze = METHODS["schulze"]
@@ -426,7 +426,7 @@ def test_runoff_matches_reference_on_random_shares(d, method):
     d = d.astype(np.float64)  # the reference computes in float64: the same arithmetic
     voters = Voters(_first_choices(d.shape[-1], len(d)), d)
     first, second = method.first.evaluate(voters), method.second.evaluate(voters)
-    expected_winner, expected_margin = _runoff_reference(method.links.evaluate(voters), first, second)
+    expected_winner, expected_margin = _runoff_reference(method.diffs.evaluate(voters), first, second)
     winner, margin = method.evaluate(voters)
     np.testing.assert_array_equal(winner, expected_winner)
     np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-12)
@@ -461,7 +461,7 @@ def test_eliminations_match_reference(profile, method):
     one tally each."""
     rankings, probs = profile
     voters = _voters(rankings, probs)
-    expected_winner, expected_margin = _reference(method.scores.ballot, method.how, rankings, probs)
+    expected_winner, expected_margin = _reference(method.totals.ballot, method.how, rankings, probs)
     clear = expected_margin > TOLERANCE
     assert clear.mean() > 0.5  # not vacuous; near-empty candidates tie, e.g. in IRV
     for winner, margin in (method.evaluate(voters), method.rounds(voters)):
@@ -490,7 +490,7 @@ def test_tally_is_the_sum_of_weights(profile, ballot):
 
 
 def test_ties_go_to_the_lowest_index():
-    """All pairwise shares 1/2: every score ties. The highest and Nanson's survivor are
+    """All pairwise shares 1/2: every total ties. The highest and Nanson's survivor are
     the first candidate; the lowest, which Baldwin drops each round, too, so the last
     one wins. Every margin is 0."""
     n = 4
@@ -558,7 +558,7 @@ def test_repr_is_the_expression():
         'Eliminate(Tally(Plurality()), how="min"))')
     challenged = Unbeaten(StrongestPaths(Margins(Pairwise())), against=METHODS["black"],
                           order=Weakest(Margins(Pairwise())))
-    for method in [*METHODS.values(), *ELIMINATIONS, *BALLOTS, *LINK_BLOCKS, challenged, *RUNOFFS]:
+    for method in [*METHODS.values(), *ELIMINATIONS, *BALLOTS, *PAIR_BLOCKS, challenged, *RUNOFFS]:
         assert eval(repr(method)) == method
 
 
@@ -588,7 +588,7 @@ def test_needs():
     assert METHODS["king_runoff"].needs == {FIRST, PAIRWISE, PROFILE}
     assert Runoff(Margins(Pairwise()), METHODS["borda"], METHODS["minimax"]).needs == {PAIRWISE}
     assert Eliminate(Tally(Plurality()), how="mean").needs == {PROFILE}
-    assert all(block.needs == {PAIRWISE} for block in LINK_BLOCKS)
+    assert all(block.needs == {PAIRWISE} for block in PAIR_BLOCKS)
 
 
 def test_fallback_needs_the_shares_of_both():
@@ -604,45 +604,50 @@ def test_unbeaten_against_needs_the_shares_of_all_three():
 
 
 @pytest.mark.parametrize("build, message", [
-    (lambda: Highest(BordaCount()), "Highest expects Scores, got a Ballot: BordaCount()"),
+    (lambda: Highest(BordaCount()), "Highest expects CandidateTotals, got a Ballot: BordaCount()"),
     (lambda: Highest(METHODS["schulze"]),
-     "Highest expects Scores, got a Winner: Unbeaten(StrongestPaths(Margins(Pairwise())))"),
-    (lambda: Highest(Margins(Pairwise())), "Highest expects Scores, got Links: Margins(Pairwise())"),
-    (lambda: Highest(Pairwise()), "Highest expects Scores, got Duels: Pairwise()"),
-    (lambda: Tally(Tally(Plurality())), "Tally expects a Ballot, got Scores: Tally(Plurality())"),
+     "Highest expects CandidateTotals, got a Winner: Unbeaten(StrongestPaths(Margins(Pairwise())))"),
+    (lambda: Highest(Margins(Pairwise())),
+     "Highest expects CandidateTotals, got PairDiffs: Margins(Pairwise())"),
+    (lambda: Highest(Pairwise()), "Highest expects CandidateTotals, got PairShares: Pairwise()"),
+    (lambda: Tally(Tally(Plurality())), "Tally expects a Ballot, got CandidateTotals: Tally(Plurality())"),
     (lambda: Tally(METHODS["condorcet"]),
      "Tally expects a Ballot, got a Winner: Unbeaten(Margins(Pairwise()))"),
-    (lambda: Tally(Margins(Pairwise())), "Tally expects a Ballot, got Links: Margins(Pairwise())"),
+    (lambda: Tally(Margins(Pairwise())), "Tally expects a Ballot, got PairDiffs: Margins(Pairwise())"),
     (lambda: Tally(Plurality), "Tally expects a Ballot, got the class Plurality; call it: Plurality()"),
     (lambda: Tally(3), "Tally expects a Ballot, got int 3"),
     (lambda: Eliminate(BordaCount(), how="min"), "Eliminate expects a Tally"),
     (lambda: Eliminate(Highest(Tally(Plurality())), how="min"),
      "Eliminate expects a Tally (it tallies the remaining candidates again), got a Winner"),
     (lambda: Eliminate(Weakest(Margins(Pairwise())), how="min"),
-     "Eliminate expects a Tally (it tallies the remaining candidates again), got Scores"),
-    (lambda: Margins(Tally(BordaCount())), "Margins expects Duels, got Scores: Tally(BordaCount())"),
-    (lambda: Margins(Margins(Pairwise())), "Margins expects Duels, got Links: Margins(Pairwise())"),
-    (lambda: Margins(Pairwise), "Margins expects Duels, got the class Pairwise; call it: Pairwise()"),
-    (lambda: StrongestPaths(Pairwise()), "StrongestPaths expects Links, got Duels: Pairwise()"),
-    (lambda: StrongestPaths(BordaCount()), "StrongestPaths expects Links, got a Ballot: BordaCount()"),
-    (lambda: Weakest(Pairwise()), "Weakest expects Links, got Duels: Pairwise()"),
+     "Eliminate expects a Tally (it tallies the remaining candidates again), got CandidateTotals"),
+    (lambda: Margins(Tally(BordaCount())),
+     "Margins expects PairShares, got CandidateTotals: Tally(BordaCount())"),
+    (lambda: Margins(Margins(Pairwise())), "Margins expects PairShares, got PairDiffs: Margins(Pairwise())"),
+    (lambda: Margins(Pairwise), "Margins expects PairShares, got the class Pairwise; call it: Pairwise()"),
+    (lambda: StrongestPaths(Pairwise()), "StrongestPaths expects PairDiffs, got PairShares: Pairwise()"),
+    (lambda: StrongestPaths(BordaCount()), "StrongestPaths expects PairDiffs, got a Ballot: BordaCount()"),
+    (lambda: Weakest(Pairwise()), "Weakest expects PairDiffs, got PairShares: Pairwise()"),
     (lambda: Weakest(Highest(Weakest(Margins(Pairwise())))),
-     "Weakest expects Links, got a Winner: Highest(Weakest(Margins(Pairwise())))"),
-    (lambda: Unbeaten(Tally(BordaCount())), "Unbeaten expects Links, got Scores: Tally(BordaCount())"),
-    (lambda: Unbeaten(Pairwise()), "Unbeaten expects Links, got Duels: Pairwise()"),
-    (lambda: Unbeaten(METHODS["borda"]), "Unbeaten expects Links, got a Winner: Highest(Tally(BordaCount()))"),
+     "Weakest expects PairDiffs, got a Winner: Highest(Weakest(Margins(Pairwise())))"),
+    (lambda: Unbeaten(Tally(BordaCount())),
+     "Unbeaten expects PairDiffs, got CandidateTotals: Tally(BordaCount())"),
+    (lambda: Unbeaten(Pairwise()), "Unbeaten expects PairDiffs, got PairShares: Pairwise()"),
+    (lambda: Unbeaten(METHODS["borda"]),
+     "Unbeaten expects PairDiffs, got a Winner: Highest(Tally(BordaCount()))"),
     (lambda: Unbeaten(Margins(Pairwise()), against=Tally(Plurality()), order=Tally(Plurality())),
-     "Unbeaten expects a Winner as against, got Scores: Tally(Plurality())"),
+     "Unbeaten expects a Winner as against, got CandidateTotals: Tally(Plurality())"),
     (lambda: Unbeaten(Margins(Pairwise()), against=METHODS["fptp"], order=Plurality()),
-     "Unbeaten expects Scores as order, got a Ballot: Plurality()"),
+     "Unbeaten expects CandidateTotals as order, got a Ballot: Plurality()"),
     (lambda: Fallback(BordaCount(), METHODS["borda"]), "Fallback expects a Winner, got a Ballot: BordaCount()"),
     (lambda: Fallback(METHODS["borda"], Weakest(Margins(Pairwise()))),
-     "Fallback expects a Winner, got Scores: Weakest(Margins(Pairwise()))"),
-    (lambda: Runoff(Pairwise(), METHODS["fptp"], METHODS["borda"]), "Runoff expects Links, got Duels: Pairwise()"),
+     "Fallback expects a Winner, got CandidateTotals: Weakest(Margins(Pairwise()))"),
+    (lambda: Runoff(Pairwise(), METHODS["fptp"], METHODS["borda"]),
+     "Runoff expects PairDiffs, got PairShares: Pairwise()"),
     (lambda: Runoff(Margins(Pairwise()), BordaCount(), METHODS["borda"]),
      "Runoff expects a Winner, got a Ballot: BordaCount()"),
     (lambda: Runoff(Margins(Pairwise()), METHODS["fptp"], Tally(Plurality())),
-     "Runoff expects a Winner, got Scores: Tally(Plurality())"),
+     "Runoff expects a Winner, got CandidateTotals: Tally(Plurality())"),
 ])
 def test_wrong_blocks_fail_when_built(build, message):
     with pytest.raises(TypeError, match=re.escape(message)):

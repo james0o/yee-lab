@@ -19,8 +19,8 @@
 
     winner, margin = nanson.evaluate(voters)  # Voters with the shares in nanson.needs
 
-    blocks      the blocks, their types (Ballot, Duels, Links, Scores, Winner) and how
-                each computes
+    blocks      the blocks, their types (Ballot, CandidateTotals, PairDiffs, PairShares,
+                Winner) and how each computes
     rounds      one round of Eliminate, compiled: who goes at every point
     voters      Voters: the shares at every point that a method is evaluated on
     methods     the methods above by name (METHODS); margin/regions.py draws them
@@ -29,16 +29,16 @@
 from yeelab.build.blocks import (
     Ballot,
     BordaCount,
-    Duels,
+    CandidateTotals,
     Eliminate,
     Fallback,
     Highest,
-    Links,
     Margins,
+    PairDiffs,
+    PairShares,
     Pairwise,
     Plurality,
     Runoff,
-    Scores,
     StrongestPaths,
     Tally,
     Unbeaten,
@@ -49,7 +49,7 @@ from yeelab.build.methods import METHODS
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Share, Voters
 
 __all__ = [
-    "Ballot", "BordaCount", "Duels", "Eliminate", "Fallback", "Highest", "Links", "Margins",
-    "Pairwise", "Plurality", "Runoff", "Scores", "StrongestPaths", "Tally", "Unbeaten",
-    "Weakest", "Winner", "METHODS", "FIRST", "PAIRWISE", "PROFILE", "Share", "Voters",
+    "Ballot", "BordaCount", "CandidateTotals", "Eliminate", "Fallback", "Highest", "Margins",
+    "PairDiffs", "PairShares", "Pairwise", "Plurality", "Runoff", "StrongestPaths", "Tally",
+    "Unbeaten", "Weakest", "Winner", "METHODS", "FIRST", "PAIRWISE", "PROFILE", "Share", "Voters",
 ]
