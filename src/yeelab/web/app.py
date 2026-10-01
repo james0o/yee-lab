@@ -68,6 +68,12 @@ METHOD_INFO = {
     "king_runoff": {"label": "King runoff", "description": "King runoff: the King of the hill "
                     "winner against the IRV winner, head to head; the one more voters rank above "
                     "the other wins."},
+    "approval": {"label": "Approval", "description": "Approval: a voter approves every candidate "
+                 "at least halfway from the farthest candidate to the closest, by squared "
+                 "distance; the candidate approved by the most voters wins."},
+    "approval_gap": {"label": "Approval (gap)", "description": "Approval (gap): a voter puts "
+                     "the candidates in order of squared distance and approves those above the "
+                     "largest gap; the candidate approved by the most voters wins."},
     "voronoi": {"label": "Voronoi", "description": "The nearest candidate to the pixel, without "
                 "voters: what every method draws when all voters are at their pixel."},
 }

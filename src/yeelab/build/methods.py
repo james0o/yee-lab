@@ -2,9 +2,11 @@
 lists them (margin/regions.py MARGINS)."""
 
 from yeelab.build.blocks import (
+    Approval,
     BordaCount,
     Eliminate,
     Fallback,
+    GapApproval,
     Highest,
     Margins,
     Pairwise,
@@ -33,6 +35,9 @@ black = Fallback(condorcet, borda)                   # the Condorcet winner, els
 koth = Unbeaten(M, against=fptp, order=Tally(Plurality()))
 king_runoff = Runoff(M, koth, irv)                   # the king of the hill against the irv winner
 
+approval = Highest(Tally(Approval()))                # approved by the most voters, at the threshold 1/2
+approval_gap = Highest(Tally(GapApproval()))         # ... with every voter's largest gap as the cut
+
 METHODS: dict[str, Winner] = {
     "fptp": fptp,
     "irv": irv,
@@ -45,4 +50,6 @@ METHODS: dict[str, Winner] = {
     "black": black,
     "koth": koth,
     "king_runoff": king_runoff,
+    "approval": approval,
+    "approval_gap": approval_gap,
 }

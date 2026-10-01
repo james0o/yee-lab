@@ -6,7 +6,9 @@
 
 Every block has one type of output:
 
-    Ballot           Plurality(), BordaCount()          points one voter gives a candidate
+    Ballot           Plurality(), BordaCount(),         points one voter gives a candidate
+                     Approval(threshold),
+                     GapApproval()
     CandidateTotals  Tally(ballot), Weakest(diffs)      a total of each candidate at a point
     PairShares       Pairwise()                         share of the voters ranking c above e
     PairDiffs        Margins(shares),                   how strongly c beats e (antisymmetric)
@@ -17,10 +19,13 @@ Every block has one type of output:
                      Unbeaten(diffs, against=winner, order=totals),
                      Runoff(diffs, first, second)
 
-A ballot gives weight(k, C) points to the candidate at position k (0 = closest) of C;
-both count only the remaining candidates, and a higher total is better. Each ballot
-also knows the cheapest formula for its mean over the voters (Ballot.tally), from the
-shares in voters.Voters. Tally averages them over the voters of a point.
+A ranked ballot gives weight(k, C) points to the candidate at position k (0 = closest)
+of C; both count only the remaining candidates, and a higher total is better. An
+approval ballot gives one point to each candidate the voter approves, which depends on
+how far the candidates are and not only on their order (yeelab.approval): Approval cuts
+at a threshold, GapApproval at the largest gap. Each ballot also knows the cheapest
+formula for its mean over the voters (Ballot.tally), from the shares in voters.Voters.
+Tally averages them over the voters of a point.
 
 A diff s[c, e] = -s[e, c] says that c beats e where it is positive. PairDiffs are
 transitive (PairDiffs.transitive) if the candidates that beat each other cannot form a
@@ -50,8 +55,9 @@ from typing import Literal
 
 import numpy as np
 
+from yeelab.approval import GAP, Cut
 from yeelab.build.rounds import drop_below_mean, drop_lowest
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Share, Voters
+from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Approved, Share, Voters
 from yeelab.voting import CYCLE, irv_rounds
 
 Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) at every point
@@ -137,21 +143,23 @@ def _challenged(diffs: np.ndarray, king: np.ndarray, margin: np.ndarray, totals:
 
 
 class Ballot(Block):
-    """Points one voter gives each candidate, by its position among the remaining ones."""
+    """Points one voter gives each candidate: by its position among the remaining ones
+    (a ranked ballot, which has a weight), or by whether the voter approves it."""
 
     kind = "a Ballot"
     needs: frozenset[Share]            # shares tally() reads for all candidates
     needs_remaining: frozenset[Share]  # ... for the remaining ones of an elimination
 
     def weight(self, k: int, n: int) -> float:
-        """Points for the candidate at position k (0 = closest) of n remaining candidates."""
+        """Points for the candidate at position k (0 = closest) of n remaining candidates;
+        only ranked ballots have one."""
         raise NotImplementedError
 
     def tally(self, voters: Voters, alive: np.ndarray | None) -> np.ndarray:
-        """Mean points of each candidate over the voters of every point, (..., C): the
-        sum over rankings of their share times weight(position among the remaining,
-        number remaining). alive (..., C) marks the remaining candidates of every point,
-        None all of them; the others get 0."""
+        """Mean points of each candidate over the voters of every point, (..., C): for a
+        ranked ballot the sum over rankings of their share times weight(position among
+        the remaining, number remaining). alive (..., C) marks the remaining candidates
+        of every point, None all of them; the others get 0."""
         raise NotImplementedError
 
     def eliminate(self, voters: Voters, how: str) -> Result | None:
@@ -206,6 +214,50 @@ class BordaCount(Ballot):
             return d.sum(axis=-1)
         weights = alive.astype(d.dtype)
         return np.einsum("...ce,...e->...c", d, weights) * weights
+
+
+def _approving(voters: Voters, cut: Cut, alive: np.ndarray | None) -> np.ndarray:
+    """Tally of an approval ballot: the share of the voters who approve each candidate
+    at `cut`. A voter marks the ballot once, among all candidates, so the remaining
+    candidates of an elimination keep their shares."""
+    approved = voters.approved[cut]
+    return approved if alive is None else np.where(alive, approved, 0)
+
+
+@dataclass(frozen=True)
+class Approval(Ballot):
+    """One point for every candidate the voter approves: those at least `threshold` of
+    the way from the farthest candidate (0) to the closest (1), by squared distance
+    (yeelab.approval). 1 approves only the closest candidate, like Plurality; the lower
+    the threshold, the more are approved, but never the farthest."""
+
+    threshold: float = 0.5
+
+    def __post_init__(self):
+        number = isinstance(self.threshold, (int, float)) and not isinstance(self.threshold, bool)
+        if not (number and 0 < self.threshold <= 1):
+            raise ValueError(f"Approval threshold must be above 0 and at most 1, got {self.threshold!r}")
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return frozenset({Approved(self.threshold)})
+
+    needs_remaining = needs
+
+    def tally(self, voters: Voters, alive: np.ndarray | None) -> np.ndarray:
+        return _approving(voters, self.threshold, alive)
+
+
+@dataclass(frozen=True)
+class GapApproval(Ballot):
+    """One point for every candidate the voter approves: those above the largest gap
+    between two neighbours when the candidates are in order of squared distance
+    (yeelab.approval). For three candidates that is Approval(0.5)."""
+
+    needs = needs_remaining = frozenset({Approved(GAP)})
+
+    def tally(self, voters: Voters, alive: np.ndarray | None) -> np.ndarray:
+        return _approving(voters, GAP, alive)
 
 # ---------------------------------------------------------------- PairShares
 

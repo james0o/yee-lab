@@ -1,7 +1,8 @@
 """Voting methods built from small blocks, like in Scratch but with Python constructors:
 
-    from yeelab.build import (BordaCount, Eliminate, Fallback, Highest, Margins, Pairwise,
-                              Plurality, Runoff, StrongestPaths, Tally, Unbeaten, Weakest)
+    from yeelab.build import (Approval, BordaCount, Eliminate, Fallback, GapApproval, Highest,
+                              Margins, Pairwise, Plurality, Runoff, StrongestPaths, Tally,
+                              Unbeaten, Weakest)
 
     borda   = Highest(Tally(BordaCount()))
     fptp    = Highest(Tally(Plurality()))
@@ -17,6 +18,9 @@
     koth    = Unbeaten(M, against=fptp, order=Tally(Plurality()))  # king of the hill
     king_runoff = Runoff(M, koth, irv)  # their winners, one on one
 
+    approval     = Highest(Tally(Approval()))     # approved by the most voters
+    approval_gap = Highest(Tally(GapApproval()))  # ... cut at every voter's largest gap
+
     winner, margin = nanson.evaluate(voters)  # Voters with the shares in nanson.needs
 
     blocks      the blocks, their types (Ballot, CandidateTotals, PairDiffs, PairShares,
@@ -26,12 +30,15 @@
     methods     the methods above by name (METHODS); margin/regions.py draws them
 """
 
+from yeelab.approval import GAP, Cut
 from yeelab.build.blocks import (
+    Approval,
     Ballot,
     BordaCount,
     CandidateTotals,
     Eliminate,
     Fallback,
+    GapApproval,
     Highest,
     Margins,
     PairDiffs,
@@ -46,10 +53,11 @@ from yeelab.build.blocks import (
     Winner,
 )
 from yeelab.build.methods import METHODS
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Share, Voters
+from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Approved, Share, Voters
 
 __all__ = [
-    "Ballot", "BordaCount", "CandidateTotals", "Eliminate", "Fallback", "Highest", "Margins",
-    "PairDiffs", "PairShares", "Pairwise", "Plurality", "Runoff", "StrongestPaths", "Tally",
-    "Unbeaten", "Weakest", "Winner", "METHODS", "FIRST", "PAIRWISE", "PROFILE", "Share", "Voters",
+    "Approval", "Ballot", "BordaCount", "CandidateTotals", "Eliminate", "Fallback", "GapApproval",
+    "Highest", "Margins", "PairDiffs", "PairShares", "Pairwise", "Plurality", "Runoff",
+    "StrongestPaths", "Tally", "Unbeaten", "Weakest", "Winner", "METHODS", "FIRST", "PAIRWISE",
+    "PROFILE", "GAP", "Approved", "Cut", "Share", "Voters",
 ]

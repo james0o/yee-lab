@@ -52,6 +52,7 @@ package `src/yeelab/`):
   [interpolation nodes per axis], [$N$], [`--nodes` (`NODES`)], [49],
   [Gauss–Legendre points per edge], [$Q$], [`QUAD_NODES`], [24],
   [exponent of `tapered`], [$tau$], [`TAPER`], [0.2],
+  [approval threshold], [$theta$], [`Approval(threshold)` (`build/blocks.py`)], [1/2],
   [contour grid per axis (UI)], [$G$], [`DRAG_GRID` / `FINAL_GRID` (`web/app.py`)], [160 / 320],
   table.hline(),
 ))
@@ -839,6 +840,112 @@ looks at a single defeat and not at paths of defeats.
 *Black.* The Condorcet winner if there is one, otherwise the Borda winner. Every pixel
 has a winner, never a cycle, and like Schulze, Baldwin and Nanson, Black differs from
 the Condorcet winner diagram only where there is a cycle.
+
+== Approval voting (`approval`, `approval_gap`) <sec-approval>
+
+These two are only in the web UI as well, built from blocks as
+`Highest(Tally(Approval()))` and `Highest(Tally(GapApproval()))`. An approval ballot is
+not a ranking: the voter approves some of the candidates, and the candidate approved by
+the most voters wins. Whom a voter approves depends on how far the candidates are and
+not only on their order, so the model needs one more assumption than the ranked methods
+(`approval.py`).
+
+*Utilities.* A voter at $p$ values $c_i$ by the squared distance and scales it between
+the closest candidate $c_a$ and the farthest $c_b$:
+
+$ u_i = -|p - c_i|^2, quad t_i = (u_i - u_b) / (u_a - u_b) in [0, 1] . $ <eq-utility>
+
+The closest candidate has $t_a = 1$ and the farthest $t_b = 0$. The voter uses the whole
+ballot: approving everyone or no one would not change the result. $t_i$ stays the same
+when all utilities are shifted or scaled, so no unit of distance has to be chosen.
+
+*Two cuts.* The ballot approves the candidates above a cut of that order.
+
+- `Approval(threshold)` approves $c_i$ when $t_i >= theta$, by default $theta = 1 slash 2$:
+  the candidates at least halfway from the farthest to the closest. $theta = 1$ approves
+  only the closest candidate, which is FPTP, and $theta -> 0$ everyone but the farthest.
+- `GapApproval()` puts the utilities in order, $u_((1)) >= dots >= u_((C))$, and approves
+  the candidates above the largest gap $g_k = u_((k)) - u_((k + 1))$, the first $k$ of
+  the order.
+
+Either way the closest candidate is approved and the farthest is not. For three
+candidates the two are the same ballot at $theta = 1 slash 2$: the middle candidate is
+above the larger gap exactly when $t_((2)) > 1 slash 2$. From four candidates on they
+differ. With the squared distances $0$, $0.35$, $0.45$, $0.55$ and $1$ the threshold
+$1 slash 2$ approves three candidates, and the largest gap, from $0.55$ to $1$, four.
+
+*Straight borders.* $u_i = -|p|^2 + 2 c_i dot p - |c_i|^2$, and $-|p|^2$ is the same for
+every candidate, so it drops out of any combination whose weights sum to $0$:
+
+$ sum_j w_j u_j >= 0 quad <==> quad 2 (sum_j w_j c_j) dot p >= sum_j w_j |c_j|^2
+  quad "if" sum_j w_j = 0 . $ <eq-combination>
+
+That is a half-plane (`half_plane`), like the bisector of @eq-bisector, which is
+$u_i - u_j > 0$. Both cuts compare such combinations:
+
+$ t_i >= theta quad <==> quad u_i - theta u_a - (1 - theta) u_b >= 0, $
+$ g_k >= g_l quad <==> quad (u_((k)) - u_((k + 1))) - (u_((l)) - u_((l + 1))) >= 0 . $
+
+So where $a$ and $b$ do not change (for the largest gap: the whole order), the voters
+who approve $c_i$ are on one side of a straight line. For a threshold, the lines of one
+$c_i$, $c_a$ and $c_b$ for all $theta$ pass through one point, the centre of the circle
+through the three candidates, where $u_i = u_a = u_b$. They turn from the bisector of
+$c_i c_b$ ($theta = 0$) to that of $c_i c_a$ ($theta = 1$); for three candidates on a
+line they are parallel. With the distance itself as the utility the same borders would be
+curves, $|p - c_i| = theta |p - c_a| + (1 - theta) |p - c_b|$. The squared distance is what
+keeps the cells polygons.
+
+*Shares.* The approval share $q_i$ is the share of the voters who approve $c_i$. Like a
+ranking, a ballot depends only on where the voter is. These voters therefore fill a fixed
+region $A_i$ of the square, a union of convex polygons (@fig-approval-ballots), and
+$q_i = P((X, Y) in A_i)$ is a sum of the edge terms of @sec-green (`approval_shares` in
+`margin/shares.py`).
+
+- For a threshold the ballot depends only on the closest and the farthest candidate. The
+  cell of one $a$ and one $b$ is the Voronoi cell of $c_a$ cut by the bisectors of $c_b$
+  and every other candidate. All of it approves $c_a$, and its part on $c_i$'s side of
+  the line of @eq-combination approves $c_i$.
+- For the largest gap the whole order matters, so the cells are those of the bisector
+  arrangement (@sec-cells). Within a cell the gaps are linear in $p$, and the part where
+  $g_k$ is the largest is cut off by the half-planes $g_k >= g_l$. It approves the first
+  $k$ candidates of the cell's ranking. A gap that is no larger than another at every
+  vertex of the cell is so in all of it, so most cells are not cut at all.
+
+The edge terms are added per candidate, with the sign of each polygon's direction along
+the edge. An edge between two polygons that approve the same candidates then cancels and
+is not integrated, which leaves the border of each $A_i$: 46 of 167 edges for A–E at
+$theta = 1 slash 2$, and 82 of 318 for the largest gap. The shares do not sum to $1$.
+Their sum is the mean number of approved candidates, between $1$ and $C - 1$, and each
+$q_i$ lies between the first-choice share $s_i$ (@eq-first-choice), which it equals at
+$theta = 1$, and one minus the share of the voters who have $c_i$ last.
+
+#figure(
+  image("figures/approval_ballots.png", width: 100%),
+  caption: [The voters who approve D, as the polygons their share is summed over
+    (candidates A–E). The borders are straight; the thin lines inside are polygon edges,
+    which cancel in D's share.],
+) <fig-approval-ballots>
+
+*Winner.* The candidate with the largest $q_i$ wins, and the margin (@sec-zero-sets) is
+its lead over the second.
+
+*Candidates in the middle.* Approval favours a candidate between the others. If $c_i$ is
+halfway between a voter's closest and farthest candidate, $c_i = (c_a + c_b) slash 2$, then
+
+$ u_i = (u_a + u_b) / 2 + (|c_a - c_b|^2) / 4, $
+
+so $t_i > 1 slash 2$: that voter approves $c_i$ at every threshold up to $1 slash 2$,
+wherever the voter is. Voters on both sides approve such a candidate next to their own
+favourite, and it wins far outside its Voronoi cell. In @fig-approval D, in the middle of
+A–E, wins 23% of the square at $theta = 3 slash 4$, 58% at $1 slash 2$ and 84% at
+$1 slash 4$; with the largest gap it wins 57%.
+
+#figure(
+  image("figures/approval.png", width: 100%),
+  caption: [Approval voting at three thresholds and at the largest gap (candidates A–E,
+    Beta voters, `rms`, $D = 0.2$). The lower the threshold, the more of the square goes
+    to D.],
+) <fig-approval>
 
 == Ties <sec-ties>
 
@@ -1732,8 +1839,14 @@ voters the cells are taken in the box of @sec-normal and summed with Owen's T.
 candidates. In a benchmark with 8 candidates it visited 106 of the 247 sets of two or
 more, so computing sets lazily saves little, and IRV uses the full arrangement.
 
-All three are sums of edge terms: the Green integrals of @sec-edges for Beta voters and
-the signed triangles of @sec-normal for normal voters.
+*Approval shares.* The approval methods use the share of the voters who approve each
+candidate (@sec-approval). For a threshold the square is cut into the cells of one closest
+and one farthest candidate, a few dozen polygons, and for the largest gap into the cells
+of the full arrangement; in both, each cell is cut again by straight lines. Edges inside
+the region of a candidate cancel, so only the borders of the regions are integrated.
+
+All of these are sums of edge terms: the Green integrals of @sec-edges for Beta voters
+and the signed triangles of @sec-normal for normal voters.
 
 == Dragging: an edge cache <sec-edge-cache>
 
@@ -1857,6 +1970,7 @@ $psi_c$ below changes only with the winner:
   [IRV], [smallest gap between the two lowest tallies over all rounds],
   [Baldwin], [smallest gap between the two lowest Borda scores over all rounds],
   [Nanson], [smallest distance of a Borda score from the mean over all rounds],
+  [Approval], [lead of the top approval share over the second],
   table.hline(),
 ))
 
@@ -1864,7 +1978,8 @@ All methods are built from blocks (`yeelab.build`), and the margin is never put 
 by hand: every block that decides computes the gap of its decision, and the margin is the
 smallest of them. `Highest` has the lead of the top score, `Eliminate` the gap of each
 round, `Unbeaten` the gaps below and `Fallback` those of the method that decides.
-Baldwin and Nanson are in @sec-baldwin-nanson, Minimax and Black in @sec-minimax-black.
+Baldwin and Nanson are in @sec-baldwin-nanson, Minimax and Black in @sec-minimax-black,
+the approval methods in @sec-approval.
 
 *IRV.* On each side of a curve where some round's two lowest tallies tie, the gap of
 that round tends to $0$. So $mu$ is continuous, and it vanishes on every curve where an

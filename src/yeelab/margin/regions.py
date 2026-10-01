@@ -22,9 +22,10 @@ of another winner).
 import contourpy
 import numpy as np
 
-from yeelab.build import FIRST, METHODS, PAIRWISE, PROFILE, Share, Voters
+from yeelab.build import FIRST, METHODS, PAIRWISE, PROFILE, Approved, Share, Voters
 from yeelab.margin.shares import (
     Model,
+    approval_shares,
     first_choice_shares,
     pairwise_shares,
     ranking_shares,
@@ -74,6 +75,10 @@ def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Vote
     if PROFILE in needs:
         shares["rankings"], node_shares = ranking_shares(candidates, model)
         shares["probs"] = interpolate(node_shares)
+    cuts = [share.cut for share in needs if isinstance(share, Approved)]
+    if cuts:
+        shares["approved"] = {cut: interpolate(approval_shares(candidates, model, cut))
+                              for cut in cuts}
     return Voters(**shares)
 
 
