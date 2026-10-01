@@ -23,7 +23,7 @@ $D$ is the `--deviation` of the plots and the *Deviation* slider of the UI (defa
 
 Why it matters: with normal voters every Condorcet method draws exactly the Voronoi diagram of the candidates. With Beta voters the median is a median only along the axes, so the skew of the distribution decides diagonal head-to-head races. Condorcet regions get pulled towards the centre and Condorcet cycles appear.
 
-Voting methods: FPTP, IRV, Borda, Schulze, and `condorcet_cycle`, which marks pixels without a Condorcet winner in black. Baldwin, Nanson, Minimax and Black (the Condorcet winner, otherwise Borda) are in the web UI only, where every method is [built from blocks](#methods-from-blocks). How the ranking probabilities are computed (exactly, without sampling voters) is described in [docs/math.pdf](docs/math.pdf).
+Voting methods: FPTP, IRV, Borda, Schulze, and `condorcet`, which marks pixels without a Condorcet winner in black. Baldwin, Nanson, Minimax and Black (the Condorcet winner, otherwise Borda) are in the web UI only, where every method is [built from blocks](#methods-from-blocks). How the ranking probabilities are computed (exactly, without sampling voters) is described in [docs/math.pdf](docs/math.pdf).
 
 ## Running it
 
@@ -52,7 +52,7 @@ uv run fastapi dev
 Then open http://127.0.0.1:8000. [yeelab/web/app.py](src/yeelab/web/app.py) serves the page in [yeelab/web/ui/index.html](src/yeelab/web/ui/index.html) and computes the diagrams. The diagram is drawn as curves, not pixels: the backend returns the region of every winner as polygons (`POST /api/regions`). It computes only the shares the method needs, caches everything a drag does not change, runs the hot loops as compiled [numba](https://numba.pydata.org/) kernels, and traces each border as the zero set of the winner's margin. The details are in the last chapter of [docs/math.pdf](docs/math.pdf). The very first start compiles the kernels, which takes a few seconds; numba caches them afterwards.
 
 - **Candidates:** drag one to move it, click empty space to add one (up to 8), right-click to remove one. The diagram follows the drag, typically within 5–40 ms; IRV with 8 candidates, which needs every ranking cell, within about 0.1–0.2 s.
-- **Method:** Voronoi (no voters, the reference), FPTP, IRV, Borda, Baldwin, Nanson, Schulze, Condorcet cycle, Minimax or Black. The tooltip of a method says what it does and which blocks it is built from.
+- **Method:** Voronoi (no voters, the reference), FPTP, IRV, Borda, Baldwin, Nanson, Schulze, Condorcet, Minimax or Black. The tooltip of a method says what it does and which blocks it is built from.
 - **Voters:** Beta, or normal for the original Yee model.
 - **Deviation:** $D$ from $0$ to $0.4$. At $0$ every voter sits at their pixel, so every method draws the Voronoi diagram.
 - **Hover** over the square to see the voters of that pixel: their 2D density over the square and their distribution along $x$ above it.
@@ -84,9 +84,9 @@ nanson  = Eliminate(Tally(BordaCount()), how="mean")
 
 margins = Margins(Pairwise())
 schulze = Unbeaten(StrongestPaths(margins))
-condorcet_cycle = Unbeaten(margins)
+condorcet = Unbeaten(margins)
 minimax = Highest(Weakest(margins))
-black   = Fallback(condorcet_cycle, borda)
+black   = Fallback(condorcet, borda)
 ```
 
 A **ballot** (`Plurality`, `BordaCount`) gives a candidate points by their position among the remaining candidates, `Tally` averages those points over the voters of a pixel into **scores**, and a **winner** block decides: `Highest` takes the highest score, and `Eliminate` drops the lowest score (`how="min"`) or every score at most the mean (`how="mean"`) round by round until one candidate is left. The Condorcet methods start from `Pairwise()` (who ranks one candidate above another): `Margins` and `StrongestPaths` give **links** (how strongly one candidate beats another), `Weakest` scores a candidate by its weakest link, `Unbeaten` elects the candidate no one beats (none in a Condorcet cycle), and `Fallback(first, second)` uses `second` where `first` elects no one. A block checks its input when it is built (`Highest(BordaCount())` raises `TypeError: Highest expects Scores, got a Ballot`), and `repr` gives back the expression.

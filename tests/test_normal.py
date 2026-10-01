@@ -24,7 +24,7 @@ from yeelab.normal import (
     sigma_from_deviation,
     triangle_terms,
 )
-from yeelab.pixels.methods import condorcet_cycle, schulze, voronoi
+from yeelab.pixels.methods import condorcet, schulze, voronoi
 from yeelab.pixels.normal import compute_ranking_probabilities, interpolate_to_pixels
 from yeelab.ranking_cells import pixel_medians
 from yeelab.voting import CYCLE
@@ -117,7 +117,7 @@ def test_condorcet_methods_draw_voronoi(profile):
     clear = distance[..., 1] - distance[..., 0] > 1e-9
     nearest = voronoi(CANDIDATES, PIXELS)
     np.testing.assert_array_equal(schulze(rankings, probs)[clear], nearest[clear])
-    winners = condorcet_cycle(rankings, probs)
+    winners = condorcet(rankings, probs)
     assert not (winners[clear] == CYCLE).any()
     np.testing.assert_array_equal(winners[clear], nearest[clear])
 

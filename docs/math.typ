@@ -762,7 +762,7 @@ $ pi_(i j) = sum_(r: i "above" j "in" r) P(r), quad pi_(i j) + pi_(j i) = 1, $ <
 the share of voters preferring $c_i$ to $c_j$; $c_i$ beats $c_j$ when
 $pi_(i j) > 1/2$.
 
-*Condorcet winner* (`condorcet_cycle`). The candidate who beats every other candidate.
+*Condorcet winner* (`condorcet`). The candidate who beats every other candidate.
 If there is none the pixel is marked with `CYCLE` (black in the figures). As a
 function of the pixel, $pi_(i j) = 1/2$ holds only on a curve, so apart from pixel
 centres that happen to lie exactly on such a curve (@sec-ties) the majority relation

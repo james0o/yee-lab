@@ -56,8 +56,8 @@ METHOD_INFO = {
                "most the mean of the remaining ones is eliminated, round by round, until one is left."},
     "schulze": {"label": "Schulze", "description": "Schulze: the candidate no one beats along the "
                 "widest paths of head-to-head margins."},
-    "condorcet_cycle": {"label": "Condorcet cycle", "description": "The Condorcet winner, who beats "
-                        "every other candidate head to head; black where there is none (a cycle)."},
+    "condorcet": {"label": "Condorcet", "description": "Condorcet: the candidate who beats every "
+                  "other candidate head to head; black where there is none (a cycle)."},
     "minimax": {"label": "Minimax", "description": "Minimax: the candidate whose worst head-to-head "
                 "defeat is the smallest, measured by the margin of votes."},
     "black": {"label": "Black", "description": "Black: the Condorcet winner if there is one, "
@@ -65,6 +65,9 @@ METHOD_INFO = {
     "koth": {"label": "King of the hill", "description": "King of the hill: the candidate with "
              "the most first choices, unless someone beats them head to head; then the one with "
              "the most first choices among those who do."},
+    "king_runoff": {"label": "King runoff", "description": "King runoff: the King of the hill "
+                    "winner against the IRV winner, head to head; the one more voters rank above "
+                    "the other wins."},
     "voronoi": {"label": "Voronoi", "description": "The nearest candidate to the pixel, without "
                 "voters: what every method draws when all voters are at their pixel."},
 }

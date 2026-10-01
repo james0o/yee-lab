@@ -1,7 +1,7 @@
 """Voting methods built from small blocks, like in Scratch but with Python constructors:
 
     from yeelab.build import (BordaCount, Eliminate, Fallback, Highest, Margins, Pairwise,
-                              Plurality, StrongestPaths, Tally, Unbeaten, Weakest)
+                              Plurality, Runoff, StrongestPaths, Tally, Unbeaten, Weakest)
 
     borda   = Highest(Tally(BordaCount()))
     fptp    = Highest(Tally(Plurality()))
@@ -11,10 +11,11 @@
 
     M = Margins(Pairwise())
     schulze = Unbeaten(StrongestPaths(M))
-    condorcet_cycle = Unbeaten(M)
+    condorcet = Unbeaten(M)
     minimax = Highest(Weakest(M))
-    black   = Fallback(condorcet_cycle, borda)
+    black   = Fallback(condorcet, borda)
     koth    = Unbeaten(M, against=fptp, order=Tally(Plurality()))  # king of the hill
+    king_runoff = Runoff(M, koth, irv)  # their winners, one on one
 
     winner, margin = nanson.evaluate(voters)  # Voters with the shares in nanson.needs
 
@@ -36,6 +37,7 @@ from yeelab.build.blocks import (
     Margins,
     Pairwise,
     Plurality,
+    Runoff,
     Scores,
     StrongestPaths,
     Tally,
@@ -48,6 +50,6 @@ from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Share, Voters
 
 __all__ = [
     "Ballot", "BordaCount", "Duels", "Eliminate", "Fallback", "Highest", "Links", "Margins",
-    "Pairwise", "Plurality", "Scores", "StrongestPaths", "Tally", "Unbeaten", "Weakest",
-    "Winner", "METHODS", "FIRST", "PAIRWISE", "PROFILE", "Share", "Voters",
+    "Pairwise", "Plurality", "Runoff", "Scores", "StrongestPaths", "Tally", "Unbeaten",
+    "Weakest", "Winner", "METHODS", "FIRST", "PAIRWISE", "PROFILE", "Share", "Voters",
 ]

@@ -14,7 +14,8 @@ Every block has one type of output:
     Winner   Highest(scores), Unbeaten(links),  winner and margin at every point
              Eliminate(scores, how=...),
              Fallback(first, second),
-             Unbeaten(links, against=winner, order=scores)
+             Unbeaten(links, against=winner, order=scores),
+             Runoff(links, first, second)
 
 A ballot gives weight(k, C) points to the candidate at position k (0 = closest) of C;
 both count only the remaining candidates, and a higher score is better. Each ballot
@@ -30,6 +31,9 @@ order=scores) only asks that of the winner of `against`, the king: if someone be
 the highest `order` score among those who do wins instead. King of the hill is
 
     Unbeaten(Margins(Pairwise()), against=fptp, order=Tally(Plurality()))
+
+Runoff(links, first, second) puts the winners of two methods against each other: the
+one who beats the other on the links wins.
 
 A Winner returns (winner, margin): the margin is >= 0, continuous in the shares and 0
 on every border between two winners, since margin/regions.py draws the borders as its
@@ -544,3 +548,44 @@ class Fallback(Winner):
 
     def __repr__(self):
         return f"Fallback({self.first!r}, {self.second!r})"
+
+
+@dataclass(frozen=True)
+class Runoff(Winner):
+    """The winner of `first` against the winner of `second`, one on one: `second` wins
+    where it beats `first` on the links, s[second, first] > 0, otherwise `first` does.
+    Two candidates cannot form a cycle, so not even links that are not transitive leave
+    the duel open. Where both elect the same candidate, that candidate wins.
+
+    The margin is the smallest of three gaps: the margins of `first` and of `second` (a
+    finalist changes) and |s[first, second]| (the duel flips), which is left out where
+    both are the same candidate. Where either one elects no one (voting.CYCLE) there is
+    no duel either, and the point stays a CYCLE with the smaller of their two margins."""
+
+    links: Links
+    first: Winner
+    second: Winner
+
+    def __post_init__(self):
+        _expect(self, self.links, Links, "Links")
+        _expect(self, self.first, Winner, "a Winner")
+        _expect(self, self.second, Winner, "a Winner")
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return self.links.needs | self.first.needs | self.second.needs
+
+    def evaluate(self, voters: Voters) -> Result:
+        first, margin = self.first.evaluate(voters)
+        second, gap = self.second.evaluate(voters)
+        links = self.links.evaluate(voters)
+        n = links.shape[-1]
+        cycle = (first == CYCLE) | (second == CYCLE)
+        a, b = np.where(cycle, 0, first), np.where(cycle, 0, second)  # a = b in a cycle: no duel
+        pairs = links.reshape(*links.shape[:-2], n * n)
+        duel = np.take_along_axis(pairs, (a * n + b)[..., None], axis=-1)[..., 0]  # s[first, second]
+        margin = np.minimum(np.minimum(margin, gap), np.where(a == b, np.inf, np.abs(duel)))
+        return np.where(cycle, CYCLE, np.where(duel < 0, second, first)), margin
+
+    def __repr__(self):
+        return f"Runoff({self.links!r}, {self.first!r}, {self.second!r})"

@@ -9,6 +9,7 @@ from yeelab.build.blocks import (
     Margins,
     Pairwise,
     Plurality,
+    Runoff,
     StrongestPaths,
     Tally,
     Unbeaten,
@@ -25,11 +26,12 @@ nanson = Eliminate(Tally(BordaCount()), how="mean")  # every Borda score <= the 
 P = Pairwise()
 M = Margins(P)
 schulze = Unbeaten(StrongestPaths(M))                # no one beats them along the strongest paths
-condorcet_cycle = Unbeaten(M)                        # the Condorcet winner; CYCLE where there is none
+condorcet = Unbeaten(M)                              # the Condorcet winner; CYCLE where there is none
 minimax = Highest(Weakest(M))                        # the smallest worst defeat
-black = Fallback(condorcet_cycle, borda)             # the Condorcet winner, else Borda
+black = Fallback(condorcet, borda)                   # the Condorcet winner, else Borda
 # king of the hill: the fptp winner, or the most first choices among those who beat it
 koth = Unbeaten(M, against=fptp, order=Tally(Plurality()))
+king_runoff = Runoff(M, koth, irv)                   # the king of the hill against the irv winner
 
 METHODS: dict[str, Winner] = {
     "fptp": fptp,
@@ -38,8 +40,9 @@ METHODS: dict[str, Winner] = {
     "baldwin": baldwin,
     "nanson": nanson,
     "schulze": schulze,
-    "condorcet_cycle": condorcet_cycle,
+    "condorcet": condorcet,
     "minimax": minimax,
     "black": black,
     "koth": koth,
+    "king_runoff": king_runoff,
 }

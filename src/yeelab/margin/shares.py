@@ -5,12 +5,14 @@ enough for every method, but they need all cells of the bisector arrangement:
 O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far less:
 
     borda, baldwin, nanson, schulze,  pairwise shares d[c, e] = P(c ranked above e),
-    condorcet_cycle, minimax, black   one half-plane per pair (C (C - 1) / 2 edges)
+    condorcet, minimax, black         one half-plane per pair (C (C - 1) / 2 edges)
     fptp                              first-choice shares, the C Voronoi cells
     koth                              both of these: the king by first choices, its
                                       challengers by pairwise shares
-    irv                              the whole profile (first choices among every
+    irv                               the whole profile (first choices among every
                                       remaining set)
+    king_runoff                       all three: koth against irv, the duel by pairwise
+                                      shares
 
 (Borda needs only pairwise shares: a ballot gives c one point per candidate ranked
 below c, so c's expected score is sum_e d[c, e].)

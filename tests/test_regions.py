@@ -168,8 +168,8 @@ def test_config_lists_every_method():
     methods = config["methods"]
     assert [m["name"] for m in methods] == list(MARGINS)
     assert [m["label"] for m in methods + config["ideals"]] == [
-        "FPTP", "IRV", "Borda", "Baldwin", "Nanson", "Schulze", "Condorcet cycle", "Minimax",
-        "Black", "King of the hill", "Voronoi"]
+        "FPTP", "IRV", "Borda", "Baldwin", "Nanson", "Schulze", "Condorcet", "Minimax",
+        "Black", "King of the hill", "King runoff", "Voronoi"]
     nanson = next(m for m in methods if m["name"] == "nanson")
     assert nanson["description"].endswith('\nEliminate(Tally(BordaCount()), how="mean")')
 

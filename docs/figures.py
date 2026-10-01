@@ -28,7 +28,7 @@ from yeelab.build import Voters
 from yeelab.margin.regions import MARGINS, regions, winners
 from yeelab.margin.shares import Model
 from yeelab.pixels import beta as pixel_beta, normal as pixel_normal
-from yeelab.pixels.methods import _pairwise_preferences, borda, condorcet_cycle, fptp, irv, schulze, voronoi
+from yeelab.pixels.methods import _pairwise_preferences, borda, condorcet, fptp, irv, schulze, voronoi
 from yeelab.voting import CYCLE
 from yeelab.web.app import DEVIATION as UI_DEVIATION, DRAG_GRID, FINAL_GRID
 
@@ -143,7 +143,7 @@ def cycle_counts():
         models = [("normal", pixel_normal, {})] + [(f"beta {s}", pixel_beta, {"spread": s}) for s in RULES]
         for label, model, options in models:
             rankings, probs = model.ranking_probabilities(CANDIDATES, PIXELS, deviation, **options)
-            sch, cyc = schulze(rankings, probs), condorcet_cycle(rankings, probs)
+            sch, cyc = schulze(rankings, probs), condorcet(rankings, probs)
             print(f"  deviation {deviation} {label:14s}: cycles {np.sum((cyc == CYCLE) & ~tie):5d} "
                   f"({np.sum((cyc == CYCLE) & ~tie) / np.sum(~tie):.2%}), Schulze != Voronoi "
                   f"{np.sum((sch != nearest) & ~tie):5d} ({np.sum((sch != nearest) & ~tie) / np.sum(~tie):.1%}), "
@@ -157,7 +157,7 @@ def spread_rules():
         rankings, probs = profile("beta", spread)
         for col, (label, winners) in enumerate([
                 ("FPTP", fptp(rankings, probs)), ("IRV", irv(rankings, probs)),
-                ("Condorcet winner", condorcet_cycle(rankings, probs))]):
+                ("Condorcet winner", condorcet(rankings, probs))]):
             show(axes[row, col], winners, f"{spread}: {label}")
     fig.tight_layout()
     fig.savefig(FIGURES / "spread_rules.png", dpi=130)
@@ -205,7 +205,7 @@ def beta_shapes():
 
 def compare(profiles):
     fig, axes = plt.subplots(2, 3, figsize=(10, 6.9))
-    methods = [("IRV", irv), ("Schulze", schulze), ("Condorcet winner", condorcet_cycle)]
+    methods = [("IRV", irv), ("Schulze", schulze), ("Condorcet winner", condorcet)]
     for row, name in enumerate(profiles):
         rankings, probs = profiles[name]
         for col, (label, method) in enumerate(methods):
@@ -510,7 +510,7 @@ def schulze_notch():
     """Beta Schulze region of c_1 that is not convex, and the cycle pockets behind it."""
     deviation, pixels = 0.3, PIXELS
     rankings, probs = pixel_beta.ranking_probabilities(NOTCH, pixels, deviation, spread=SPREAD)
-    sch, cyc = schulze(rankings, probs), condorcet_cycle(rankings, probs)
+    sch, cyc = schulze(rankings, probs), condorcet(rankings, probs)
     pairwise = _pairwise_preferences(rankings, probs)
     print(f"notch: concave pixels of c_1's Schulze region {concave_pixels(sch == 0)}, "
           f"cycle pixels {np.sum(cyc == CYCLE)}")
@@ -520,7 +520,7 @@ def schulze_notch():
     medians = np.unique(points.round(6))
     r, p = pixel_beta.compute_ranking_probabilities(
         NOTCH, ranking_cells.beta_params_at(medians, deviation, SPREAD))
-    s, c, d = schulze(r, p), condorcet_cycle(r, p), _pairwise_preferences(r, p)
+    s, c, d = schulze(r, p), condorcet(r, p), _pairwise_preferences(r, p)
     for tt, (x, y) in zip(t, points):
         i, j = np.searchsorted(medians, round(x, 6)), np.searchsorted(medians, round(y, 6))
         dd = d[i, j]
@@ -637,7 +637,7 @@ def margin_example():
             f"{NAMES[e]} {(p[:, e] - p[e, :]).max():.4f}" for e in range(5)))
         voters = Voters(first[None], d[None], rankings, probs[None])
         for name, method in (("FPTP", "fptp"), ("Borda", "borda"), ("Baldwin", "baldwin"),
-                             ("Nanson", "nanson"), ("Condorcet", "condorcet_cycle"),
+                             ("Nanson", "nanson"), ("Condorcet", "condorcet"),
                              ("Schulze", "schulze"), ("Minimax", "minimax"), ("Black", "black"),
                              ("IRV", "irv")):
             winner, margin = MARGINS[method].evaluate(voters)
