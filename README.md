@@ -54,7 +54,7 @@ Then open http://127.0.0.1:8000. [yeelab/web/app.py](src/yeelab/web/app.py) serv
 - **Candidates:** drag one to move it, click empty space to add one (up to 8), right-click to remove one. The diagram follows the drag, typically within 5–40 ms; IRV with 8 candidates, which needs every ranking cell, within about 0.1–0.2 s.
 - **Method:** Voronoi (no voters, the reference), FPTP, IRV, Borda, Baldwin, Nanson, Schulze, Condorcet, Minimax, Black, Approval or Approval (gap). The tooltip of a method says what it does and which blocks it is built from.
 - **Voters:** Beta, or normal for the original Yee model.
-- **Deviation:** $D$ from $0$ to $0.4$. At $0$ every voter sits at their pixel, so every method draws the Voronoi diagram.
+- **Deviation:** $D$ from $0.05$ to $0.4$.
 - **Hover** over the square to see the voters of that pixel: their 2D density over the square and their distribution along $x$ above it.
 
 ## Code

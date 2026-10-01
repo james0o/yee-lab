@@ -13,9 +13,10 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
                                       remaining set)
     king_runoff                       all three: koth against irv, the duel by pairwise
                                       shares
-    approval, approval_gap            approval shares at their cut: the voters who approve
-                                      a candidate have curved borders, so these come
-                                      from a grid of voters, not from polygons
+    approval, approval_gap            the shares who do not approve a candidate at
+                                      their cut: these voters have curved borders, so
+                                      the shares come from a grid of voters, not from
+                                      polygons
 
 (Borda needs only pairwise shares: a ballot gives c one point per candidate ranked
 below c, so c's expected score is sum_e d[c, e].)
@@ -28,19 +29,21 @@ candidate moves only its C - 1 bisectors, and only edges on those are new.
 For normal voters a half-plane holds Phi(signed distance / sigma) of the voters, so
 their pairwise shares need no edges at all.
 
-Everything here is at the interpolation nodes, shape (N, N, ...); regions.py
-interpolates it to the points where the methods are evaluated.
+All of these are at the interpolation nodes, shape (N, N, ...); regions.py
+interpolates them to the points where the methods are evaluated. The approval shares
+are computed at those points themselves (unapproved_shares).
 """
 
+import os
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from functools import cached_property, lru_cache
 
 import numpy as np
-from scipy.special import betainc, logit, ndtr
+from scipy.special import betainc, betaincc, logit, ndtr
 
-from yeelab import normal, ranking_cells
+from yeelab import normal, ranking_cells, threads
 from yeelab.approval import Cut, coverage
 from yeelab.distributions import Distribution
 from yeelab.margin.beta_tables import TabulatedBeta
@@ -299,37 +302,69 @@ def _grid_lines(model: Model) -> np.ndarray:
     return np.concatenate([-outside[::-1], inside, 1 + outside])
 
 
-@lru_cache(maxsize=8)  # < 1 MB each, built in a few ms
-def _voter_grid(model: Model):
-    """(lines (K + 1,), mass (N, K)) of the voter grid: its lines along one axis
-    (_grid_lines) and the share of each node's voters between two neighbouring lines,
-    from the exact CDF. Both axes have the same lines and nodes, so a rectangle of the
-    grid holds mass[i, k] * mass[j, l] of the voters of node (i, j). Read-only."""
+def _signed_cdf(model: Model, medians, lines, below) -> np.ndarray:
+    """The CDF F of the voters with each median at the lines, shape (M, K + 1): F at
+    the lines marked in `below`, those up to the median, and F - 1, minus the share
+    beyond the line, at the others. Both are computed directly, so the differences of
+    neighbours keep their precision in both tails (1 - 1e-20 is 1)."""
+    if model.distribution == "normal":
+        z = (lines - medians[:, None]) / model.sigma
+        return np.where(below, ndtr(z), -ndtr(-z))
+    params = ranking_cells.beta_params_at(medians, model.deviation, model.spread)
+
+    def block(rows):
+        a, b = params[rows, :1], params[rows, 1:]
+        beyond = betaincc(a, b, lines, out=np.zeros(below[rows].shape), where=~below[rows])
+        return betainc(a, b, lines, out=-beyond, where=below[rows])
+
+    # scipy's betainc releases the GIL: blocks of medians in parallel
+    blocks = np.array_split(np.arange(len(medians)), min(len(medians), os.cpu_count() or 1))
+    return np.concatenate(list(threads.pool.map(block, blocks)))
+
+
+@lru_cache(maxsize=32)  # < 1 MB each; Beta voters take ~0.1 s at the 322 points of the UI
+def _cached_voter_grid(model: Model, medians: bytes):
+    medians = np.frombuffer(medians)
     lines = _grid_lines(model)
-    if model.distribution == "beta":
-        params = ranking_cells.node_params(model.pixels, model.nodes, model.deviation, model.spread)[1]
-        cdf = betainc(params[:, :1], params[:, 1:], lines)
-    else:
-        cdf = ndtr((lines - model.medians[:, None]) / model.sigma)
-    mass = np.diff(cdf, axis=1)
+    below = lines <= medians[:, None]
+    mass = np.diff(_signed_cdf(model, medians, lines, below), axis=1)
+    mass[below[:, :-1] & ~below[:, 1:]] += 1  # the cell with the median: from F to F - 1
     lines.setflags(write=False)
     mass.setflags(write=False)
     return lines, mass
 
 
-def approval_shares(candidates, model: Model, cut: Cut) -> np.ndarray:
-    """approved[i, j, c] = share of the voters of node (i, j) who approve c at `cut`
-    (approval.HALF or GAP), shape (N, N, C). They do not sum to 1: a voter approves
-    between one candidate and all but one.
+def _voter_grid(model: Model, medians):
+    """(lines (K + 1,), mass (M, K)) of the voter grid: its lines along one axis
+    (_grid_lines) and the share of the voters with each of the `medians` (M,) between
+    two neighbouring lines, from the exact CDF and exact in the tails too. Both axes
+    have the same lines, so a rectangle of the grid holds mass[i, k] * mass[j, l] of the
+    voters with median (medians[i], medians[j]). Kept by the medians; read-only."""
+    return _cached_voter_grid(model, np.ascontiguousarray(medians, dtype=np.float64).tobytes())
+
+
+def unapproved_shares(candidates, model: Model, cut: Cut, medians) -> np.ndarray:
+    """unapproved[i, j, c] = share of the voters with median (medians[i], medians[j])
+    who do not approve c at `cut` (approval.HALF or GAP), shape (M, M, C). The share
+    who approve c is 1 minus this; over the candidates neither sums to 1, as a voter
+    approves between one candidate and all but one.
+
+    Why the share who do not approve: far from the candidates, narrow voters all
+    approve the same candidates, and the shares of those are 1 to rounding. Which of
+    them leads is decided by the few voters who do not approve each, 1e-20 of them or
+    fewer. Those shares are sums of small terms here, exact in relative terms.
 
     The voters who approve a candidate have curved borders (yeelab.approval), so their
     share is not a sum of edge terms like the others. The plane is cut into the
     rectangles of the voter grid instead: approval.coverage gives the part of each
-    rectangle that approves c, and the rectangles are added up with the exact share of
-    the voters each one holds. The approving region is the same for every node, and only
-    its border within a rectangle is approximate, so the shares stay smooth in the
-    node; they are within about 1e-3 of the exact ones (tests/test_approval.py)."""
-    lines, mass = _voter_grid(model)
-    cover = coverage(lines, lines, candidates, cut, APPROVAL_SUB)
-    return np.moveaxis(mass @ cover.astype(np.float64) @ mass.T, 0, -1)
+    rectangle that approves c, and the rest of each rectangle is added up with the
+    exact share of the voters it holds. Only the border within a rectangle is
+    approximate: the share who approve is within about 1e-3 of the exact one
+    (tests/test_approval.py). Normal voters beyond the grid, less than 1e-19 of them,
+    count as approving.
 
+    The shares are not interpolated from the nodes: a tail of 1e-20 is far below the
+    error of the interpolant, and one more median costs only a row of each product."""
+    lines, mass = _voter_grid(model, medians)
+    rest = np.subtract(1.0, coverage(lines, lines, candidates, cut, APPROVAL_SUB), dtype=np.float64)
+    return np.moveaxis(mass @ rest @ mass.T, 0, -1)

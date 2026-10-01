@@ -14,8 +14,9 @@ else Borda". koth (king of the hill) is checked against a Python reference of it
 winner and margin, on the profiles and on random first-choice and pairwise shares.
 Runoff is checked against a Python reference of its duel between the built finalists:
 king_runoff on the profiles, other finalists (with cycles and ties) on random shares.
-The approval ballots tally the approval shares they are given, which test_approval.py
-checks; here the most approved candidate must win, with its lead as the margin.
+The approval ballots tally the shares not approving they are given, which
+test_approval.py checks; here the most approved candidate must win, with its lead as the
+margin.
 
 Wrong blocks must fail when built, and every method must print as the expression
 that builds it.
@@ -497,42 +498,54 @@ def test_tally_is_the_sum_of_weights(profile, ballot):
 
 
 def _approving_voters(n=5, seed=0):
-    """Random approval shares (4, 6, n) at both cuts; every tenth point on a grid of
-    quarters, where they tie."""
+    """Random shares not approving (4, 6, n) at both cuts; every tenth point on a grid
+    of quarters, where they tie."""
     rng = np.random.default_rng(seed)
-    approved = {cut: rng.random((4, 6, n)) for cut in (HALF, GAP)}
-    for shares in approved.values():
+    unapproved = {cut: rng.random((4, 6, n)) for cut in (HALF, GAP)}
+    for shares in unapproved.values():
         shares.reshape(-1, n)[::10] = np.round(4 * shares.reshape(-1, n)[::10]) / 4
-    return Voters(approved=approved)
+    return Voters(unapproved=unapproved)
 
 
 @pytest.mark.parametrize("ballot, cut", [(Approval(), HALF), (GapApproval(), GAP)],
                          ids=lambda value: repr(value))
 def test_the_most_approved_candidate_wins(ballot, cut):
-    """Highest(Tally(ballot)) on the shares of the ballot's own cut: the highest share
-    wins (ties: the lowest index) and the margin is its lead over the second."""
+    """Highest(Tally(ballot)) on the shares of the ballot's own cut: the candidate the
+    fewest voters do not approve wins (ties: the lowest index) and the margin is its
+    lead over the second. The tally is the share approving, counted down from 1."""
     voters = _approving_voters()
-    shares = voters.approved[cut]
+    shares = voters.unapproved[cut]
     assert voters.shape == (4, 6) and voters.n_candidates == 5
-    np.testing.assert_array_equal(ballot.tally(voters, None), shares)
+    np.testing.assert_array_equal(ballot.tally(voters, None), -shares)
     winner, margin = Highest(Tally(ballot)).evaluate(voters)
     ordered = np.sort(shares, axis=-1)
-    np.testing.assert_array_equal(winner, shares.argmax(axis=-1))
-    np.testing.assert_array_equal(margin, ordered[..., -1] - ordered[..., -2])
+    np.testing.assert_array_equal(winner, shares.argmin(axis=-1))
+    np.testing.assert_array_equal(margin, ordered[..., 1] - ordered[..., 0])
     assert (margin == 0).any() and (margin > 0).any()  # the ties are there
 
 
+def test_a_lead_among_candidates_nearly_all_approve_is_kept():
+    """Two candidates approved by all but 1e-30 and 3e-30 of the voters: both shares
+    approving are 1 in floating point, and the first still wins by 2e-30."""
+    unapproved = np.array([[3e-30, 1e-30, 0.4], [1e-40, 2e-40, 1.0]])
+    assert ((1 - unapproved[:, 0]) == (1 - unapproved[:, 1])).all()
+    for ballot, cut in ((Approval(), HALF), (GapApproval(), GAP)):
+        winner, margin = Highest(Tally(ballot)).evaluate(Voters(unapproved={cut: unapproved}))
+        np.testing.assert_array_equal(winner, [1, 0])
+        np.testing.assert_allclose(margin, [2e-30, 1e-40], rtol=1e-12, atol=0)
+
+
 def test_an_approval_ballot_is_not_marked_again_in_an_elimination():
-    """The remaining candidates keep their shares and the others get 0, so dropping the
+    """The remaining candidates keep their totals and the others get -1, so dropping the
     lowest round by round leaves the most approved candidate."""
     voters, ballot = _approving_voters(), Approval()
-    shares = voters.approved[HALF]
+    shares = voters.unapproved[HALF]
     alive = np.random.default_rng(1).random(shares.shape) < 0.5
-    np.testing.assert_array_equal(ballot.tally(voters, alive), np.where(alive, shares, 0))
+    np.testing.assert_array_equal(ballot.tally(voters, alive), np.where(alive, -shares, -1))
     np.testing.assert_array_equal(Tally(ballot).evaluate(voters, alive), ballot.tally(voters, alive))
     winner, margin = Eliminate(Tally(ballot), how="min").evaluate(voters)
     clear = Highest(Tally(ballot)).evaluate(voters)[1] > 0
-    np.testing.assert_array_equal(winner[clear], shares.argmax(axis=-1)[clear])
+    np.testing.assert_array_equal(winner[clear], shares.argmin(axis=-1)[clear])
     ordered = np.sort(shares, axis=-1)
     np.testing.assert_allclose(margin, np.diff(ordered, axis=-1).min(axis=-1), rtol=0, atol=1e-12)
 

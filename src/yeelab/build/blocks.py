@@ -23,9 +23,9 @@ of C; both count only the remaining candidates, and a higher total is better. An
 approval ballot gives one point to each candidate the voter approves, the closest ones
 down to a cut that depends on how far the candidates are and not only on their order
 (yeelab.approval): Approval approves half of them, GapApproval those above the largest
-gap. Each ballot also knows the cheapest formula for its mean over the voters
-(Ballot.tally), from the shares in voters.Voters. Tally averages them over the voters of
-a point.
+gap; its total is counted down from 1, a point lost per voter who does not approve.
+Each ballot also knows the cheapest formula for its mean over the voters (Ballot.tally),
+from the shares in voters.Voters. Tally averages them over the voters of a point.
 
 A diff s[c, e] = -s[e, c] says that c beats e where it is positive. PairDiffs are
 transitive (PairDiffs.transitive) if the candidates that beat each other cannot form a
@@ -159,7 +159,8 @@ class Ballot(Block):
         """Mean points of each candidate over the voters of every point, (..., C): for a
         ranked ballot the sum over rankings of their share times weight(position among
         the remaining, number remaining). alive (..., C) marks the remaining candidates
-        of every point, None all of them; the others get 0."""
+        of every point, None all of them; the others get 0 (-1 on an approval ballot,
+        which counts down from 1: _approving)."""
         raise NotImplementedError
 
     def eliminate(self, voters: Voters, how: str) -> Result | None:
@@ -218,10 +219,13 @@ class BordaCount(Ballot):
 
 def _approving(voters: Voters, cut: Cut, alive: np.ndarray | None) -> np.ndarray:
     """Tally of an approval ballot: the share of the voters who approve each candidate
-    at `cut`. A voter marks the ballot once, among all candidates, so the remaining
-    candidates of an elimination keep their shares."""
-    approved = voters.approved[cut]
-    return approved if alive is None else np.where(alive, approved, 0)
+    at `cut`, minus 1. That is minus the share who do not approve it (Voters.unapproved),
+    which keeps the lead between two candidates that nearly all voters approve; the
+    order and the leads are those of the shares themselves. A voter marks the ballot
+    once, among all candidates, so the remaining candidates of an elimination keep
+    their totals; the others get -1, approved by no one."""
+    totals = -voters.unapproved[cut]
+    return totals if alive is None else np.where(alive, totals, -1.0)
 
 
 @dataclass(frozen=True)

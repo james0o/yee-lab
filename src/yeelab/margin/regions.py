@@ -12,7 +12,8 @@ squares on a grid (contourpy), with each crossing placed by linear interpolation
 psi_c along a grid edge. Two neighbouring regions get the same crossing, a / (a + b)
 along the edge from the side with margin a, so they meet without gaps. The grid only
 has to be fine enough to catch thin slivers; the shares come from the Chebyshev
-interpolant (ranking_cells.interpolate_to), which is exact to ~1e-5 at any point.
+interpolant (ranking_cells.interpolate_to), which is exact to ~1e-5 at any point. The
+approval shares are computed at the grid points themselves (shares.unapproved_shares).
 
 Polygons follow GeoJSON: an outer ring counter-clockwise, then its holes clockwise.
 A region can have several polygons (FPTP flares at the walls) and holes (an island
@@ -25,10 +26,10 @@ import numpy as np
 from yeelab.build import FIRST, METHODS, PAIRWISE, PROFILE, Approved, Share, Voters
 from yeelab.margin.shares import (
     Model,
-    approval_shares,
     first_choice_shares,
     pairwise_shares,
     ranking_shares,
+    unapproved_shares,
     voronoi_cells,
 )
 from yeelab.ranking_cells import interpolate_to
@@ -52,8 +53,8 @@ def grid(size: int, pixels: int):
 
 def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Voters:
     """The shares in `needs` (yeelab.build.voters) at the points of grid(size),
-    computed at the nodes and interpolated; [i, j] is the point (coordinates[i],
-    coordinates[j])."""
+    computed at the nodes and interpolated (the approval shares: at the points
+    themselves); [i, j] is the point (coordinates[i], coordinates[j])."""
     medians = grid(size, model.pixels)[1]
 
     def interpolate(values):
@@ -77,8 +78,8 @@ def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Vote
         shares["probs"] = interpolate(node_shares)
     cuts = [share.cut for share in needs if isinstance(share, Approved)]
     if cuts:
-        shares["approved"] = {cut: interpolate(approval_shares(candidates, model, cut))
-                              for cut in cuts}
+        shares["unapproved"] = {cut: unapproved_shares(candidates, model, cut, medians)
+                                for cut in cuts}
     return Voters(**shares)
 
 

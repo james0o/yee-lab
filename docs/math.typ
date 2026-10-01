@@ -88,7 +88,7 @@ have no Monte Carlo noise. A voter can only be tied between two candidates on a 
 
 If every voter sat exactly at the pixel centre, every method would elect the candidate
 nearest to $m$, and the diagram would be the *Voronoi diagram* of the candidates
-(`pixels.methods.voronoi`, and deviation $0$ in the web UI). It is the reference against which
+(`pixels.methods.voronoi`, _Voronoi_ in the web UI). It is the reference against which
 the other diagrams are compared.
 
 == Normal voters <sec-normal-model>
@@ -890,18 +890,19 @@ candidate are therefore not a union of polygons (@fig-approval, left), and their
 not a sum of the edge terms of @sec-green.
 
 *Shares from a grid.* The approval share $q_i$ is the share of the voters who approve
-$c_i$. Like a ranking, a ballot depends only on where the voter is, so these voters fill a
-fixed region $A_i$, the same for every pixel, and $q_i = P((X, Y) in A_i)$. The plane is
+$c_i$, and $u_i = 1 - q_i$ is the share who do not. Like a ranking, a ballot depends only
+on where the voter is, so the voters who approve $c_i$ fill a fixed region $A_i$, the same
+for every pixel, and $q_i = P((X, Y) in A_i)$. The plane is
 cut into rectangles by the lines $x_0 < x_1 < dots < x_K$, the same along both axes. $X$
 and $Y$ are independent, so the rectangle $[x_k, x_(k + 1)] times [x_l, x_(l + 1)]$ holds
 the share $mu_k nu_l$ of the voters, with $mu_k = F(x_(k + 1)) - F(x_k)$ from the exact
 CDF $F$ of $X$, and $nu_l$ likewise from that of $Y$. With $a_(i k l)$ the part of that
 rectangle in $A_i$,
 
-$ q_i approx sum_(k, l) mu_k thin a_(i k l) thin nu_l . $ <eq-grid-share>
+$ u_i approx sum_(k, l) mu_k thin (1 - a_(i k l)) thin nu_l . $ <eq-grid-share>
 
-For all nodes at once these are two matrix products per candidate (`approval_shares` in
-`margin/shares.py`). `coverage` in `approval.py` finds $a$: a rectangle whose four
+For all medians at once these are two matrix products per candidate (`unapproved_shares`
+in `margin/shares.py`). `coverage` in `approval.py` finds $a$: a rectangle whose four
 corners have the same ballot counts as all of that ballot, and in the others, about 2% of
 them, the ballots at $8 times 8$ points are averaged.
 
@@ -912,17 +913,41 @@ an equal cell. For normal voters the cells grow by a factor of $1.1$ each beyond
 square, out to the box of @sec-normal.
 
 Only $a$ is approximate: within a rectangle the border of $A_i$ is replaced by a share of
-the rectangle. The region is still the same for every pixel, so the shares stay smooth in
-the median, and the interpolation of @sec-interpolation and the traced borders of
-@sec-zero-sets work as for the other methods. Where exact shares are known the grid is
+the rectangle. Where exact shares are known the grid is
 within $2 dot 10^(-4)$ of them for $D >= 0.2$ and within $8 dot 10^(-4)$ for $D = 0.05$
 (`tests/test_approval.py`): `Approval()` with an even number of candidates is the top
 half of the ranking, a sum of the shares of @eq-share, and with two candidates both
 ballots approve the first choice.
 
-*Winner.* The candidate with the largest $q_i$ wins, and the margin (@sec-zero-sets) is
-its lead over the second. The shares do not sum to $1$: their sum is the mean number of
-approved candidates.
+*Why the share who do not approve.* Narrow voters far from the candidates all approve
+the same candidates. With four candidates and $D = 0.05$ the voters of a pixel in a far
+corner approve the same two, and both $q_i$ are $1$ up to $10^(-20)$ or less. Double
+precision cannot tell $1 - 10^(-20)$ from $1$, so on a large part of the square the two
+$q_i$ would be equal, or differ only by rounding. The winner there is the candidate with
+the smaller $u_i$, and @eq-grid-share has no negative terms, so a $u_i$ of $10^(-40)$ is
+as exact, in relative terms, as one of $0.4$. Two things keep it so.
+
+- $mu_k$ is exact in both tails. Below the median it is $F(x_(k + 1)) - F(x_k)$. Above
+  the median $F$ is close to $1$ and that difference would be $0$; there
+  $mu_k = S(x_k) - S(x_(k + 1))$ with $S = 1 - F$ computed directly, as $I_(1 - x) (b, a)$
+  for Beta voters and $Phi(-z)$ for normal ones.
+- The $u_i$ are not interpolated. The interpolant of @sec-interpolation is exact to about
+  $10^(-5)$, far more than these shares. They are computed at the points where the
+  borders are traced (@sec-zero-sets), with $mu$ and $nu$ of the voters of those points;
+  for Beta voters their parameters are solved at each of these medians (@sec-solve). One
+  more point is one more row of each matrix product.
+
+With two candidates and normal voters $u_i$ is known: $Phi$ of the distance to the
+bisector over $sigma$. The grid follows it within 6% down to $10^(-36)$
+(`tests/test_approval.py`). At $D = 0.05$ and $G = 320$ such a tail falls by a factor of
+about $1.5$ from one traced point to the next, so 6% moves a border by a small part of
+that step.
+
+*Winner.* The candidate with the largest $q_i$ wins, that is the smallest $u_i$, and the
+margin (@sec-zero-sets) is its lead over the second: the second smallest $u_i$ minus the
+smallest. The tally of an approval ballot in `yeelab.build` is $-u_i = q_i - 1$, the
+share counted down from $1$. The shares $q_i$ do not sum to $1$: their sum is the mean
+number of approved candidates.
 
 #figure(
   image("figures/approval.png", width: 100%),
@@ -1832,11 +1857,14 @@ more, so computing sets lazily saves little, and IRV uses the full arrangement.
 All three are sums of edge terms: the Green integrals of @sec-edges for Beta voters and
 the signed triangles of @sec-normal for normal voters.
 
-*Approval shares.* The approval methods use the share of the voters who approve each
-candidate. The regions of these voters have curved borders, so their shares have no edge
-terms: they are summed over a grid of rectangles with the exact share of the voters in
-each (@sec-approval). Nothing is cached between two steps of a drag: the whole grid
-takes 4 to 12 ms for five to eight candidates.
+*Approval shares.* The approval methods use the share of the voters who do not approve
+each candidate. The regions of these voters have curved borders, so their shares have no
+edge terms: they are summed over a grid of rectangles with the exact share of the voters
+in each, at the $G + 2$ points per axis where the borders are traced and not at the
+nodes (@sec-approval). The voters' shares of the rectangles depend only on the voter
+model and $G$. They are kept; computing them takes up to 0.2 s for Beta voters. The
+rest is done again at every step of a drag: for five to eight candidates the whole grid
+takes about 20 to 40 ms at $G = 160$ and 30 to 55 ms at $G = 320$.
 
 == Dragging: an edge cache <sec-edge-cache>
 
@@ -2193,8 +2221,10 @@ bottom tip of C's island). A gap is left only in a grid cell where three winners
 there each of the three regions ends at a straight segment between two edge crossings,
 and the small triangle between the three segments belongs to none of them.
 
-The shares come from the interpolant of @sec-interpolation, so the grid only has to be
-fine enough not to miss slivers; its borders do not have the steps of a pixel image. The
+The shares come from the interpolant of @sec-interpolation (those of the approval
+methods are computed at the grid points themselves, @sec-approval), so the grid only has
+to be fine enough not to miss slivers; its borders do not have the steps of a pixel
+image. The
 UI uses $G = 160$ while dragging and $G = 320$ once the candidate is dropped. The margins
 at grid points next to a change of winner are $O(1 slash G)$, which the tests check.
 

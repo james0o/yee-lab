@@ -33,8 +33,8 @@ DEVIATION = 0.2  # default of the deviation slider
 IDEALS = ["voronoi"]
 DIAGRAMS = [*MARGINS, *IDEALS]
 # Mean absolute deviation of the voters from their pixel, as offered by the UI; DEVIATION
-# is the default. At 0 every voter is at the pixel, so every method draws the Voronoi diagram.
-DEVIATIONS = [round(0.05 * k, 2) for k in range(9)]
+# is the default.
+DEVIATIONS = [round(0.05 * k, 2) for k in range(1, 9)]
 assert DEVIATION in DEVIATIONS
 # Win regions are traced on a grid of this many points per axis: coarser while a
 # candidate is dragged, finer once it is dropped (see margin/regions.py).
@@ -76,7 +76,7 @@ METHOD_INFO = {
                      "the candidates in order of distance and approves those above the largest "
                      "gap. The candidate approved by the most voters wins."},
     "voronoi": {"label": "Voronoi", "description": "The nearest candidate to the pixel, without "
-                "voters: what every method draws when all voters are at their pixel."},
+                "voters: what the ranked methods draw when all voters are at their pixel."},
 }
 assert set(METHOD_INFO) == set(DIAGRAMS)
 # Each voter distribution along one axis, per pixel: plain label, LaTeX label (typeset
@@ -156,9 +156,9 @@ threading.Thread(target=_warm_up, daemon=True).start()
 
 @lru_cache(maxsize=1)
 def _voters():
-    """Per deviation above 0: sigma of the normal voters and (a, b) of the Beta voters
-    along one axis for every pixel, shape (PIXELS, 2), per spread rule. Independent of
-    the candidates, so computed once."""
+    """Per deviation: sigma of the normal voters and (a, b) of the Beta voters along
+    one axis for every pixel, shape (PIXELS, 2), per spread rule. Independent of the
+    candidates, so computed once."""
     return [
         {
             "deviation": deviation,
@@ -168,7 +168,6 @@ def _voters():
             },
         }
         for deviation in DEVIATIONS
-        if deviation > 0
     ]
 
 
@@ -204,10 +203,8 @@ def diagram_regions(request: DiagramRequest):
     rings flat [x0, y0, x1, y1, ...], outer rings counter-clockwise and holes
     clockwise. winner is -1 (voting.CYCLE) for a Condorcet cycle."""
     start = time.perf_counter()
-    model = None  # deviation 0: every voter at their pixel, the Voronoi diagram
-    if request.deviation > 0:
-        spread = request.spread if request.distribution == "beta" else None
-        model = Model(request.distribution, request.deviation, spread)
+    spread = request.spread if request.distribution == "beta" else None
+    model = Model(request.distribution, request.deviation, spread)
     shapes = regions(request.method, request.candidates, model, request.grid)
     payload = {"regions": shapes, "ms": round(1000 * (time.perf_counter() - start), 1)}
     # json.dumps directly: FastAPI's encoder is slow on thousands of vertices

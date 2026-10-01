@@ -9,11 +9,13 @@ be that of the definition.
 The shares come from a grid of voters, so they are approximate. They are compared with
 exact shares where there are some (HALF with an even number of candidates is the top
 half of the ranking, and two candidates are approved by their first choices) and with
-sampled voters elsewhere.
+sampled voters elsewhere. They are computed as the share who do not approve, which must
+stay exact where it is tiny: the lead between two candidates nearly all voters approve.
 """
 
 import numpy as np
 import pytest
+from scipy.special import ndtr
 
 from yeelab import ranking_cells
 from yeelab.approval import CUTS, GAP, HALF, approved, coverage, distances
@@ -21,9 +23,10 @@ from yeelab.margin.shares import (
     APPROVAL_CELLS,
     Model,
     _voter_grid,
-    approval_shares,
     first_choice_shares,
+    pairwise_shares,
     ranking_shares,
+    unapproved_shares,
 )
 
 FIVE = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
@@ -52,6 +55,11 @@ def _at(distances_):
 
 def _ballot(distances_, cut):
     return approved(np.zeros(2), _at(distances_), cut).tolist()
+
+
+def approval_shares(candidates, model, cut):
+    """Share of the voters of each node who approve each candidate, (N, N, C)."""
+    return 1 - unapproved_shares(candidates, model, cut, model.medians)
 
 
 def _top_shares(candidates, model, count):
@@ -185,7 +193,7 @@ def test_coverage_rejects_what_it_cannot_do():
 def test_the_voter_grid_holds_all_voters(model):
     """Equal cells across the square, each node's voters summing to 1 over the cells,
     and the cells of both models reaching where their voters are."""
-    lines, mass = _voter_grid(model)
+    lines, mass = _voter_grid(model, model.medians)
     assert (np.diff(lines) > 0).all() and mass.shape == (model.nodes, len(lines) - 1)
     inside = lines[(lines > 0.01) & (lines < 0.99)]
     np.testing.assert_allclose(np.diff(inside), 1 / APPROVAL_CELLS, atol=1e-12)
@@ -195,6 +203,21 @@ def test_the_voter_grid_holds_all_voters(model):
         assert lines[0] == 0 and lines[-1] == 1 and lines[1] <= 1e-6
     else:
         assert lines[0] < -9 * model.sigma and lines[-1] > 1 + 9 * model.sigma
+
+
+@pytest.mark.parametrize("model", MODELS, ids=_ids)
+def test_the_voter_grid_is_exact_in_both_tails(model):
+    """The voters of the median 1 - m are those of m mirrored, so the cells above a
+    median hold what the mirrored cells below the mirrored median do, down to the
+    smallest shares. (Differences of a CDF near 1 would be 0 there.)"""
+    medians = np.array([0.03, 0.4, 0.6, 0.97])
+    lines, mass = _voter_grid(model, medians)
+    np.testing.assert_allclose(lines, 1 - lines[::-1], rtol=0, atol=1e-15)
+    assert (mass > 0).all()
+    np.testing.assert_allclose(mass[::-1, ::-1], mass, rtol=1e-6, atol=0)
+    if model.deviation == 0.05:
+        assert mass.min() < 1e-30
+    assert not _voter_grid(model, medians)[1].flags.writeable  # kept, so read-only
 
 # ---------------------------------------------------------------- Shares
 
@@ -232,6 +255,24 @@ def test_two_candidates_are_approved_by_their_first_choices(model):
     for cut in CUTS:
         np.testing.assert_allclose(approval_shares(CANDIDATES[2], model, cut),
                                    first_choice_shares(CANDIDATES[2], model), rtol=0, atol=TOLERANCE)
+
+
+@pytest.mark.parametrize("sigma_model", [Model("normal", 0.05), Model("normal", 0.2)], ids=_ids)
+def test_the_share_not_approving_is_exact_where_it_is_tiny(sigma_model):
+    """Two candidates: a voter does not approve the farther one, and for normal voters
+    the share closer to the other is Phi of the distance to their bisector. The grid
+    share must follow it in relative terms, far below the rounding of 1 - share (6%
+    seen at 1e-36: the border within a rectangle is only a share of the rectangle)."""
+    medians = np.linspace(0.01, 0.99, 50)
+    unapproved = unapproved_shares(CANDIDATES[2], sigma_model, HALF, medians)
+    diff = CANDIDATES[2][1] - CANDIDATES[2][0]
+    threshold = (CANDIDATES[2][1] @ CANDIDATES[2][1] - CANDIDATES[2][0] @ CANDIDATES[2][0]) / 2
+    mean = diff[0] * medians[:, None] + diff[1] * medians[None, :]
+    z = (threshold - mean) / (sigma_model.sigma * np.linalg.norm(diff))  # to the bisector
+    np.testing.assert_allclose(unapproved[..., 1], ndtr(z), rtol=0.1, atol=0)  # closer to 0
+    np.testing.assert_allclose(unapproved[..., 0], ndtr(-z), rtol=0.1, atol=0)
+    if sigma_model.deviation == 0.05:
+        assert unapproved.min() < 1e-30
 
 
 @pytest.mark.parametrize("model", MODELS, ids=_ids)
