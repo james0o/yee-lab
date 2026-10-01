@@ -65,7 +65,7 @@ def schulze(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
     return (p >= np.swapaxes(p, -1, -2)).all(axis=-1).argmax(axis=-1)
 
 
-def condorcet_cycle(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
+def condorcet(rankings: np.ndarray, probs: np.ndarray) -> np.ndarray:
     """Condorcet winner (beats every other candidate head to head), or CYCLE
     where there is none, i.e. the pairwise majorities form a cycle."""
     d = _pairwise_preferences(rankings, probs)
@@ -79,5 +79,5 @@ METHODS = {
     "irv": irv,
     "borda": borda,
     "schulze": schulze,
-    "condorcet_cycle": condorcet_cycle,
+    "condorcet": condorcet,
 }

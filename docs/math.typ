@@ -52,6 +52,7 @@ package `src/yeelab/`):
   [interpolation nodes per axis], [$N$], [`--nodes` (`NODES`)], [49],
   [Gauss–Legendre points per edge], [$Q$], [`QUAD_NODES`], [24],
   [exponent of `tapered`], [$tau$], [`TAPER`], [0.2],
+  [voter grid of the approval shares], [$K$], [`APPROVAL_CELLS`, `APPROVAL_SUB` (`margin/shares.py`)], [256, 8],
   [contour grid per axis (UI)], [$G$], [`DRAG_GRID` / `FINAL_GRID` (`web/app.py`)], [160 / 320],
   table.hline(),
 ))
@@ -87,7 +88,7 @@ have no Monte Carlo noise. A voter can only be tied between two candidates on a 
 
 If every voter sat exactly at the pixel centre, every method would elect the candidate
 nearest to $m$, and the diagram would be the *Voronoi diagram* of the candidates
-(`pixels.methods.voronoi`, and deviation $0$ in the web UI). It is the reference against which
+(`pixels.methods.voronoi`, _Voronoi_ in the web UI). It is the reference against which
 the other diagrams are compared.
 
 == Normal voters <sec-normal-model>
@@ -762,7 +763,7 @@ $ pi_(i j) = sum_(r: i "above" j "in" r) P(r), quad pi_(i j) + pi_(j i) = 1, $ <
 the share of voters preferring $c_i$ to $c_j$; $c_i$ beats $c_j$ when
 $pi_(i j) > 1/2$.
 
-*Condorcet winner* (`condorcet_cycle`). The candidate who beats every other candidate.
+*Condorcet winner* (`condorcet`). The candidate who beats every other candidate.
 If there is none the pixel is marked with `CYCLE` (black in the figures). As a
 function of the pixel, $pi_(i j) = 1/2$ holds only on a curve, so apart from pixel
 centres that happen to lie exactly on such a curve (@sec-ties) the majority relation
@@ -839,6 +840,127 @@ looks at a single defeat and not at paths of defeats.
 *Black.* The Condorcet winner if there is one, otherwise the Borda winner. Every pixel
 has a winner, never a cycle, and like Schulze, Baldwin and Nanson, Black differs from
 the Condorcet winner diagram only where there is a cycle.
+
+== Approval voting (`approval`, `approval_gap`) <sec-approval>
+
+These two are only in the web UI as well, built from blocks as
+`Highest(Tally(Approval()))` and `Highest(Tally(GapApproval()))`. An approval ballot is
+not a ranking: the voter approves some of the candidates, and the candidate approved by
+the most voters wins. Whom a voter approves depends on how far the candidates are and
+not only on their order, so the model needs one more assumption than the ranked methods
+(`approval.py`).
+
+*The ballot.* A voter at $p$ puts the candidates in order of distance,
+
+$ r_((1)) <= r_((2)) <= dots <= r_((C)), quad r_i = |p - c_i|, $ <eq-distances>
+
+and approves the closest ones, down to a cut. The cut depends on the gaps between
+neighbours in that order, $g_k = r_((k + 1)) - r_((k))$, in one of two ways.
+
+- `Approval()` approves the closest half of the candidates, $h = floor(C slash 2)$ of
+  them. With an odd number the middle candidate, the $(h + 1)$-th, goes with the
+  neighbour it is closer to: it is approved too when $g_h < g_(h + 1)$. The cut is the
+  larger of the two gaps next to the middle candidate, and the voter approves $h$ or
+  $h + 1$ candidates.
+- `GapApproval()` approves the candidates above the largest gap of all, the first $k$
+  for the $k$ with the largest $g_k$: between one candidate and all but one.
+
+Either way the closest candidate is approved and the farthest is not, and the ballot does
+not change when all distances are scaled, so no unit of distance has to be chosen. For
+two and for three candidates the two are the same ballot. For an even number `Approval()`
+does not use the distances at all: it approves the top half of the ranking.
+
+*Distances, not their squares.* Take a voter who stands on a candidate, with the others
+at the squared distances $0.35$, $0.45$, $0.55$ and $1$. The distances are $0$, $0.59$,
+$0.67$, $0.74$ and $1$, with the gaps $0.59$, $0.08$, $0.07$ and $0.26$: the candidate
+at the voter is far ahead of the rest, and `GapApproval()` approves it alone. The squares
+have the gaps $0.35$, $0.10$, $0.10$ and $0.45$, which would put the cut before the last
+candidate and approve four. `Approval()` approves two of the five here: the middle
+candidate is closer to the fourth ($0.07$) than to the second ($0.08$).
+
+*Curved borders.* Two ballots meet where two gaps are equal,
+
+$ r_a - r_b = r_c - r_d $ <eq-gap-border>
+
+for the neighbours $a, b$ of one gap and $c, d$ of the other. For `Approval()` with an
+odd number of candidates that is $2 r_m = r_a + r_b$, with the middle candidate $m$ and
+its two neighbours. Unlike the bisector of @eq-bisector this is a curve: there the
+squares $|p|^2$ cancel, here the distances are not squared. The voters who approve a
+candidate are therefore not a union of polygons (@fig-approval, left), and their share is
+not a sum of the edge terms of @sec-green.
+
+*Shares from a grid.* The approval share $q_i$ is the share of the voters who approve
+$c_i$, and $u_i = 1 - q_i$ is the share who do not. Like a ranking, a ballot depends only
+on where the voter is, so the voters who approve $c_i$ fill a fixed region $A_i$, the same
+for every pixel, and $q_i = P((X, Y) in A_i)$. The plane is
+cut into rectangles by the lines $x_0 < x_1 < dots < x_K$, the same along both axes. $X$
+and $Y$ are independent, so the rectangle $[x_k, x_(k + 1)] times [x_l, x_(l + 1)]$ holds
+the share $mu_k nu_l$ of the voters, with $mu_k = F(x_(k + 1)) - F(x_k)$ from the exact
+CDF $F$ of $X$, and $nu_l$ likewise from that of $Y$. With $a_(i k l)$ the part of that
+rectangle in $A_i$,
+
+$ u_i approx sum_(k, l) mu_k thin (1 - a_(i k l)) thin nu_l . $ <eq-grid-share>
+
+For all medians at once these are two matrix products per candidate (`unapproved_shares`
+in `margin/shares.py`). `coverage` in `approval.py` finds $a$: a rectangle whose four
+corners have the same ballot counts as all of that ballot, and in the others, about 2% of
+them, the ballots at $8 times 8$ points are averaged.
+
+The grid has $256$ equal cells across the square. For Beta voters the cell at each wall
+is halved again and again down to $10^(-6)$: the density of a Beta with $a < 1$ is
+infinite at the wall, and the voters of a pixel next to a wall sit within a small part of
+an equal cell. For normal voters the cells grow by a factor of $1.1$ each beyond the
+square, out to the box of @sec-normal.
+
+Only $a$ is approximate: within a rectangle the border of $A_i$ is replaced by a share of
+the rectangle. Where exact shares are known the grid is
+within $2 dot 10^(-4)$ of them for $D >= 0.2$ and within $8 dot 10^(-4)$ for $D = 0.05$
+(`tests/test_approval.py`): `Approval()` with an even number of candidates is the top
+half of the ranking, a sum of the shares of @eq-share, and with two candidates both
+ballots approve the first choice.
+
+*Why the share who do not approve.* Narrow voters far from the candidates all approve
+the same candidates. With four candidates and $D = 0.05$ the voters of a pixel in a far
+corner approve the same two, and both $q_i$ are $1$ up to $10^(-20)$ or less. Double
+precision cannot tell $1 - 10^(-20)$ from $1$, so on a large part of the square the two
+$q_i$ would be equal, or differ only by rounding. The winner there is the candidate with
+the smaller $u_i$, and @eq-grid-share has no negative terms, so a $u_i$ of $10^(-40)$ is
+as exact, in relative terms, as one of $0.4$. Two things keep it so.
+
+- $mu_k$ is exact in both tails. Below the median it is $F(x_(k + 1)) - F(x_k)$. Above
+  the median $F$ is close to $1$ and that difference would be $0$; there
+  $mu_k = S(x_k) - S(x_(k + 1))$ with $S = 1 - F$ computed directly, as $I_(1 - x) (b, a)$
+  for Beta voters and $Phi(-z)$ for normal ones.
+- The $u_i$ are not interpolated. The interpolant of @sec-interpolation is exact to about
+  $10^(-5)$, far more than these shares. They are computed at the points where the
+  borders are traced (@sec-zero-sets), with $mu$ and $nu$ of the voters of those points;
+  for Beta voters their parameters are solved at each of these medians (@sec-solve). One
+  more point is one more row of each matrix product.
+
+With two candidates and normal voters $u_i$ is known: $Phi$ of the distance to the
+bisector over $sigma$. The grid follows it within 6% down to $10^(-36)$
+(`tests/test_approval.py`). At $D = 0.05$ and $G = 320$ such a tail falls by a factor of
+about $1.5$ from one traced point to the next, so 6% moves a border by a small part of
+that step.
+
+*Winner.* The candidate with the largest $q_i$ wins, that is the smallest $u_i$, and the
+margin (@sec-zero-sets) is its lead over the second: the second smallest $u_i$ minus the
+smallest. The tally of an approval ballot in `yeelab.build` is $-u_i = q_i - 1$, the
+share counted down from $1$. The shares $q_i$ do not sum to $1$: their sum is the mean
+number of approved candidates.
+
+#figure(
+  image("figures/approval.png", width: 100%),
+  caption: [Left: the voters who approve D, for both ballots; the borders are curves.
+    Right: the two diagrams (candidates A–E, Beta voters, `rms`, $D = 0.2$).],
+) <fig-approval>
+
+*The diagrams.* Half of five candidates is two or three, and D, in the middle of A–E, is
+among the closest two or three of most voters. In @fig-approval `Approval()` gives D 40%
+of the square, more than FPTP (14%), Schulze (25%) or Borda (31%). `GapApproval()` gives
+D 22% and C nothing. C and B are close together, so a voter near them often has both
+above the largest gap: at the pixel of C itself 64% of the voters approve C and 69%
+approve B.
 
 == Ties <sec-ties>
 
@@ -1735,6 +1857,15 @@ more, so computing sets lazily saves little, and IRV uses the full arrangement.
 All three are sums of edge terms: the Green integrals of @sec-edges for Beta voters and
 the signed triangles of @sec-normal for normal voters.
 
+*Approval shares.* The approval methods use the share of the voters who do not approve
+each candidate. The regions of these voters have curved borders, so their shares have no
+edge terms: they are summed over a grid of rectangles with the exact share of the voters
+in each, at the $G + 2$ points per axis where the borders are traced and not at the
+nodes (@sec-approval). The voters' shares of the rectangles depend only on the voter
+model and $G$. They are kept; computing them takes up to 0.2 s for Beta voters. The
+rest is done again at every step of a drag: for five to eight candidates the whole grid
+takes about 20 to 40 ms at $G = 160$ and 30 to 55 ms at $G = 320$.
+
 == Dragging: an edge cache <sec-edge-cache>
 
 An edge term depends only on the edge and the voter model. The terms are therefore
@@ -1857,6 +1988,7 @@ $psi_c$ below changes only with the winner:
   [IRV], [smallest gap between the two lowest tallies over all rounds],
   [Baldwin], [smallest gap between the two lowest Borda scores over all rounds],
   [Nanson], [smallest distance of a Borda score from the mean over all rounds],
+  [Approval], [lead of the top approval share over the second],
   table.hline(),
 ))
 
@@ -1864,7 +1996,8 @@ All methods are built from blocks (`yeelab.build`), and the margin is never put 
 by hand: every block that decides computes the gap of its decision, and the margin is the
 smallest of them. `Highest` has the lead of the top score, `Eliminate` the gap of each
 round, `Unbeaten` the gaps below and `Fallback` those of the method that decides.
-Baldwin and Nanson are in @sec-baldwin-nanson, Minimax and Black in @sec-minimax-black.
+Baldwin and Nanson are in @sec-baldwin-nanson, Minimax and Black in @sec-minimax-black,
+the approval methods in @sec-approval.
 
 *IRV.* On each side of a curve where some round's two lowest tallies tie, the gap of
 that round tends to $0$. So $mu$ is continuous, and it vanishes on every curve where an
@@ -2088,8 +2221,10 @@ bottom tip of C's island). A gap is left only in a grid cell where three winners
 there each of the three regions ends at a straight segment between two edge crossings,
 and the small triangle between the three segments belongs to none of them.
 
-The shares come from the interpolant of @sec-interpolation, so the grid only has to be
-fine enough not to miss slivers; its borders do not have the steps of a pixel image. The
+The shares come from the interpolant of @sec-interpolation (those of the approval
+methods are computed at the grid points themselves, @sec-approval), so the grid only has
+to be fine enough not to miss slivers; its borders do not have the steps of a pixel
+image. The
 UI uses $G = 160$ while dragging and $G = 320$ once the candidate is dropped. The margins
 at grid points next to a change of winner are $O(1 slash G)$, which the tests check.
 

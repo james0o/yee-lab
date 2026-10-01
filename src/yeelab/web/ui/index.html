@@ -120,8 +120,8 @@
     let distribution = null;  // name of the selected voter distribution
     let spread = null;    // name of the selected Beta spread rule
     let spreadInfo = {};  // spread name -> {label, tex, description} from the backend
-    let deviation = 0;    // mean absolute deviation of the voters from their pixel; 0 = all at it
-    let voters = {};      // deviation above 0 -> {sigma, beta_params} from the backend, where
+    let deviation = 0;    // mean absolute deviation of the voters from their pixel
+    let voters = {};      // deviation -> {sigma, beta_params} from the backend, where
                           // beta_params is spread name -> [a, b] along one axis, per pixel
     let hovered = [0.5, 0.5];  // point whose pixel's voters are shown in the strip and the shade
     let showDensity = false;   // their 2D density over the square, while hovering it (if shown at all)
@@ -196,7 +196,6 @@
     // Voters of pixel k along one axis: median m (the pixel centre, as in the backend), pdf and a label.
     function voterDensity(k) {
       const m = (k + 0.5) / pixels;
-      if (deviation === 0) return { m, text: `δ(${m.toFixed(3)})`, pdf: () => null };  // all at m: no curve
       const { sigma, beta_params } = voters[deviation];
       if (distribution === "beta") {
         const [a, b] = beta_params[spread][k];
@@ -411,8 +410,6 @@
       const name = labels[method];
       if (method === "voronoi") {  // nearest candidate, no voters involved
         message.textContent = `${name}${tail}`;
-      } else if (deviation === 0) {
-        message.textContent = `${name} · deviation 0: every voter at their pixel, so Voronoi${tail}`;
       } else if (distribution === "beta") {
         const formula = document.createElement("span");
         typeset(formula, spreadInfo[spread]);
@@ -500,9 +497,9 @@
       }
     }
 
-    // The spread rules only apply to Beta voters that spread at all.
+    // The spread rules only apply to Beta voters.
     function updateSpreads() {
-      for (const button of spreads.querySelectorAll("button")) button.disabled = distribution !== "beta" || deviation === 0;
+      for (const button of spreads.querySelectorAll("button")) button.disabled = distribution !== "beta";
     }
 
     // Start: default candidates, distributions and methods (names, tooltips) come from the backend.
@@ -520,10 +517,9 @@
     // letting go asks for the fine one.
     function pickDeviation() {
       deviation = config.deviations[deviationSlider.valueAsNumber];
-      deviationValue.textContent = deviation === 0 ? "0 (Voronoi)" : String(deviation);
-      deviationSlider.title = deviation === 0 ? "Every voter at their pixel: every method draws the Voronoi diagram" :
+      deviationValue.textContent = String(deviation);
+      deviationSlider.title =
         `Voters at a mean distance of ${deviation} from their pixel along each axis (at the centre pixel for Beta)`;
-      updateSpreads();
     }
     Object.assign(deviationSlider, { min: 0, max: config.deviations.length - 1, step: 1 });
     deviationSlider.value = config.deviations.indexOf(config.deviation);
@@ -538,6 +534,7 @@
     spread = config.spread;
     spreads.querySelectorAll("button")[config.spreads.findIndex(info => info.name === spread)].classList.add("active");
     pickDeviation();
+    updateSpreads();
     draw();
     drawVoters();
   </script>

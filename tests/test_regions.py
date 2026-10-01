@@ -11,10 +11,11 @@ import pytest
 from fastapi.testclient import TestClient
 from matplotlib.path import Path as MplPath
 
-from yeelab.build import Voters
+from yeelab.build import Approved, Voters
 from yeelab.margin.regions import MARGINS, grid, regions, winners
-from yeelab.margin.shares import Model, first_choice_shares
+from yeelab.margin.shares import Model, first_choice_shares, unapproved_shares
 from yeelab.pixels import beta as pixel_beta, methods as pixel_methods, normal as pixel_normal
+from yeelab.ranking_cells import pixel_medians
 from yeelab.voting import irv_rounds
 from yeelab.web.app import DIAGRAMS, app
 
@@ -31,12 +32,19 @@ def _voters(rankings, probs):
     return Voters(first, d, rankings, probs)
 
 
-def _pixel_winners(method, rankings, probs):
+def _pixel_winners(method, model, rankings, probs):
     """Winner of every pixel: pixels.methods, or, for the methods only yeelab.build has
-    (checked in test_build.py), the method on the complete profile."""
+    (checked in test_build.py), the method on the complete profile. The approval shares
+    are not in a profile of rankings (checked in test_approval.py): they are taken at the
+    pixel centres."""
     if method in pixel_methods.METHODS:
         return pixel_methods.METHODS[method](rankings, probs)
-    return MARGINS[method].evaluate(_voters(rankings, probs))[0]
+    cuts = [share.cut for share in MARGINS[method].needs if isinstance(share, Approved)]
+    if not cuts:
+        return MARGINS[method].evaluate(_voters(rankings, probs))[0]
+    centres = pixel_medians(probs.shape[0])
+    unapproved = {cut: unapproved_shares(CANDIDATES, model, cut, centres) for cut in cuts}
+    return MARGINS[method].evaluate(Voters(unapproved=unapproved))[0]
 
 
 def _irv_reference(rankings, probs):
@@ -129,12 +137,28 @@ def test_regions_reproduce_pixel_diagram(profile, method):
     shapes = regions(method, CANDIDATES, model, 300)
     got = _rasterize(shapes, PIXELS)
     # Pixels may differ only right at a border (and where it runs through pixel centres).
-    assert (got == _pixel_winners(method, rankings, probs)).mean() > 0.995
+    assert (got == _pixel_winners(method, model, rankings, probs)).mean() > 0.995
     assert (got == -2).mean() < 1e-3
     rings = [(polygon[0], polygon[1:]) for region in shapes for polygon in region["polygons"]]
     assert all(_area(outer) > 0 for outer, _ in rings)
     assert all(_area(hole) < 0 for _, holes in rings for hole in holes)
     assert sum(_area(r) for outer, holes in rings for r in [outer, *holes]) == pytest.approx(1, abs=1e-3)
+
+
+@pytest.mark.parametrize("model", [Model("beta", 0.05, "rms"), Model("normal", 0.05)],
+                         ids=lambda m: m.distribution)
+@pytest.mark.parametrize("method", ["approval", "approval_gap"])
+def test_approval_is_decided_where_nearly_all_voters_approve_the_same(model, method):
+    """Narrow voters far from the candidates all approve the same ones, whose shares are
+    1 to rounding. Their lead must survive: no ties (a margin of 0 is in no region) and
+    no specks of rounding noise, but a few regions that tile the square."""
+    candidates = [[0.5, 0.5], [0.32, 0.55], [0.18, 0.32], [0.16, 0.12]]
+    _, winner, margin = winners(method, candidates, model, 160)
+    assert (margin > 0).all()
+    polygons = [polygon for region in regions(method, candidates, model, 160)
+                for polygon in region["polygons"]]
+    assert len(polygons) <= 6
+    assert sum(_area(ring) for polygon in polygons for ring in polygon) == pytest.approx(1, abs=1e-3)
 
 
 def test_voronoi_regions_are_exact():
@@ -168,8 +192,8 @@ def test_config_lists_every_method():
     methods = config["methods"]
     assert [m["name"] for m in methods] == list(MARGINS)
     assert [m["label"] for m in methods + config["ideals"]] == [
-        "FPTP", "IRV", "Borda", "Baldwin", "Nanson", "Schulze", "Condorcet cycle", "Minimax",
-        "Black", "Voronoi"]
+        "FPTP", "IRV", "Borda", "Baldwin", "Nanson", "Schulze", "Condorcet", "Minimax",
+        "Black", "King of the hill", "King runoff", "Approval", "Approval (gap)", "Voronoi"]
     nanson = next(m for m in methods if m["name"] == "nanson")
     assert nanson["description"].endswith('\nEliminate(Tally(BordaCount()), how="mean")')
 
@@ -185,3 +209,14 @@ def test_api_returns_regions(distribution, method):
     assert response.status_code == 200
     shapes = response.json()["regions"]
     assert shapes and all(region["polygons"] for region in shapes)
+
+
+def test_api_offers_deviations_from_005():
+    """Every offered deviation has voters; 0 (all voters at their pixel) is not offered."""
+    client = TestClient(app)
+    config = client.get("/api/config").json()
+    assert config["deviations"] == [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4]
+    assert [voters["deviation"] for voters in config["voters"]] == config["deviations"]
+    request = {"candidates": CANDIDATES.tolist(), "method": "approval", "grid": 64}
+    assert client.post("/api/regions", json={**request, "deviation": 0.05}).status_code == 200
+    assert client.post("/api/regions", json={**request, "deviation": 0}).status_code == 422

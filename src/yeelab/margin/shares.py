@@ -5,10 +5,18 @@ enough for every method, but they need all cells of the bisector arrangement:
 O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far less:
 
     borda, baldwin, nanson, schulze,  pairwise shares d[c, e] = P(c ranked above e),
-    condorcet_cycle, minimax, black   one half-plane per pair (C (C - 1) / 2 edges)
+    condorcet, minimax, black         one half-plane per pair (C (C - 1) / 2 edges)
     fptp                              first-choice shares, the C Voronoi cells
+    koth                              both of these: the king by first choices, its
+                                      challengers by pairwise shares
     irv                               the whole profile (first choices among every
                                       remaining set)
+    king_runoff                       all three: koth against irv, the duel by pairwise
+                                      shares
+    approval, approval_gap            the shares who do not approve a candidate at
+                                      their cut: these voters have curved borders, so
+                                      the shares come from a grid of voters, not from
+                                      polygons
 
 (Borda needs only pairwise shares: a ballot gives c one point per candidate ranked
 below c, so c's expected score is sum_e d[c, e].)
@@ -21,19 +29,22 @@ candidate moves only its C - 1 bisectors, and only edges on those are new.
 For normal voters a half-plane holds Phi(signed distance / sigma) of the voters, so
 their pairwise shares need no edges at all.
 
-Everything here is at the interpolation nodes, shape (N, N, ...); regions.py
-interpolates it to the points where the methods are evaluated.
+All of these are at the interpolation nodes, shape (N, N, ...); regions.py
+interpolates them to the points where the methods are evaluated. The approval shares
+are computed at those points themselves (unapproved_shares).
 """
 
+import os
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from functools import cached_property, lru_cache
 
 import numpy as np
-from scipy.special import logit, ndtr
+from scipy.special import betainc, betaincc, logit, ndtr
 
-from yeelab import normal, ranking_cells
+from yeelab import normal, ranking_cells, threads
+from yeelab.approval import Cut, coverage
 from yeelab.distributions import Distribution
 from yeelab.margin.beta_tables import TabulatedBeta
 from yeelab.ranking_cells import NODES, QUAD_NODES, Spread, _clip
@@ -41,6 +52,13 @@ from yeelab.ranking_cells import NODES, QUAD_NODES, Spread, _clip
 PIXELS = 300  # the outermost medians are 1/2 and 1 - 1/2 pixel from the walls
 CACHE_BYTES = 64 * 2**20  # edge integrals kept between requests
 SQUARE = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+# The voter grid of the approval shares (_grid_lines): cells per axis across the unit
+# square, ballots per axis in a cell that a border crosses, the smallest cell at a wall
+# (Beta voters) and the growth of the cells beyond the square (normal voters).
+APPROVAL_CELLS = 256
+APPROVAL_SUB = 8
+WALL_CELL = 1e-6
+OUTSIDE_GROWTH = 1.1
 
 
 def node_count(distribution: Distribution, deviation: float) -> int:
@@ -219,6 +237,16 @@ def pairwise_shares(candidates, model: Model) -> np.ndarray:
     return d
 
 
+def _voter_box(model: Model) -> np.ndarray:
+    """Where the voters are: the unit square, or for normal voters, who can leave it,
+    the box of normal.normal_cells."""
+    if model.distribution == "beta":
+        return SQUARE
+    margin = normal.BOX * model.sigma
+    return np.array([[-margin, -margin], [1 + margin, -margin],
+                     [1 + margin, 1 + margin], [-margin, 1 + margin]])
+
+
 def voronoi_cells(candidates, box=SQUARE):
     """Voronoi cell of each candidate within `box` (convex CCW, or None)."""
     candidates = np.asarray(candidates, dtype=np.float64)
@@ -235,13 +263,7 @@ def voronoi_cells(candidates, box=SQUARE):
 def first_choice_shares(candidates, model: Model) -> np.ndarray:
     """first[i, j, c] = share of the voters of node (i, j) whose first choice is c,
     shape (N, N, C)."""
-    if model.distribution == "beta":
-        return _polygon_shares(model, voronoi_cells(candidates))
-    # Voters can leave the square: cells in the box of normal.normal_cells.
-    margin = normal.BOX * model.sigma
-    box = np.array([[-margin, -margin], [1 + margin, -margin],
-                    [1 + margin, 1 + margin], [-margin, 1 + margin]])
-    return _polygon_shares(model, voronoi_cells(candidates, box))
+    return _polygon_shares(model, voronoi_cells(candidates, _voter_box(model)))
 
 
 def ranking_shares(candidates, model: Model):
@@ -254,3 +276,95 @@ def ranking_shares(candidates, model: Model):
     else:
         polygons, rankings = normal.normal_cells(candidates, model.sigma)
     return rankings, _polygon_shares(model, polygons)
+
+# ---------------------------------------------------------------- Approval
+
+
+def _grid_lines(model: Model) -> np.ndarray:
+    """Lines of the voter grid along one axis, increasing: APPROVAL_CELLS equal cells
+    across the unit square, and smaller or larger ones where the voters call for them.
+
+    Beta voters: the cell at each wall is halved again and again down to WALL_CELL. The
+    density of a Beta with a < 1 is infinite at the wall, and the voters of a pixel next
+    to a wall sit within a small fraction of an equal cell.
+    Normal voters: beyond the square the cells grow by OUTSIDE_GROWTH each, out to the
+    box of normal.normal_cells, where the density is smooth and no candidate is near."""
+    step = 1.0 / APPROVAL_CELLS
+    inside = np.linspace(0.0, 1.0, APPROVAL_CELLS + 1)
+    if model.distribution == "beta":
+        halves = step / 2.0 ** np.arange(1, 1 + int(np.ceil(np.log2(step / WALL_CELL))))
+        return np.concatenate([[0.0], halves[::-1], inside[1:-1], 1 - halves, [1.0]])
+    outside, reach = [], normal.BOX * model.sigma
+    while not outside or outside[-1] < reach:
+        step *= OUTSIDE_GROWTH
+        outside.append((outside[-1] if outside else 0.0) + step)
+    outside = np.array(outside)
+    return np.concatenate([-outside[::-1], inside, 1 + outside])
+
+
+def _signed_cdf(model: Model, medians, lines, below) -> np.ndarray:
+    """The CDF F of the voters with each median at the lines, shape (M, K + 1): F at
+    the lines marked in `below`, those up to the median, and F - 1, minus the share
+    beyond the line, at the others. Both are computed directly, so the differences of
+    neighbours keep their precision in both tails (1 - 1e-20 is 1)."""
+    if model.distribution == "normal":
+        z = (lines - medians[:, None]) / model.sigma
+        return np.where(below, ndtr(z), -ndtr(-z))
+    params = ranking_cells.beta_params_at(medians, model.deviation, model.spread)
+
+    def block(rows):
+        a, b = params[rows, :1], params[rows, 1:]
+        beyond = betaincc(a, b, lines, out=np.zeros(below[rows].shape), where=~below[rows])
+        return betainc(a, b, lines, out=-beyond, where=below[rows])
+
+    # scipy's betainc releases the GIL: blocks of medians in parallel
+    blocks = np.array_split(np.arange(len(medians)), min(len(medians), os.cpu_count() or 1))
+    return np.concatenate(list(threads.pool.map(block, blocks)))
+
+
+@lru_cache(maxsize=32)  # < 1 MB each; Beta voters take ~0.1 s at the 322 points of the UI
+def _cached_voter_grid(model: Model, medians: bytes):
+    medians = np.frombuffer(medians)
+    lines = _grid_lines(model)
+    below = lines <= medians[:, None]
+    mass = np.diff(_signed_cdf(model, medians, lines, below), axis=1)
+    mass[below[:, :-1] & ~below[:, 1:]] += 1  # the cell with the median: from F to F - 1
+    lines.setflags(write=False)
+    mass.setflags(write=False)
+    return lines, mass
+
+
+def _voter_grid(model: Model, medians):
+    """(lines (K + 1,), mass (M, K)) of the voter grid: its lines along one axis
+    (_grid_lines) and the share of the voters with each of the `medians` (M,) between
+    two neighbouring lines, from the exact CDF and exact in the tails too. Both axes
+    have the same lines, so a rectangle of the grid holds mass[i, k] * mass[j, l] of the
+    voters with median (medians[i], medians[j]). Kept by the medians; read-only."""
+    return _cached_voter_grid(model, np.ascontiguousarray(medians, dtype=np.float64).tobytes())
+
+
+def unapproved_shares(candidates, model: Model, cut: Cut, medians) -> np.ndarray:
+    """unapproved[i, j, c] = share of the voters with median (medians[i], medians[j])
+    who do not approve c at `cut` (approval.HALF or GAP), shape (M, M, C). The share
+    who approve c is 1 minus this; over the candidates neither sums to 1, as a voter
+    approves between one candidate and all but one.
+
+    Why the share who do not approve: far from the candidates, narrow voters all
+    approve the same candidates, and the shares of those are 1 to rounding. Which of
+    them leads is decided by the few voters who do not approve each, 1e-20 of them or
+    fewer. Those shares are sums of small terms here, exact in relative terms.
+
+    The voters who approve a candidate have curved borders (yeelab.approval), so their
+    share is not a sum of edge terms like the others. The plane is cut into the
+    rectangles of the voter grid instead: approval.coverage gives the part of each
+    rectangle that approves c, and the rest of each rectangle is added up with the
+    exact share of the voters it holds. Only the border within a rectangle is
+    approximate: the share who approve is within about 1e-3 of the exact one
+    (tests/test_approval.py). Normal voters beyond the grid, less than 1e-19 of them,
+    count as approving.
+
+    The shares are not interpolated from the nodes: a tail of 1e-20 is far below the
+    error of the interpolant, and one more median costs only a row of each product."""
+    lines, mass = _voter_grid(model, medians)
+    rest = np.subtract(1.0, coverage(lines, lines, candidates, cut, APPROVAL_SUB), dtype=np.float64)
+    return np.moveaxis(mass @ rest @ mass.T, 0, -1)

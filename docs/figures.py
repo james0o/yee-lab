@@ -15,7 +15,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import ListedColormap, LogNorm
+from matplotlib.colors import LinearSegmentedColormap, ListedColormap, LogNorm
 from matplotlib.patches import PathPatch
 from matplotlib.path import Path as MplPath
 from scipy import ndimage
@@ -24,11 +24,12 @@ from scipy.special import betainc, ndtr, ndtri
 from scipy.stats import beta as beta_dist
 
 from yeelab import normal, ranking_cells
+from yeelab.approval import GAP, HALF, coverage
 from yeelab.build import Voters
 from yeelab.margin.regions import MARGINS, regions, winners
 from yeelab.margin.shares import Model
 from yeelab.pixels import beta as pixel_beta, normal as pixel_normal
-from yeelab.pixels.methods import _pairwise_preferences, borda, condorcet_cycle, fptp, irv, schulze, voronoi
+from yeelab.pixels.methods import _pairwise_preferences, borda, condorcet, fptp, irv, schulze, voronoi
 from yeelab.voting import CYCLE
 from yeelab.web.app import DEVIATION as UI_DEVIATION, DRAG_GRID, FINAL_GRID
 
@@ -143,7 +144,7 @@ def cycle_counts():
         models = [("normal", pixel_normal, {})] + [(f"beta {s}", pixel_beta, {"spread": s}) for s in RULES]
         for label, model, options in models:
             rankings, probs = model.ranking_probabilities(CANDIDATES, PIXELS, deviation, **options)
-            sch, cyc = schulze(rankings, probs), condorcet_cycle(rankings, probs)
+            sch, cyc = schulze(rankings, probs), condorcet(rankings, probs)
             print(f"  deviation {deviation} {label:14s}: cycles {np.sum((cyc == CYCLE) & ~tie):5d} "
                   f"({np.sum((cyc == CYCLE) & ~tie) / np.sum(~tie):.2%}), Schulze != Voronoi "
                   f"{np.sum((sch != nearest) & ~tie):5d} ({np.sum((sch != nearest) & ~tie) / np.sum(~tie):.1%}), "
@@ -157,7 +158,7 @@ def spread_rules():
         rankings, probs = profile("beta", spread)
         for col, (label, winners) in enumerate([
                 ("FPTP", fptp(rankings, probs)), ("IRV", irv(rankings, probs)),
-                ("Condorcet winner", condorcet_cycle(rankings, probs))]):
+                ("Condorcet winner", condorcet(rankings, probs))]):
             show(axes[row, col], winners, f"{spread}: {label}")
     fig.tight_layout()
     fig.savefig(FIGURES / "spread_rules.png", dpi=130)
@@ -205,7 +206,7 @@ def beta_shapes():
 
 def compare(profiles):
     fig, axes = plt.subplots(2, 3, figsize=(10, 6.9))
-    methods = [("IRV", irv), ("Schulze", schulze), ("Condorcet winner", condorcet_cycle)]
+    methods = [("IRV", irv), ("Schulze", schulze), ("Condorcet winner", condorcet)]
     for row, name in enumerate(profiles):
         rankings, probs = profiles[name]
         for col, (label, method) in enumerate(methods):
@@ -510,7 +511,7 @@ def schulze_notch():
     """Beta Schulze region of c_1 that is not convex, and the cycle pockets behind it."""
     deviation, pixels = 0.3, PIXELS
     rankings, probs = pixel_beta.ranking_probabilities(NOTCH, pixels, deviation, spread=SPREAD)
-    sch, cyc = schulze(rankings, probs), condorcet_cycle(rankings, probs)
+    sch, cyc = schulze(rankings, probs), condorcet(rankings, probs)
     pairwise = _pairwise_preferences(rankings, probs)
     print(f"notch: concave pixels of c_1's Schulze region {concave_pixels(sch == 0)}, "
           f"cycle pixels {np.sum(cyc == CYCLE)}")
@@ -520,7 +521,7 @@ def schulze_notch():
     medians = np.unique(points.round(6))
     r, p = pixel_beta.compute_ranking_probabilities(
         NOTCH, ranking_cells.beta_params_at(medians, deviation, SPREAD))
-    s, c, d = schulze(r, p), condorcet_cycle(r, p), _pairwise_preferences(r, p)
+    s, c, d = schulze(r, p), condorcet(r, p), _pairwise_preferences(r, p)
     for tt, (x, y) in zip(t, points):
         i, j = np.searchsorted(medians, round(x, 6)), np.searchsorted(medians, round(y, 6))
         dd = d[i, j]
@@ -637,7 +638,7 @@ def margin_example():
             f"{NAMES[e]} {(p[:, e] - p[e, :]).max():.4f}" for e in range(5)))
         voters = Voters(first[None], d[None], rankings, probs[None])
         for name, method in (("FPTP", "fptp"), ("Borda", "borda"), ("Baldwin", "baldwin"),
-                             ("Nanson", "nanson"), ("Condorcet", "condorcet_cycle"),
+                             ("Nanson", "nanson"), ("Condorcet", "condorcet"),
                              ("Schulze", "schulze"), ("Minimax", "minimax"), ("Black", "black"),
                              ("IRV", "irv")):
             winner, margin = MARGINS[method].evaluate(voters)
@@ -763,6 +764,37 @@ def polygon_example():
     fig.savefig(FIGURES / "polygons.png", dpi=150)
     plt.close(fig)
 
+# ---------------------------------------------------------------- approval voting
+
+# the approval methods of the web UI: name, label and cut of the ballot
+APPROVALS = [("approval", "half of the candidates", HALF), ("approval_gap", "largest gap", GAP)]
+
+
+def approval():
+    """The voters who approve D, and the diagrams, for both approval ballots."""
+    fig, axes = plt.subplots(1, 4, figsize=(13, 3.6), layout="constrained")
+    lines = np.linspace(0, 1, 401)
+    shade = LinearSegmentedColormap.from_list("approves", ["white", PALETTE[D]])
+    for k, (method, label, cut) in enumerate(APPROVALS):
+        cover = coverage(lines, lines, CANDIDATES, cut, 4)
+        print(f"{method}: approved by the voters of this part of the square " + "  ".join(
+            f"{name} {cover[c].mean():.3f}" for c, name in enumerate(NAMES))
+            + f"; approved candidates per voter {cover.sum(axis=0).mean():.3f}")
+        ax = axes[k]
+        ax.imshow(cover[D].T, cmap=shade, vmin=0, vmax=1, origin="lower", extent=(0, 1, 0, 1), alpha=0.6)
+        ax.scatter(*CANDIDATES.T, c=PALETTE[:5], s=45, edgecolors="k", linewidths=1, zorder=3)
+        for name, (x, y) in zip(NAMES, CANDIDATES):
+            ax.annotate(name, (x + 0.015, y + 0.015), weight="bold", fontsize=9)
+        ax.set_title(f"voters who approve D: {label}", fontsize=10)
+        winner = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+        show(axes[2 + k], winner, f"{method}: {label}")
+    for method in ("fptp", "borda", "schulze", "approval", "approval_gap"):
+        winner = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+        print(f"{method}: share of the square won " + "  ".join(
+            f"{name} {(winner == c).mean():.3f}" for c, name in enumerate(NAMES)))
+    fig.savefig(FIGURES / "approval.png", dpi=150)
+    plt.close(fig)
+
 
 if __name__ == "__main__":
     FIGURES.mkdir(exist_ok=True)
@@ -789,3 +821,4 @@ if __name__ == "__main__":
     margin_example()
     margin_fields()
     polygon_example()
+    approval()
