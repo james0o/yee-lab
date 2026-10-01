@@ -15,7 +15,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import ListedColormap, LogNorm
+from matplotlib.colors import LinearSegmentedColormap, ListedColormap, LogNorm
 from matplotlib.patches import PathPatch
 from matplotlib.path import Path as MplPath
 from scipy import ndimage
@@ -24,10 +24,10 @@ from scipy.special import betainc, ndtr, ndtri
 from scipy.stats import beta as beta_dist
 
 from yeelab import normal, ranking_cells
-from yeelab.approval import GAP
-from yeelab.build import Approval, GapApproval, Highest, Tally, Voters
-from yeelab.margin.regions import MARGINS, regions, voters as grid_voters, winners
-from yeelab.margin.shares import Model, _edge_key, approval_polygons
+from yeelab.approval import GAP, HALF, coverage
+from yeelab.build import Voters
+from yeelab.margin.regions import MARGINS, regions, winners
+from yeelab.margin.shares import Model
 from yeelab.pixels import beta as pixel_beta, normal as pixel_normal
 from yeelab.pixels.methods import _pairwise_preferences, borda, condorcet, fptp, irv, schulze, voronoi
 from yeelab.voting import CYCLE
@@ -766,52 +766,32 @@ def polygon_example():
 
 # ---------------------------------------------------------------- approval voting
 
-# the ballots of the approval figures: label, block and cut
-APPROVALS = [(r"threshold $\theta = 3/4$", Approval(0.75), 0.75), (r"threshold $\theta = 1/2$", Approval(), 0.5),
-             (r"threshold $\theta = 1/4$", Approval(0.25), 0.25), ("largest gap", GapApproval(), GAP)]
+# the approval methods of the web UI: name, label and cut of the ballot
+APPROVALS = [("approval", "half of the candidates", HALF), ("approval_gap", "largest gap", GAP)]
 
 
-def _border_edges(polygons, approves):
-    """Number of edges left once those between polygons that approve the same candidates
-    have cancelled, as in margin.shares._summed_shares."""
-    counts = {}
-    for polygon, who in zip(polygons, approves):
-        for start, end in zip(polygon, np.roll(polygon, -1, axis=0)):
-            key, sign = _edge_key(start, end)[:2]
-            counts.setdefault(key, np.zeros(len(CANDIDATES)))[who] += sign
-    return sum(count.any() for count in counts.values())
-
-
-def approval_ballots():
-    """The voters who approve D, as the polygons their share is summed over."""
+def approval():
+    """The voters who approve D, and the diagrams, for both approval ballots."""
     fig, axes = plt.subplots(1, 4, figsize=(13, 3.6), layout="constrained")
-    for ax, (label, _, cut) in zip(axes, APPROVALS):
-        polygons, approves = approval_polygons(CANDIDATES, UI_MODEL, cut)
-        print(f"approval, {label}: {len(polygons)} polygons with {sum(map(len, polygons))} edges, "
-              f"{_border_edges(polygons, approves)} of them integrated")
-        for polygon, who in zip(polygons, approves):
-            if D in who:
-                ax.add_patch(plt.Polygon(polygon, facecolor=PALETTE[D], alpha=0.55, edgecolor="k", lw=0.5))
+    lines = np.linspace(0, 1, 401)
+    shade = LinearSegmentedColormap.from_list("approves", ["white", PALETTE[D]])
+    for k, (method, label, cut) in enumerate(APPROVALS):
+        cover = coverage(lines, lines, CANDIDATES, cut, 4)
+        print(f"{method}: approved by the voters of this part of the square " + "  ".join(
+            f"{name} {cover[c].mean():.3f}" for c, name in enumerate(NAMES))
+            + f"; approved candidates per voter {cover.sum(axis=0).mean():.3f}")
+        ax = axes[k]
+        ax.imshow(cover[D].T, cmap=shade, vmin=0, vmax=1, origin="lower", extent=(0, 1, 0, 1), alpha=0.6)
         ax.scatter(*CANDIDATES.T, c=PALETTE[:5], s=45, edgecolors="k", linewidths=1, zorder=3)
         for name, (x, y) in zip(NAMES, CANDIDATES):
             ax.annotate(name, (x + 0.015, y + 0.015), weight="bold", fontsize=9)
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.set_aspect("equal")
         ax.set_title(f"voters who approve D: {label}", fontsize=10)
-    fig.savefig(FIGURES / "approval_ballots.png", dpi=150)
-    plt.close(fig)
-
-
-def approval_diagrams():
-    """The approval diagrams at three thresholds and at the largest gap."""
-    fig, axes = plt.subplots(1, 4, figsize=(13, 3.6), layout="constrained")
-    for ax, (label, ballot, _) in zip(axes, APPROVALS):
-        method = Highest(Tally(ballot))
-        winner = method.evaluate(grid_voters(method.needs, CANDIDATES, UI_MODEL, FINAL_GRID))[0][1:-1, 1:-1]
-        print(f"approval, {label}: share of the square won " + "  ".join(
+        winner = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+        show(axes[2 + k], winner, f"{method}: {label}")
+    for method in ("fptp", "borda", "schulze", "approval", "approval_gap"):
+        winner = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+        print(f"{method}: share of the square won " + "  ".join(
             f"{name} {(winner == c).mean():.3f}" for c, name in enumerate(NAMES)))
-        show(ax, winner, f"approval, {label}")
     fig.savefig(FIGURES / "approval.png", dpi=150)
     plt.close(fig)
 
@@ -841,5 +821,4 @@ if __name__ == "__main__":
     margin_example()
     margin_fields()
     polygon_example()
-    approval_ballots()
-    approval_diagrams()
+    approval()

@@ -18,8 +18,8 @@
     koth    = Unbeaten(M, against=fptp, order=Tally(Plurality()))  # king of the hill
     king_runoff = Runoff(M, koth, irv)  # their winners, one on one
 
-    approval     = Highest(Tally(Approval()))     # approved by the most voters
-    approval_gap = Highest(Tally(GapApproval()))  # ... cut at every voter's largest gap
+    approval     = Highest(Tally(Approval()))     # approved by the most voters, each approving half
+    approval_gap = Highest(Tally(GapApproval()))  # ... each approving down to their largest gap
 
     winner, margin = nanson.evaluate(voters)  # Voters with the shares in nanson.needs
 
@@ -30,7 +30,7 @@
     methods     the methods above by name (METHODS); margin/regions.py draws them
 """
 
-from yeelab.approval import GAP, Cut
+from yeelab.approval import GAP, HALF, Cut
 from yeelab.build.blocks import (
     Approval,
     Ballot,
@@ -59,5 +59,5 @@ __all__ = [
     "Approval", "Ballot", "BordaCount", "CandidateTotals", "Eliminate", "Fallback", "GapApproval",
     "Highest", "Margins", "PairDiffs", "PairShares", "Pairwise", "Plurality", "Runoff",
     "StrongestPaths", "Tally", "Unbeaten", "Weakest", "Winner", "METHODS", "FIRST", "PAIRWISE",
-    "PROFILE", "GAP", "Approved", "Cut", "Share", "Voters",
+    "PROFILE", "GAP", "HALF", "Approved", "Cut", "Share", "Voters",
 ]

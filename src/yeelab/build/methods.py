@@ -35,8 +35,8 @@ black = Fallback(condorcet, borda)                   # the Condorcet winner, els
 koth = Unbeaten(M, against=fptp, order=Tally(Plurality()))
 king_runoff = Runoff(M, koth, irv)                   # the king of the hill against the irv winner
 
-approval = Highest(Tally(Approval()))                # approved by the most voters, at the threshold 1/2
-approval_gap = Highest(Tally(GapApproval()))         # ... with every voter's largest gap as the cut
+approval = Highest(Tally(Approval()))                # approved by the most voters, each approving half
+approval_gap = Highest(Tally(GapApproval()))         # ... each approving down to their largest gap
 
 METHODS: dict[str, Winner] = {
     "fptp": fptp,

@@ -13,12 +13,9 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
                                       remaining set)
     king_runoff                       all three: koth against irv, the duel by pairwise
                                       shares
-    approval                          approval shares at a threshold: the cells of one
-                                      closest and one farthest candidate, each cut by
-                                      one line per candidate
-    approval_gap                      approval shares at the largest gap: the cells of
-                                      the bisector arrangement, each cut where two of
-                                      its gaps are equal
+    approval, approval_gap            approval shares at their cut: the voters who approve
+                                      a candidate have curved borders, so these come
+                                      from a grid of voters, not from polygons
 
 (Borda needs only pairwise shares: a ballot gives c one point per candidate ranked
 below c, so c's expected score is sum_e d[c, e].)
@@ -41,10 +38,10 @@ from dataclasses import dataclass
 from functools import cached_property, lru_cache
 
 import numpy as np
-from scipy.special import logit, ndtr
+from scipy.special import betainc, logit, ndtr
 
 from yeelab import normal, ranking_cells
-from yeelab.approval import GAP, Cut, half_plane
+from yeelab.approval import Cut, coverage
 from yeelab.distributions import Distribution
 from yeelab.margin.beta_tables import TabulatedBeta
 from yeelab.ranking_cells import NODES, QUAD_NODES, Spread, _clip
@@ -52,6 +49,13 @@ from yeelab.ranking_cells import NODES, QUAD_NODES, Spread, _clip
 PIXELS = 300  # the outermost medians are 1/2 and 1 - 1/2 pixel from the walls
 CACHE_BYTES = 64 * 2**20  # edge integrals kept between requests
 SQUARE = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+# The voter grid of the approval shares (_grid_lines): cells per axis across the unit
+# square, ballots per axis in a cell that a border crosses, the smallest cell at a wall
+# (Beta voters) and the growth of the cells beyond the square (normal voters).
+APPROVAL_CELLS = 256
+APPROVAL_SUB = 8
+WALL_CELL = 1e-6
+OUTSIDE_GROWTH = 1.1
 
 
 def node_count(distribution: Distribution, deviation: float) -> int:
@@ -273,106 +277,59 @@ def ranking_shares(candidates, model: Model):
 # ---------------------------------------------------------------- Approval
 
 
-def _threshold_polygons(candidates, threshold, box):
-    """(polygons, approves) of the approval ballots at a threshold (yeelab.approval):
-    convex CCW polygons in `box` and, for each, the candidates that every voter in it
-    approves. A voter's ballot depends only on its closest candidate a and farthest b,
-    so each cell of one a and one b (a Voronoi cell cut by the bisectors of b) approves
-    a, and its part on candidate i's side of i's line approves i."""
-    n = len(candidates)
-    polygons, approves = [], []
-    for a, nearest in enumerate(voronoi_cells(candidates, box)):
-        for b in range(n):
-            cell = nearest if b != a else None
-            for e in range(n):
-                if e not in (a, b) and cell is not None:
-                    cell = _half_plane(candidates, e, b, cell)
-            if cell is None:
-                continue
-            polygons.append(cell)
-            approves.append([a])
-            for i in range(n):
-                if i in (a, b):
-                    continue
-                weights = np.zeros(n)
-                weights[i], weights[a], weights[b] = 1.0, -threshold, threshold - 1.0
-                part = _clip(cell, *half_plane(candidates, weights))
-                if part is not None:
-                    polygons.append(part)
-                    approves.append([i])
-    return polygons, approves
+def _grid_lines(model: Model) -> np.ndarray:
+    """Lines of the voter grid along one axis, increasing: APPROVAL_CELLS equal cells
+    across the unit square, and smaller or larger ones where the voters call for them.
 
-
-def _gap_polygons(candidates, cells, rankings):
-    """(polygons, approves) of the approval ballots at the largest gap, like
-    _threshold_polygons: each cell of the bisector arrangement (`cells`, `rankings` of
-    ranking_cells) split into the parts where gap k of its ranking is the largest, which
-    approve the first k + 1 candidates of the ranking.
-
-    The gaps are linear within a cell, so one that is no larger than another at every
-    vertex is so everywhere: most cells have one largest gap and are not cut at all."""
-    n = len(candidates)
-    squares = (candidates ** 2).sum(axis=-1)
-    polygons, approves = [], []
-    for cell, ranking in zip(cells, rankings):
-        ranking = ranking.tolist()
-        gaps = np.zeros((n - 1, n))  # gap k = u[ranking[k]] - u[ranking[k + 1]], as weights
-        gaps[np.arange(n - 1), ranking[:-1]] = 1.0
-        gaps[np.arange(n - 1), ranking[1:]] = -1.0
-        normals, offsets = -2 * gaps @ candidates, -gaps @ squares  # approval.half_plane of each
-        values = offsets[:, None] - normals @ cell.T  # gap k at vertex v
-        floor = values.min(axis=1).max()  # the largest gap is at least this everywhere
-        for k in range(n - 1):
-            if values[k].max() < floor:
-                continue
-            part = cell
-            for other in range(n - 1):
-                if other == k or part is None or (values[k] >= values[other]).all():
-                    continue
-                part = _clip(part, normals[k] - normals[other], offsets[k] - offsets[other])
-            if part is not None:
-                polygons.append(part)
-                approves.append(ranking[:k + 1])
-    return polygons, approves
-
-
-def _summed_shares(model: Model, polygons, approves, n):
-    """Share of the voters who approve each of n candidates, (N, N, n): for candidate
-    c, the share of the union of the polygons whose `approves` lists c.
-
-    The edge terms are added per candidate, with the sign of each polygon's direction
-    along the edge. An edge between two polygons that approve the same candidates
-    cancels and takes no integral, which leaves the borders of each candidate's region."""
-    counts, ends = {}, {}
-    for poly, who in zip(polygons, approves):
-        for k in range(len(poly)):
-            key, sign, start, end = _edge_key(poly[k], poly[(k + 1) % len(poly)])
-            if key not in counts:
-                counts[key], ends[key] = np.zeros(n), (start, end)
-            counts[key][who] += sign
-    keys = [key for key, count in counts.items() if count.any()]
-    shares = np.zeros((n, model.nodes, model.nodes))  # contiguous per candidate
-    for key, (sign, term) in zip(keys, edge_integrals(model, [ends[key] for key in keys])):
-        for c in np.flatnonzero(counts[key]):
-            shares[c] += sign * counts[key][c] * term
-    return np.clip(np.moveaxis(shares, 0, -1), 0.0, 1.0)
-
-
-def approval_polygons(candidates, model: Model, cut: Cut):
-    """(polygons, approves): where the voters of `model` are, cut into convex CCW
-    polygons, and the candidates every voter of each polygon approves at `cut`
-    (yeelab.approval). A polygon need not list all of them: polygons overlap."""
-    candidates = np.asarray(candidates, dtype=np.float64)
-    if cut != GAP:
-        return _threshold_polygons(candidates, cut, _voter_box(model))
+    Beta voters: the cell at each wall is halved again and again down to WALL_CELL. The
+    density of a Beta with a < 1 is infinite at the wall, and the voters of a pixel next
+    to a wall sit within a small fraction of an equal cell.
+    Normal voters: beyond the square the cells grow by OUTSIDE_GROWTH each, out to the
+    box of normal.normal_cells, where the density is smooth and no candidate is near."""
+    step = 1.0 / APPROVAL_CELLS
+    inside = np.linspace(0.0, 1.0, APPROVAL_CELLS + 1)
     if model.distribution == "beta":
-        return _gap_polygons(candidates, *ranking_cells.ranking_cells(candidates))
-    return _gap_polygons(candidates, *normal.normal_cells(candidates, model.sigma))
+        halves = step / 2.0 ** np.arange(1, 1 + int(np.ceil(np.log2(step / WALL_CELL))))
+        return np.concatenate([[0.0], halves[::-1], inside[1:-1], 1 - halves, [1.0]])
+    outside, reach = [], normal.BOX * model.sigma
+    while not outside or outside[-1] < reach:
+        step *= OUTSIDE_GROWTH
+        outside.append((outside[-1] if outside else 0.0) + step)
+    outside = np.array(outside)
+    return np.concatenate([-outside[::-1], inside, 1 + outside])
+
+
+@lru_cache(maxsize=8)  # < 1 MB each, built in a few ms
+def _voter_grid(model: Model):
+    """(lines (K + 1,), mass (N, K)) of the voter grid: its lines along one axis
+    (_grid_lines) and the share of each node's voters between two neighbouring lines,
+    from the exact CDF. Both axes have the same lines and nodes, so a rectangle of the
+    grid holds mass[i, k] * mass[j, l] of the voters of node (i, j). Read-only."""
+    lines = _grid_lines(model)
+    if model.distribution == "beta":
+        params = ranking_cells.node_params(model.pixels, model.nodes, model.deviation, model.spread)[1]
+        cdf = betainc(params[:, :1], params[:, 1:], lines)
+    else:
+        cdf = ndtr((lines - model.medians[:, None]) / model.sigma)
+    mass = np.diff(cdf, axis=1)
+    lines.setflags(write=False)
+    mass.setflags(write=False)
+    return lines, mass
 
 
 def approval_shares(candidates, model: Model, cut: Cut) -> np.ndarray:
     """approved[i, j, c] = share of the voters of node (i, j) who approve c at `cut`
-    (a threshold or approval.GAP), shape (N, N, C). They do not sum to 1: a voter
-    approves between one candidate and all but one."""
-    polygons, approves = approval_polygons(candidates, model, cut)
-    return _summed_shares(model, polygons, approves, len(candidates))
+    (approval.HALF or GAP), shape (N, N, C). They do not sum to 1: a voter approves
+    between one candidate and all but one.
+
+    The voters who approve a candidate have curved borders (yeelab.approval), so their
+    share is not a sum of edge terms like the others. The plane is cut into the
+    rectangles of the voter grid instead: approval.coverage gives the part of each
+    rectangle that approves c, and the rectangles are added up with the exact share of
+    the voters each one holds. The approving region is the same for every node, and only
+    its border within a rectangle is approximate, so the shares stay smooth in the
+    node; they are within about 1e-3 of the exact ones (tests/test_approval.py)."""
+    lines, mass = _voter_grid(model)
+    cover = coverage(lines, lines, candidates, cut, APPROVAL_SUB)
+    return np.moveaxis(mass @ cover.astype(np.float64) @ mass.T, 0, -1)
+

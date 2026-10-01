@@ -8,7 +8,8 @@ profile of pixels/.
     pairwise    d[..., c, e] = share ranking c above e, d[..., c, c] = 0, (..., C, C)
     profile     the whole profile: rankings (R, C), best first, and their shares (..., R)
     approved    {cut: share approving each candidate (..., C)}, one entry per cut of the
-                approval ballots (yeelab.approval); a method names each as Approved(cut)
+                approval ballots (approval.HALF, approval.GAP); a method names each as
+                Approved(cut)
 """
 
 from dataclasses import dataclass
@@ -21,7 +22,7 @@ from yeelab.approval import Cut
 
 @dataclass(frozen=True)
 class Approved:
-    """The approval shares at one cut: a threshold, or approval.GAP."""
+    """The approval shares at one cut: approval.HALF or approval.GAP."""
 
     cut: Cut
 
