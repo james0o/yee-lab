@@ -13,7 +13,8 @@ Every block has one type of output:
              StrongestPaths(links)
     Winner   Highest(scores), Unbeaten(links),  winner and margin at every point
              Eliminate(scores, how=...),
-             Fallback(first, second)
+             Fallback(first, second),
+             Unbeaten(links, against=winner, order=scores)
 
 A ballot gives weight(k, C) points to the candidate at position k (0 = closest) of C;
 both count only the remaining candidates, and a higher score is better. Each ballot
@@ -23,6 +24,12 @@ shares in voters.Voters. Tally averages them over the voters of a point.
 A link s[c, e] = -s[e, c] says that c beats e where it is positive. Links are
 transitive (Links.transitive) if the candidates that beat each other cannot form a
 cycle: Margins are not, StrongestPaths are.
+
+Unbeaten(links) elects the candidate no one beats. Unbeaten(links, against=winner,
+order=scores) only asks that of the winner of `against`, the king: if someone beats it,
+the highest `order` score among those who do wins instead. King of the hill is
+
+    Unbeaten(Margins(Pairwise()), against=fptp, order=Tally(Plurality()))
 
 A Winner returns (winner, margin): the margin is >= 0, continuous in the shares and 0
 on every border between two winners, since margin/regions.py draws the borders as its
@@ -103,6 +110,24 @@ def _unbeaten(links: np.ndarray, transitive: bool) -> Result:
         margin = np.minimum(margin, np.abs(best))
         winner = np.where(best < 0, winner, CYCLE)
     return winner, margin
+
+
+def _challenged(links: np.ndarray, king: np.ndarray, margin: np.ndarray, scores: np.ndarray) -> Result:
+    """Winner and margin of Unbeaten with `against` (see there) for links s (..., C, C):
+    the king and its margin (...), CYCLE where there is none, and the scores (..., C)
+    that order its challengers."""
+    cycle = king == CYCLE
+    seat = np.where(cycle, 0, king)  # any candidate in a cycle: the result is replaced below
+    to_king = np.take_along_axis(links, seat[..., None, None], axis=-1)[..., 0]  # [..., c] = s[c, king]
+    is_king = np.arange(links.shape[-1]) == seat[..., None]
+    flip = np.where(is_king, np.inf, np.abs(to_king)).min(axis=-1)
+    challenger = to_king > 0  # never the king: s[king, king] = 0
+    # the others score -inf, but an unchallenged king inf: it wins, and the lead is inf
+    # with fewer than two challengers (never -inf - -inf)
+    unchallenged = is_king & ~challenger.any(axis=-1, keepdims=True)
+    winner, lead = _top_two(np.where(challenger, scores, np.where(unchallenged, np.inf, -np.inf)))
+    gap = np.minimum(margin, np.minimum(flip, lead))
+    return np.where(cycle, CYCLE, winner), np.where(cycle, margin, gap)
 
 # ---------------------------------------------------------------- Ballot
 
@@ -440,28 +465,55 @@ class Unbeaten(Winner):
     the winner's beaten crosses 0, |beaten| of the winner is a gap too: the margin is at
     most that. Transitive links leave it out: someone is always unbeaten, and on
     strongest paths the winner's beaten is 0 on whole areas, where the widest paths to
-    and from another candidate share their weakest link."""
+    and from another candidate share their weakest link.
+
+    With `against` and `order` (both or neither) only one candidate has to stay unbeaten,
+    the king: the winner of `against`. Its challengers are the candidates c who beat it,
+    s[c, king] > 0. Without challengers the king wins, otherwise the challenger with the
+    highest `order` score does (ties: the lowest index), in one step: no one challenges
+    that winner in turn. Where `against` elects no one, the point stays a voting.CYCLE
+    with the margin of `against`. Elsewhere the margin is the smallest of three gaps:
+
+        the margin of `against`             the king changes
+        min_{c != king} |s[c, king]|        a candidate starts or stops being a challenger
+        the best challenger's lead in       another challenger wins; inf with fewer than
+        `order` over the second             two challengers
+    """
 
     links: Links
+    against: Winner | None = None
+    order: Scores | None = None
 
     def __post_init__(self):
         _expect(self, self.links, Links, "Links")
+        if (self.against is None) != (self.order is None):
+            raise ValueError("Unbeaten takes against and order together, or neither")
+        if self.against is not None:
+            _expect(self, self.against, Winner, "a Winner as against")
+            _expect(self, self.order, Scores, "Scores as order")
 
     @property
     def needs(self) -> frozenset[Share]:
-        return self.links.needs
+        if self.against is None:
+            return self.links.needs
+        return self.links.needs | self.against.needs | self.order.needs
 
     def evaluate(self, voters: Voters) -> Result:
-        result = self.links.unbeaten(voters)
+        result = self.links.unbeaten(voters) if self.against is None else None
         return self.decide(voters) if result is None else result
 
     def decide(self, voters: Voters) -> Result:
         """evaluate() on the links as they are, whatever formula they have of their own
         (Links.unbeaten)."""
-        return _unbeaten(self.links.evaluate(voters), self.links.transitive)
+        links = self.links.evaluate(voters)
+        if self.against is None:
+            return _unbeaten(links, self.links.transitive)
+        return _challenged(links, *self.against.evaluate(voters), self.order.evaluate(voters))
 
     def __repr__(self):
-        return f"Unbeaten({self.links!r})"
+        if self.against is None:
+            return f"Unbeaten({self.links!r})"
+        return f"Unbeaten({self.links!r}, against={self.against!r}, order={self.order!r})"
 
 
 @dataclass(frozen=True)

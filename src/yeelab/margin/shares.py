@@ -7,7 +7,9 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
     borda, baldwin, nanson, schulze,  pairwise shares d[c, e] = P(c ranked above e),
     condorcet_cycle, minimax, black   one half-plane per pair (C (C - 1) / 2 edges)
     fptp                              first-choice shares, the C Voronoi cells
-    irv                               the whole profile (first choices among every
+    koth                              both of these: the king by first choices, its
+                                      challengers by pairwise shares
+    irv                              the whole profile (first choices among every
                                       remaining set)
 
 (Borda needs only pairwise shares: a ballot gives c one point per candidate ranked

@@ -28,6 +28,8 @@ schulze = Unbeaten(StrongestPaths(M))                # no one beats them along t
 condorcet_cycle = Unbeaten(M)                        # the Condorcet winner; CYCLE where there is none
 minimax = Highest(Weakest(M))                        # the smallest worst defeat
 black = Fallback(condorcet_cycle, borda)             # the Condorcet winner, else Borda
+# king of the hill: the fptp winner, or the most first choices among those who beat it
+koth = Unbeaten(M, against=fptp, order=Tally(Plurality()))
 
 METHODS: dict[str, Winner] = {
     "fptp": fptp,
@@ -39,4 +41,5 @@ METHODS: dict[str, Winner] = {
     "condorcet_cycle": condorcet_cycle,
     "minimax": minimax,
     "black": black,
+    "koth": koth,
 }

@@ -62,6 +62,9 @@ METHOD_INFO = {
                 "defeat is the smallest, measured by the margin of votes."},
     "black": {"label": "Black", "description": "Black: the Condorcet winner if there is one, "
               "otherwise the Borda winner."},
+    "koth": {"label": "King of the hill", "description": "King of the hill: the candidate with "
+             "the most first choices, unless someone beats them head to head; then the one with "
+             "the most first choices among those who do."},
     "voronoi": {"label": "Voronoi", "description": "The nearest candidate to the pixel, without "
                 "voters: what every method draws when all voters are at their pixel."},
 }

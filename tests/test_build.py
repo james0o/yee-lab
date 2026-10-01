@@ -10,7 +10,8 @@ schulze and condorcet_cycle must give exactly the winners and margins that the
 functions of the former margin/methods.py gave (copied below as the reference), on the
 profiles and on random pairwise shares with many cycles and ties. minimax is checked
 against a Python reference of its definition, black against "the Condorcet winner,
-else Borda".
+else Borda". koth (king of the hill) is checked against a Python reference of its rule,
+winner and margin, on the profiles and on random first-choice and pairwise shares.
 
 Wrong blocks must fail when built, and every method must print as the expression
 that builds it.
@@ -178,6 +179,44 @@ def _tournaments(n, count=500, seed=0):
 TOURNAMENTS = [_tournaments(n) for n in (2, 3, 4, 5, 8)]
 
 
+def _koth_reference(first, d):
+    """King of the hill point by point from its rule: the king has the most first choices
+    (ties: the lowest index), its challengers are the candidates c with d[c, king] >
+    d[king, c], and the challenger with the most first choices wins (ties: the lowest
+    index), or the king if there is none. The margin is the smallest of the king's lead
+    in first choices, |d[c, king] - d[king, c]| of every other candidate c, and, with two
+    challengers or more, the lead in first choices of the best over the second."""
+    n = first.shape[-1]
+    winner = np.empty(first.shape[:-1], dtype=np.int64)
+    margin = np.empty(first.shape[:-1])
+    for point in np.ndindex(*first.shape[:-1]):
+        votes, shares = first[point].tolist(), d[point].tolist()
+        king, *others = sorted(range(n), key=lambda c: (-votes[c], c))  # others: best first
+        lead = {c: shares[c][king] - shares[king][c] for c in others}
+        challengers = [c for c in others if lead[c] > 0]
+        gaps = [votes[king] - votes[others[0]], *(abs(x) for x in lead.values())]
+        if len(challengers) > 1:
+            gaps.append(votes[challengers[0]] - votes[challengers[1]])
+        winner[point], margin[point] = (challengers or [king])[0], min(gaps)
+    return winner, margin
+
+
+def _challengers(first, d):
+    """How many candidates beat the one with the most first choices head to head, (...)."""
+    king = first.argmax(axis=-1)[..., None, None]
+    lead = d - np.swapaxes(d, -1, -2)
+    return (np.take_along_axis(lead, king, axis=-1) > 0).sum(axis=(-1, -2))
+
+
+def _first_choices(n, count=500, seed=0):
+    """Random first-choice shares (count, n) to go with _tournaments(n), every tenth
+    point on a grid of quarters, where they tie. They do not sum to 1: king of the hill
+    only compares them."""
+    first = np.random.default_rng(seed + n).random((count, n))
+    first[::10] = np.round(4 * first[::10]) / 4
+    return first
+
+
 @pytest.mark.parametrize("name", ["fptp", "irv", "borda", "schulze", "condorcet_cycle"])
 def test_methods_match_pixel_methods(profile, name):
     rankings, probs = profile
@@ -278,6 +317,60 @@ def test_black_is_condorcet_else_borda(profile):
     assert (winner != CYCLE).all()
 
 
+def test_koth_matches_reference(profile):
+    rankings, probs = profile
+    voters = _voters(rankings, probs)
+    expected_winner, expected_margin = _koth_reference(voters.first, voters.pairwise)
+    winner, margin = METHODS["koth"].evaluate(voters)
+    clear = expected_margin > TOLERANCE
+    assert clear.mean() > 0.5  # not vacuous
+    np.testing.assert_array_equal(winner[clear], expected_winner[clear])
+    np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-5)
+
+
+@pytest.mark.parametrize("d", TOURNAMENTS, ids=lambda d: f"{d.shape[-1]}-candidates")
+def test_koth_matches_reference_on_random_shares(d):
+    """Random first choices next to the random pairwise shares: kings without a
+    challenger, with one and (from three candidates on) with several, and ties."""
+    d = d.astype(np.float64)  # the reference computes in float64: the same arithmetic
+    n = d.shape[-1]
+    first = _first_choices(n, len(d))
+    winner, margin = METHODS["koth"].evaluate(Voters(first, d))
+    expected_winner, expected_margin = _koth_reference(first, d)
+    np.testing.assert_array_equal(winner, expected_winner)
+    np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-12)
+    assert set(np.unique(_challengers(first, d))) >= set(range(min(n, 3)))  # not vacuous
+    assert np.isfinite(margin).all() and (margin == 0).any()
+
+
+def test_koth_is_fptp_where_no_one_beats_its_winner(profile):
+    """And another candidate where someone does; the margin is at most that of fptp."""
+    rankings, probs = profile
+    voters = _voters(rankings, probs)
+    winner, margin = METHODS["koth"].evaluate(voters)
+    fptp_winner, fptp_margin = METHODS["fptp"].evaluate(voters)
+    unbeaten = _challengers(voters.first, voters.pairwise) == 0
+    assert unbeaten.any() and not unbeaten.all()  # not vacuous
+    np.testing.assert_array_equal(winner[unbeaten], fptp_winner[unbeaten])
+    assert (winner[~unbeaten] != fptp_winner[~unbeaten]).all()
+    assert (margin <= fptp_margin).all()
+
+
+@pytest.mark.parametrize("d", TOURNAMENTS, ids=lambda d: f"{d.shape[-1]}-candidates")
+def test_unbeaten_against_a_cycle_stays_a_cycle(d):
+    """Against the Condorcet winner: a CYCLE with its margin where there is none. Elsewhere
+    no one beats the king, and the closest result against it is its own margin, so the
+    method is condorcet_cycle again, bit for bit."""
+    condorcet = METHODS["condorcet_cycle"]
+    method = Unbeaten(Margins(Pairwise()), against=condorcet, order=Tally(BordaCount()))
+    voters = Voters(pairwise=d)
+    winner, margin = method.evaluate(voters)
+    expected_winner, expected_margin = condorcet.evaluate(voters)
+    np.testing.assert_array_equal(winner, expected_winner)
+    np.testing.assert_array_equal(margin, expected_margin)
+    assert (winner == CYCLE).any() and (winner != CYCLE).any()  # not vacuous
+
+
 @pytest.mark.parametrize("method", ELIMINATIONS, ids=repr)
 def test_eliminations_match_reference(profile, method):
     """Both the method (for irv the compiled voting.irv_rounds) and its rounds with
@@ -329,18 +422,20 @@ def test_ties_go_to_the_lowest_index():
 def test_condorcet_ties():
     """All pairwise shares 1/2: no one beats anyone. There is no Condorcet winner, and
     Borda, which Black falls back to, elects the first candidate; everyone else ties, and
-    the first wins. Every margin is 0."""
+    the first wins. With equal first choices the first candidate is the king of the hill,
+    and no one challenges it. Every margin is 0."""
     n = 4
     d = np.full((3, n, n), 0.5)
     d[:, np.arange(n), np.arange(n)] = 0
-    voters = Voters(pairwise=d)
-    for name, expected in (("condorcet_cycle", CYCLE), ("schulze", 0), ("minimax", 0), ("black", 0)):
+    voters = Voters(first=np.full((3, n), 1 / n), pairwise=d)
+    for name, expected in (("condorcet_cycle", CYCLE), ("schulze", 0), ("minimax", 0), ("black", 0),
+                           ("koth", 0)):
         winner, margin = METHODS[name].evaluate(voters)
         np.testing.assert_array_equal(winner, expected, err_msg=name)
         np.testing.assert_array_equal(margin, 0.0, err_msg=name)
 
 
-def test_methods_are_the_nine_expressions():
+def test_methods_are_the_ten_expressions():
     pairwise = Pairwise()
     margins = Margins(pairwise)
     assert METHODS == {
@@ -353,9 +448,10 @@ def test_methods_are_the_nine_expressions():
         "condorcet_cycle": Unbeaten(margins),
         "minimax": Highest(Weakest(margins)),
         "black": Fallback(Unbeaten(margins), Highest(Tally(BordaCount()))),
+        "koth": Unbeaten(margins, against=Highest(Tally(Plurality())), order=Tally(Plurality())),
     }
     assert list(METHODS) == ["fptp", "irv", "borda", "baldwin", "nanson", "schulze",
-                             "condorcet_cycle", "minimax", "black"]
+                             "condorcet_cycle", "minimax", "black", "koth"]
 
 
 def test_repr_is_the_expression():
@@ -366,8 +462,21 @@ def test_repr_is_the_expression():
     assert repr(METHODS["black"]) == (
         "Fallback(Unbeaten(Margins(Pairwise())), Highest(Tally(BordaCount())))")
     assert repr(METHODS["fptp"]) == "Highest(Tally(Plurality()))"
-    for method in [*METHODS.values(), *ELIMINATIONS, *BALLOTS, *LINK_BLOCKS]:
+    assert repr(METHODS["koth"]) == (
+        "Unbeaten(Margins(Pairwise()), against=Highest(Tally(Plurality())), order=Tally(Plurality()))")
+    challenged = Unbeaten(StrongestPaths(Margins(Pairwise())), against=METHODS["black"],
+                          order=Weakest(Margins(Pairwise())))
+    for method in [*METHODS.values(), *ELIMINATIONS, *BALLOTS, *LINK_BLOCKS, challenged]:
         assert eval(repr(method)) == method
+
+
+def test_unbeaten_takes_against_and_order_together():
+    margins = Margins(Pairwise())
+    for build in (lambda: Unbeaten(margins, against=METHODS["fptp"]),
+                  lambda: Unbeaten(margins, order=Tally(Plurality()))):
+        with pytest.raises(ValueError, match=re.escape("Unbeaten takes against and order together, or neither")):
+            build()
+    assert Unbeaten(margins, against=None, order=None) == METHODS["condorcet_cycle"]
 
 
 def test_blocks_are_frozen_and_hashable():
@@ -383,6 +492,7 @@ def test_needs():
     assert METHODS["irv"].needs == {PROFILE}
     for name in ("borda", "baldwin", "nanson", "schulze", "condorcet_cycle", "minimax", "black"):
         assert METHODS[name].needs == {PAIRWISE}, name
+    assert METHODS["koth"].needs == {FIRST, PAIRWISE}
     assert Eliminate(Tally(Plurality()), how="mean").needs == {PROFILE}
     assert all(block.needs == {PAIRWISE} for block in LINK_BLOCKS)
 
@@ -391,6 +501,12 @@ def test_fallback_needs_the_shares_of_both():
     assert Fallback(METHODS["fptp"], METHODS["schulze"]).needs == {FIRST, PAIRWISE}
     assert Fallback(METHODS["irv"], METHODS["fptp"]).needs == {PROFILE, FIRST}
     assert Fallback(METHODS["condorcet_cycle"], METHODS["borda"]).needs == {PAIRWISE}
+
+
+def test_unbeaten_against_needs_the_shares_of_all_three():
+    margins = Margins(Pairwise())
+    assert Unbeaten(margins, against=METHODS["irv"], order=Tally(Plurality())).needs == {PAIRWISE, PROFILE, FIRST}
+    assert Unbeaten(margins, against=METHODS["borda"], order=Weakest(margins)).needs == {PAIRWISE}
 
 
 @pytest.mark.parametrize("build, message", [
@@ -421,6 +537,10 @@ def test_fallback_needs_the_shares_of_both():
     (lambda: Unbeaten(Tally(BordaCount())), "Unbeaten expects Links, got Scores: Tally(BordaCount())"),
     (lambda: Unbeaten(Pairwise()), "Unbeaten expects Links, got Duels: Pairwise()"),
     (lambda: Unbeaten(METHODS["borda"]), "Unbeaten expects Links, got a Winner: Highest(Tally(BordaCount()))"),
+    (lambda: Unbeaten(Margins(Pairwise()), against=Tally(Plurality()), order=Tally(Plurality())),
+     "Unbeaten expects a Winner as against, got Scores: Tally(Plurality())"),
+    (lambda: Unbeaten(Margins(Pairwise()), against=METHODS["fptp"], order=Plurality()),
+     "Unbeaten expects Scores as order, got a Ballot: Plurality()"),
     (lambda: Fallback(BordaCount(), METHODS["borda"]), "Fallback expects a Winner, got a Ballot: BordaCount()"),
     (lambda: Fallback(METHODS["borda"], Weakest(Margins(Pairwise()))),
      "Fallback expects a Winner, got Scores: Weakest(Margins(Pairwise()))"),

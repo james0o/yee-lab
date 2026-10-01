@@ -14,6 +14,7 @@
     condorcet_cycle = Unbeaten(M)
     minimax = Highest(Weakest(M))
     black   = Fallback(condorcet_cycle, borda)
+    koth    = Unbeaten(M, against=fptp, order=Tally(Plurality()))  # king of the hill
 
     winner, margin = nanson.evaluate(voters)  # Voters with the shares in nanson.needs
 
