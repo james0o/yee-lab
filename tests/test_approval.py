@@ -46,11 +46,12 @@ def _ids(value):
 
 
 def _at(distances_):
-    """Candidates at the given distances from a voter at the origin, each in its own
-    direction."""
+    """Candidates at the given distances from a voter at the origin, along the axes in
+    turn: there the distances come back as given, to the last bit, so that two equal
+    gaps are a tie."""
     distances_ = np.asarray(distances_, dtype=np.float64)
-    angles = np.linspace(0, 5, len(distances_))
-    return distances_[:, None] * np.column_stack([np.cos(angles), np.sin(angles)])
+    axes = np.array([[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]])
+    return distances_[:, None] * axes[np.arange(len(distances_)) % len(axes)]
 
 
 def _ballot(distances_, cut):
@@ -94,9 +95,10 @@ def test_one_close_candidate_and_four_far_ones():
 def test_the_middle_candidate_goes_with_the_closer_neighbour():
     assert _ballot([0.1, 0.2, 0.25, 0.5, 0.6], HALF) == [True, True, True, False, False]  # 0.05 < 0.25
     assert _ballot([0.1, 0.2, 0.45, 0.5, 0.6], HALF) == [True, True, False, False, False]  # 0.25 > 0.05
-    assert _ballot([0.1, 0.2, 0.3, 0.4, 0.5], HALF)[:3] == [True, True, _ballot([0.1, 0.2, 0.3], GAP)[1]]
-    assert _ballot([0.1, 0.3, 0.5], HALF) == [True, False, False]  # a tie: it is not approved
-    assert _ballot([0.1, 0.3, 0.5], GAP) == [True, False, False]  # a tie: the first gap
+    # whole distances, whose gaps are equal exactly (0.3 - 0.2 is not 0.4 - 0.3)
+    assert _ballot([1, 2, 3, 4, 5], HALF) == [True, True, False, False, False]  # a tie: it is not approved
+    assert _ballot([1, 2, 3], HALF) == [True, False, False]  # a tie: it is not approved
+    assert _ballot([1, 2, 3], GAP) == [True, False, False]  # a tie: the first gap
 
 
 @pytest.mark.parametrize("cut", CUTS)
