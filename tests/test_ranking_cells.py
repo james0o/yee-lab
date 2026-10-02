@@ -1,8 +1,8 @@
 """Theoretical checks of ranking_cells.py and pixels/beta.py.
 
 Beta parameters: the median and the quantity each spread rule fixes (mean absolute
-deviation, RMS distance from the median, tapered a + b) are verified,
-the moments by independent numerical integration. Ranking probabilities are verified against closed forms
+deviation, RMS distance from the median) are verified, the moments by independent
+numerical integration. Ranking probabilities are verified against closed forms
 (bisectors parallel to an axis reduce to a Beta CDF, and the median splits
 voters exactly in half) and against Monte Carlo sampling. Interpolation from
 Chebyshev nodes is checked against the exact probabilities at every pixel.
@@ -23,7 +23,6 @@ from yeelab.pixels.beta import (
 from yeelab.ranking_cells import (
     NODES,
     SPREADS,
-    TAPER,
     beta_params,
     beta_params_at,
     centre_shape,
@@ -116,11 +115,6 @@ def test_params_keep_their_spread(solved):
     """The quantity fixed by each rule is the same for every median."""
     spread, medians, params = solved
     a0 = centre_shape(DEVIATION)
-    if spread == "tapered":
-        np.testing.assert_allclose(
-            params.sum(axis=1), 2 * a0 * (4 * medians * (1 - medians)) ** TAPER, rtol=1e-12
-        )
-        return
     power, target = {"mean_abs": (1, DEVIATION), "rms": (2, 1 / (4 * (2 * a0 + 1)))}[spread]
     for m, (a, b) in zip(medians, params):
         assert _moment(m, a, b, power) == pytest.approx(target, abs=1e-9)
@@ -283,10 +277,9 @@ def test_cache_keeps_spreads_apart(tmp_path):
     )
     np.testing.assert_array_equal(cached[0], generated[0])
     np.testing.assert_array_equal(cached[1], generated[1])
-    for spread in ("mean_abs", "tapered"):
-        assert read_cached_ranking_probabilities(
-            CANDIDATES, pixels, DEVIATION, nodes, cache_root=tmp_path, spread=spread
-        ) is None
+    assert read_cached_ranking_probabilities(
+        CANDIDATES, pixels, DEVIATION, nodes, cache_root=tmp_path, spread="mean_abs"
+    ) is None
 
 
 # ---------------------------------------------------------------- Interpolation

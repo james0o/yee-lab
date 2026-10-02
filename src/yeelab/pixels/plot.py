@@ -129,8 +129,7 @@ def main(
     spread: Spread = typer.Option(
         SPREAD,
         help="Beta only: what stays the same for every pixel. mean_abs (legacy): E|X - m|; "
-        "rms: sqrt(E (X - m)^2); tapered: (a + b) times (4m(1 - m))^0.2. "
-        "All agree at the centre pixel.",
+        "rms: sqrt(E (X - m)^2). Both agree at the centre pixel.",
     ),
     nodes: int = typer.Option(
         NODES,

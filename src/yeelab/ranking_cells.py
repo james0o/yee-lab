@@ -6,11 +6,10 @@ spread rule (`spread`) fixes one more quantity for every pixel:
 
     "mean_abs"  E|X - m| = deviation (legacy: pushes voters away near the walls)
     "rms"       sqrt(E (X - m)^2) is the same as at the centre pixel
-    "tapered"   a + b is the centre value times (4 m (1 - m))^TAPER, TAPER = 0.2
 
-All give the same centre pixel, Beta(a0, a0) with E|X - 1/2| = deviation.
-Near the walls only "mean_abs" keeps the spread fixed, which pushes the voters on
-the far side of the median away (docs/math.typ).
+Both give the same centre pixel, Beta(a0, a0) with E|X - 1/2| = deviation.
+Near the walls "mean_abs" pushes the voters on the far side of the median twice as far
+out, "rms" by sqrt(2) (docs/math.typ).
 
 A voter's strict ranking of the candidates changes only when the voter crosses
 the perpendicular bisector of some pair of candidates. The bisectors cut the unit
@@ -39,13 +38,10 @@ QUAD_NODES = 24  # Gauss-Legendre points per edge integral
 NODES = 49
 EPS = 1e-12
 
-Spread = Literal["mean_abs", "rms", "tapered"]
+Spread = Literal["mean_abs", "rms"]
 SPREADS = get_args(Spread)
 SPREAD: Spread = "rms"
 CONTINUATION_STEP = 0.25  # largest step in logit(median) of the mean_abs solver
-# Exponent of the "tapered" rule, found by optimisation: it gave the straightest
-# Condorcet borders at equal numbers of cycle pixels in a benchmark (docs/math.typ).
-TAPER = 0.2
 
 # ---------------------------------------------------------------- Beta parameters
 
@@ -147,12 +143,6 @@ def _upper_params(upper, deviation, spread):
             x0 = _solve_beta(median, deviation, x0)
             solved[k], z0 = x0, z
         return solved
-    if spread == "tapered":
-        # 4 m (1 - m) is 1 at the centre and falls to 0 at the walls. Only within
-        # ~1e-5 of a wall does a + b get so small that the spread grows again.
-        kappa = 2 * a0 * (4 * upper * (1 - upper)) ** TAPER
-        b = np.array([_b_for_median(k, median) for k, median in zip(kappa, upper)])
-        return np.column_stack([kappa - b, b])
     return _solve_rms(upper, a0)
 
 

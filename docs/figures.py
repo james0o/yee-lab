@@ -8,6 +8,7 @@ layouts of the chapter on the shapes of win regions.
 """
 
 import sys
+from itertools import combinations
 from pathlib import Path
 
 import matplotlib
@@ -26,8 +27,9 @@ from scipy.stats import beta as beta_dist
 from yeelab import normal, ranking_cells
 from yeelab.approval import GAP, HALF, coverage
 from yeelab.build import Voters
+from yeelab.margin.geometric import geometric_median_at, geometric_medians
 from yeelab.margin.regions import MARGINS, regions, winners
-from yeelab.margin.shares import Model
+from yeelab.margin.shares import Model, pairwise_shares
 from yeelab.pixels import beta as pixel_beta, normal as pixel_normal
 from yeelab.pixels.methods import _pairwise_preferences, borda, condorcet, fptp, irv, schulze, voronoi
 from yeelab.voting import CYCLE
@@ -39,12 +41,11 @@ PIXELS = 300
 DEVIATION = 0.3
 SPREAD = ranking_cells.SPREAD
 # the spread rules in the order of the document: default first, legacy last
-RULES = ("rms", "tapered", "mean_abs")
+RULES = ("rms", "mean_abs")
 assert set(RULES) == set(ranking_cells.SPREADS) and RULES[0] == SPREAD
 # one line style per rule as well as a colour, so a rule is never told by colour alone
 RULE_STYLE = {
     "rms": {"color": "#4e79a7", "linestyle": "-"},
-    "tapered": {"color": "#59a14f", "linestyle": "--"},
     "mean_abs": {"color": "#e15759", "linestyle": ":"},
 }
 NAMES = "ABCDE"
@@ -764,6 +765,106 @@ def polygon_example():
     fig.savefig(FIGURES / "polygons.png", dpi=150)
     plt.close(fig)
 
+# ---------------------------------------------------------------- pixels at the geometric median
+
+OUTERMOST = MEDIANS[0]  # the median closest to a wall
+
+
+def _border_distances(model):
+    """How far the pairwise majority borders are from the bisectors, at every point where
+    a border crosses a line of the pixel grid: (with pixels at the medians along the axes,
+    with pixels at the geometric medians). A crossing is placed along the grid edge by
+    linear interpolation, and along the moved edge for the geometric medians, as
+    margin/regions.py does."""
+    above = ranking_cells.interpolate_to(pairwise_shares(CANDIDATES, model), model.medians, MEDIANS,
+                                         model.transform)
+    drawn = [np.stack(np.meshgrid(MEDIANS, MEDIANS, indexing="ij"), axis=-1),
+             geometric_medians(model, MEDIANS)]
+    distances = [[], []]
+    for c, e in combinations(range(len(CANDIDATES)), 2):
+        lead = above[..., c, e].astype(np.float64) - 0.5
+        direction = CANDIDATES[e] - CANDIDATES[c]
+        offset = (CANDIDATES[e] @ CANDIDATES[e] - CANDIDATES[c] @ CANDIDATES[c]) / 2
+        for axis in (0, 1):
+            before, after = np.moveaxis(lead, axis, 0)[:-1], np.moveaxis(lead, axis, 0)[1:]
+            crossing = np.sign(before) != np.sign(after)
+            t = before[crossing] / (before[crossing] - after[crossing])
+            for points, out in zip(drawn, distances):
+                points = np.moveaxis(points, axis, 0)
+                p = points[:-1][crossing] + t[:, None] * (points[1:] - points[:-1])[crossing]
+                out.append(np.abs(p @ direction - offset) / np.linalg.norm(direction))
+    return [np.concatenate(d) for d in distances]
+
+
+def _fill_regions(ax, shapes):
+    """Every polygon filled even-odd in the colour of its winner; black: no Condorcet winner."""
+    for region in shapes:
+        for polygon in region["polygons"]:
+            rings = [np.reshape(ring, (-1, 2)) for ring in polygon]
+            path = MplPath.make_compound_path(*[MplPath(ring, closed=True) for ring in rings])
+            ax.add_patch(PathPatch(path, facecolor=PALETTE[region["winner"]], lw=0))
+
+
+def geometric_median():
+    """Pixels at the geometric median of their voters: where g moves a pixel, the strip it
+    leaves along the walls, and the Condorcet borders against the bisectors."""
+    print("geometric median g of the voters with medians (m, 1/2) and (m, m): its first coordinate")
+    for deviation in (0.2, DEVIATION):
+        model = Model("beta", deviation, SPREAD)
+        for m in (0.5, 0.7, 0.9, 0.98, 1 - OUTERMOST):
+            (a, b), = ranking_cells.beta_params_at([m], deviation, SPREAD)
+            g = geometric_median_at(model, [[m, 0.5], [m, m]])[:, 0]
+            print(f"  D = {deviation} median {m:.4f}: g {g[0]:.3f} (m, 1/2), {g[1]:.3f} (m, m); "
+                  f"mean {a / (a + b):.3f}")
+
+    print("strip along the walls: distance of g from the wall for the outermost medians, "
+          "in the middle of a wall and at a corner; part of the square that is no geometric median")
+    for spread in RULES:
+        for deviation in (0.1, 0.2, DEVIATION, 0.4):
+            model = Model("beta", deviation, spread)
+            g = geometric_medians(model, MEDIANS)
+            outline = np.concatenate([g[:, 0], g[-1, 1:], g[-2::-1, -1], g[0, -2:0:-1]])
+            closer = geometric_median_at(model, [[1e-6, 0.5], [1e-6, 1e-6]])[:, 0]
+            print(f"  {spread:8s} D = {deviation}: middle {g[0, PIXELS // 2, 0]:.3f}, corner {g[0, 0, 0]:.3f}, "
+                  f"empty {1 - _signed_area(outline):.1%}; with a median of 1e-6: "
+                  f"middle {closer[0]:.3f}, corner {closer[1]:.4f}")
+
+    print("distance of the pairwise majority borders from the bisectors, mean (largest): "
+          "pixels at the medians along the axes -> at the geometric medians")
+    for spread in RULES:
+        for deviation in (0.2, DEVIATION):
+            at_median, at_geometric = _border_distances(Model("beta", deviation, spread))
+            print(f"  {spread:8s} D = {deviation}: {at_median.mean():.4f} ({at_median.max():.3f}) -> "
+                  f"{at_geometric.mean():.4f} ({at_geometric.max():.3f}), "
+                  f"{at_geometric.mean() / at_median.mean():.0%} of it, at {len(at_median)} crossings")
+
+    model = Model("beta", DEVIATION, SPREAD)
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4.2))
+    for ax, (pixel_median, title) in zip(axes, (("marginal", "at the medians along the axes"),
+                                                ("geometric", "at the geometric medians"))):
+        _fill_regions(ax, regions("condorcet", CANDIDATES, model, FINAL_GRID, pixel_median))
+        voronoi_lines(ax, CANDIDATES, colors="white", linewidths=0.9)
+        ax.scatter(*CANDIDATES.T, c=PALETTE[:5], s=45, edgecolors="k", linewidths=1, zorder=3)
+        for name, (x, y) in zip(NAMES, CANDIDATES):
+            ax.annotate(name, (x + 0.015, y + 0.015), weight="bold", fontsize=9)
+        ax.set_title(f"Condorcet winner, pixels {title}", fontsize=10)
+    ax = axes[2]
+    lines = np.concatenate([[OUTERMOST], np.arange(1, 10) / 10, [1 - OUTERMOST]])
+    along = np.linspace(OUTERMOST, 1 - OUTERMOST, 400)
+    for k, m in enumerate(lines):
+        style = {"color": "k", "lw": 1.2} if k in (0, len(lines) - 1) else {"color": "0.55", "lw": 0.7}
+        fixed = np.full_like(along, m)
+        ax.plot(*geometric_median_at(model, np.column_stack([fixed, along])).T, **style)
+        ax.plot(*geometric_median_at(model, np.column_stack([along, fixed])).T, **style)
+    ax.set_title("lines of equal $m_x$ and of equal $m_y$, moved by $g$", fontsize=10)
+    for ax in axes:
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_aspect("equal")
+    fig.tight_layout()
+    fig.savefig(FIGURES / "geometric.png", dpi=150)
+    plt.close(fig)
+
 # ---------------------------------------------------------------- approval voting
 
 # the approval methods of the web UI: name, label and cut of the ballot
@@ -821,4 +922,5 @@ if __name__ == "__main__":
     margin_example()
     margin_fields()
     polygon_example()
+    geometric_median()
     approval()

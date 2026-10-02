@@ -344,12 +344,10 @@ def test_api_draws_pixels_at_either_median():
 
 def test_api_returns_a_quarter_of_the_pixels_of_each_point():
     client = TestClient(app)
-    response = client.get("/api/geometric", params={"deviation": 0.25, "spread": "rms"})
+    response = client.get("/api/geometric", params={"deviation": 0.25})
     assert response.status_code == 200
     half = PIXELS // 2
     np.testing.assert_array_equal(np.reshape(response.json()["pixels"], (half, half)),
                                   pixels_at(MODEL)[:half, :half])
-    assert client.get("/api/geometric", params={"deviation": 0.25}).json() == response.json()
     assert client.get("/api/geometric", params={"deviation": 0.26}).status_code == 422
-    assert client.get("/api/geometric", params={"deviation": 0.25, "spread": "wide"}).status_code == 422
     assert client.get("/api/geometric").status_code == 422

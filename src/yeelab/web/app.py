@@ -21,7 +21,7 @@ from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, pi
 from yeelab.margin.regions import MARGINS, regions
 from yeelab.margin.shares import PIXELS, Model
 from yeelab.normal import sigma_from_deviation
-from yeelab.ranking_cells import SPREAD, SPREADS, TAPER, Spread, beta_params
+from yeelab.ranking_cells import SPREAD, beta_params
 
 # Methods follow a drag within ~5-30 ms; IRV needs every ranking cell and takes up to
 # ~0.1 s for 8 candidates (see docs/math.typ).
@@ -125,31 +125,15 @@ DISTRIBUTION_INFO = {
     },
 }
 assert set(DISTRIBUTION_INFO) == set(DISTRIBUTIONS)
-# Each Beta spread rule: plain label, LaTeX label (typeset by KaTeX in the UI) and
-# tooltip, in the order the UI lists them. All rules agree at the centre pixel.
+# The UI's Beta voters all follow one spread rule, the default one: what it keeps the same
+# for every pixel, as a plain label, a LaTeX label (typeset by KaTeX in the UI) and a tooltip.
 SPREAD_INFO = {
-    "rms": {
-        "label": "RMS of X − m",
-        "tex": r"\sqrt{\operatorname{E}(X-m)^2}",
-        "description": "Every pixel has the same root mean square distance of its voters from "
-        "the median. A few distant voters are enough near a wall, so the rest stay put.",
-    },
-    "tapered": {
-        "label": f"(a + b) × (4m(1−m))^{TAPER:g}",
-        "tex": rf"(a+b)\,\bigl(4m(1-m)\bigr)^{{{TAPER:g}}}",
-        "description": f"a + b shrinks towards the walls like (4m(1 − m))^{TAPER:g} times its "
-        "centre value. The exponent is the result of an optimisation: it gave the straightest "
-        "Condorcet borders at equal numbers of cycles. It behaves very much like the RMS rule.",
-    },
-    "mean_abs": {
-        "label": "mean |X − m| (legacy)",
-        "tex": r"\operatorname{E}|X-m|\ \text{(legacy)}",
-        "description": "The original rule: every pixel has the same mean distance of its voters "
-        "from the median. Near a wall this pushes the voters on the far side of the median "
-        "away, which bends borders and makes round edges.",
-    },
+    "label": "RMS of X − m",
+    "tex": r"\sqrt{\operatorname{E}(X-m)^2}",
+    "description": "Every pixel has the same root mean square distance of its voters from "
+    "the median along each axis.",
 }
-assert set(SPREAD_INFO) == set(SPREADS)
+assert SPREAD == "rms"
 # What a pixel is, for Beta voters: label and tooltip, in the order the UI lists them.
 PIXEL_MEDIAN_INFO = {
     "marginal": {
@@ -178,7 +162,6 @@ class DiagramRequest(BaseModel):
     )
     method: Annotated[str, Field(pattern=f"^({'|'.join(DIAGRAMS)})$")]
     distribution: Distribution = "beta"
-    spread: Spread = SPREAD  # Beta only
     pixel_median: PixelMedian = PIXEL_MEDIAN  # Beta only
     deviation: float = DEVIATION
     half: float = Field(HALF_SHARE, ge=0, le=1)  # approval_mix only
@@ -214,15 +197,13 @@ threading.Thread(target=_warm_up, daemon=True).start()
 @lru_cache(maxsize=1)
 def _voters():
     """Per deviation: sigma of the normal voters and (a, b) of the Beta voters along
-    one axis for every pixel, shape (PIXELS, 2), per spread rule. Independent of the
-    candidates, so computed once."""
+    one axis for every pixel, shape (PIXELS, 2). Independent of the candidates, so
+    computed once."""
     return [
         {
             "deviation": deviation,
             "sigma": sigma_from_deviation(deviation),
-            "beta_params": {
-                spread: beta_params(PIXELS, deviation, spread).tolist() for spread in SPREADS
-            },
+            "beta_params": beta_params(PIXELS, deviation, SPREAD).tolist(),
         }
         for deviation in DEVIATIONS
     ]
@@ -239,8 +220,7 @@ def config():
         ],
         "ideals": [{"name": name, **METHOD_INFO[name]} for name in IDEALS],
         "distributions": [{"name": name, **info} for name, info in DISTRIBUTION_INFO.items()],
-        "spreads": [{"name": name, **info} for name, info in SPREAD_INFO.items()],
-        "spread": SPREAD,
+        "spread": SPREAD_INFO,
         "pixel_medians": [{"name": name, **info} for name, info in PIXEL_MEDIAN_INFO.items()],
         "pixel_median": PIXEL_MEDIAN,
         "candidates": CANDIDATES,
@@ -268,7 +248,7 @@ def diagram_regions(request: DiagramRequest):
     rings flat [x0, y0, x1, y1, ...], outer rings counter-clockwise and holes
     clockwise. winner is -1 (voting.CYCLE) for a Condorcet cycle."""
     start = time.perf_counter()
-    spread = request.spread if request.distribution == "beta" else None
+    spread = SPREAD if request.distribution == "beta" else None
     model = Model(request.distribution, request.deviation, spread)
     build = SLIDERS.get(request.method)  # built from the sliders
     method = build(request) if build else request.method
@@ -278,9 +258,9 @@ def diagram_regions(request: DiagramRequest):
     return Response(json.dumps(payload, separators=(",", ":")), media_type="application/json")
 
 
-@lru_cache(maxsize=len(DEVIATIONS) * len(SPREADS))  # ~0.1 MB each, built in ~0.1 s
-def _pixels_at(deviation: float, spread: Spread) -> str:
-    at = pixels_at(Model("beta", deviation, spread))
+@lru_cache(maxsize=len(DEVIATIONS))  # ~0.1 MB each, built in ~0.1 s
+def _pixels_at(deviation: float) -> str:
+    at = pixels_at(Model("beta", deviation, SPREAD))
     return json.dumps({"pixels": at[:PIXELS // 2, :PIXELS // 2].ravel().tolist()}, separators=(",", ":"))
 
 
@@ -288,13 +268,13 @@ assert PIXELS % 2 == 0  # so a quarter of the pixels is a quarter of the square
 
 
 @app.get("/api/geometric")
-def geometric_pixels(deviation: Annotated[float, AfterValidator(_offered)], spread: Spread = SPREAD):
+def geometric_pixels(deviation: Annotated[float, AfterValidator(_offered)]):
     """For the voters shown while hovering a diagram of geometric medians (Beta voters):
     {"pixels": [...]}, for the point (i + 1/2, j + 1/2) / PIXELS at [i * PIXELS / 2 + j]
     the pixel (k, l), as k * PIXELS + l, whose voters have their geometric median closest
     to the point, or -1 if no voters have it there. Only the quarter of the square next
     to the origin, i, j < PIXELS / 2: the rest are its mirror images."""
-    return Response(_pixels_at(deviation, spread), media_type="application/json")
+    return Response(_pixels_at(deviation), media_type="application/json")
 
 
 # Last, so that /api/... is matched first; "/" serves ui/index.html.

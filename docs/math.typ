@@ -33,7 +33,8 @@ turn these shares into winners. @ch-compare explains why Beta and normal voters 
 different diagrams. @ch-spread compares the spread rules and explains why `rms` is the
 default. @ch-shapes asks when a candidate's region is convex or in one piece, and how
 that relates to the monotonicity of the method. @ch-realtime shows how the web UI draws
-the regions as curves fast enough to follow a dragged candidate.
+the regions as curves fast enough to follow a dragged candidate. @ch-geometric describes
+the diagram in which every pixel is drawn at the geometric median of its voters.
 
 The settings that appear in the mathematics, with their defaults (file names are in the
 package `src/yeelab/`):
@@ -48,10 +49,10 @@ package `src/yeelab/`):
   [pixels per axis], [$n$], [`--pixels` (`pixels/plot.py`), `PIXELS` (`margin/shares.py`)], [400 / 300],
   [deviation], [$D$], [`--deviation`, _Deviation_ slider], [0.2],
   [voter distribution], [], [`--distribution`, _Voters_], [Beta],
-  [Beta spread rule], [], [`--spread`, _Beta spread fixed_], [`rms`],
+  [Beta spread rule], [], [`--spread`; the web UI always uses `rms`], [`rms`],
+  [what a pixel is (Beta, UI)], [], [_Pixel is_, `PIXEL_MEDIAN` (`margin/geometric.py`)], [median along each axis],
   [interpolation nodes per axis], [$N$], [`--nodes` (`NODES`)], [49],
   [Gauss–Legendre points per edge], [$Q$], [`QUAD_NODES`], [24],
-  [exponent of `tapered`], [$tau$], [`TAPER`], [0.2],
   [voter grid of the approval shares], [$K$], [`APPROVAL_CELLS`, `APPROVAL_SUB` (`margin/shares.py`)], [256, 8],
   [contour grid per axis (UI)], [$G$], [`DRAG_GRID` / `FINAL_GRID` (`web/app.py`)], [160 / 320],
   table.hline(),
@@ -190,9 +191,9 @@ it must lie twice as far. For the power mean $(E|X - m|^p)^(1/p)$ the same argum
 gives a factor $2^(1/p)$: $2$ for $p = 1$, $sqrt(2) approx 1.41$ for the root mean
 square, $1.26$ for $p = 3$. This holds for every distribution on $[0, 1]$, not only for
 Beta. Every rule therefore decides, in effect, how far the far half of the voters is
-pushed out near a wall, and this is what the three rules differ in.
+pushed out near a wall, and this is what the two rules differ in.
 
-=== The three rules
+=== The two rules
 
 *`rms` (default).* The root mean square distance of the voters from the median is the
 same as at the centre pixel,
@@ -202,22 +203,8 @@ $ sqrt(E(X - m)^2) = s = 1 / (2 sqrt(2 a_0 + 1)), quad E(X - m)^2 = "Var" X + (m
 where $s$ is the standard deviation of $Beta(a_0, a_0)$ ($s = 0.237$ for $D = 0.2$,
 $0.337$ for $D = 0.3$). The square weights distant voters more, so near a wall a few
 voters far out make up the spread and the rest of the far half stays where it is. It is
-the rule with the clearest meaning, and its borders bend only slightly more than those
-of the best rule found (@sec-bench).
-
-*`tapered`.* The concentration is prescribed directly,
-
-$ kappa(m) = 2 a_0 (4 m (1 - m))^tau, quad tau = 0.2 . $ <eq-tapered>
-
-Since $mu (1 - mu)$ is the largest variance any distribution on $[0, 1]$ with mean $mu$
-can have, $1 slash (kappa + 1)$ is the share of that room which the electorate of the
-pixel uses, and $4 m (1 - m)$ measures the room around the median ($1$ at the centre,
-$0$ at a wall). The rule lets electorates near a wall use a little more of their room;
-at $D = 0.3$: 45 % at the centre, 50 % at $m = 0.9$, 58 % at $m = 0.98$. The exponent
-is empirical: it gave the straightest Condorcet borders at equal numbers of cycles in a
-benchmark (@sec-bench). The rule behaves very much like `rms`. Only within about
-$10^(-5)$ of a wall, which no practical pixel grid reaches, does $kappa$ become so small
-that the spread grows again.
+the rule with the clearest meaning, and of the rules compared in @sec-bench its borders
+are among the straightest. The web UI uses it for all its Beta voters.
 
 *`mean_abs` (legacy).* The mean absolute deviation is $D$ for every median,
 $E|X - m| = D$. This was the first rule, and it is kept to reproduce older results.
@@ -225,14 +212,15 @@ Because it keeps the mean absolute deviation fixed, @eq-push applies in full: ne
 wall the far half of the voters is pushed twice as far out, towards the opposite wall.
 At median $0.98$ the share of voters below $0.1$ is back at $0.192$, more than at the
 centre, where `rms` has $0.049$ (@fig-densities). This push bends Condorcet borders,
-adds cycles and gives IRV a round edge that the other rules do not have (@ch-spread).
+adds cycles and gives IRV a round edge that `rms` does not have (@ch-spread). It is not
+offered in the web UI; `--spread mean_abs` selects it for the plots.
 
 #figure(
   image("figures/spread_densities.png", width: 100%),
   caption: [Density of one coordinate of a pixel's voters, $D = 0.3$, for medians
-    moving towards the wall at $1$ (grey: the median). All rules agree at the centre.
-    Near the wall `mean_abs` moves many voters to the opposite wall; `rms` and
-    `tapered` hardly differ.],
+    moving towards the wall at $1$ (grey: the median). Both rules agree at the centre.
+    Near the wall `mean_abs` moves many voters to the opposite wall; `rms` moves far
+    fewer.],
 ) <fig-densities>
 
 #block(breakable: false)[
@@ -248,15 +236,12 @@ At $D = 0.3$ (`docs/figures.py`):
   [0.50], [all], [1.204], [0.500], [0.300], [0.337], [0.175],
   table.hline(stroke: 0.3pt),
   [0.70], [`rms`], [1.197], [0.621], [0.283], [0.337], [0.095],
-  [], [`tapered`], [1.163], [0.619], [0.286], [0.340], [0.099],
   [], [`mean_abs`], [1.012], [0.612], [0.300], [0.355], [0.121],
   table.hline(stroke: 0.3pt),
   [0.90], [`rms`], [1.062], [0.750], [0.229], [0.337], [0.051],
-  [], [`tapered`], [0.982], [0.743], [0.237], [0.348], [0.059],
   [], [`mean_abs`], [0.554], [0.685], [0.300], [0.430], [0.146],
   table.hline(stroke: 0.3pt),
   [0.98], [`rms`], [0.799], [0.812], [0.186], [0.337], [0.049],
-  [], [`tapered`], [0.724], [0.801], [0.197], [0.353], [0.059],
   [], [`mean_abs`], [0.307], [0.698], [0.300], [0.490], [0.192],
   table.hline(),
 ))
@@ -270,7 +255,7 @@ medians below $1/2$ get the mirrored parameters.
 *The median for a given concentration* (`_b_for_median`). For a fixed $kappa = a + b$
 the median of $Beta(kappa - b, b)$ decreases from $1$ to $1/2$ as $b$ grows from $0$ to
 $kappa slash 2$, so @eq-median has exactly one root, found by bracketing $b$ (Brent's
-method). `tapered` computes $kappa(m)$ from @eq-tapered and needs nothing else.
+method).
 
 *`rms`* (`_solve_rms`). Along the Beta distributions with median $m$, the RMS distance
 @eq-rms, which is explicit in $(a, b)$, decreases as $kappa$ grows. An outer bracketing
@@ -1003,7 +988,7 @@ All numbers below use the candidates A–E (@fig-cells), the default spread rule
 $300 times 300$ pixels, $49 times 49$ nodes and $D = 0.3$. This is more than the default
 $0.2$ so that the effects are easy to see; at $0.2$ they are the same in kind but smaller
 (@sec-whole). The numbers and figures are produced by `docs/figures.py`. How the
-other spread rules change them is the subject of @ch-spread.
+other spread rule changes them is the subject of @ch-spread.
 
 #figure(
   image("figures/compare.png", width: 100%),
@@ -1093,6 +1078,9 @@ towards the mean of the voters. Consequently:
   @fig-compare). If some point were a median in every direction (a "total median",
   Davis, DeGroot and Hinich, 1972), the argument of the normal case would apply with
   that point in place of $m$; a product of skewed Beta marginals generally has none.
+
+@ch-geometric draws every pixel at the geometric median of its voters instead of at $m$,
+which takes back part of this shift for every direction at once.
 
 === The shape of Beta voters <sec-skew>
 
@@ -1300,7 +1288,7 @@ keeps widening, so nothing piles up at the wall.
 ) <fig-voters-wall>
 
 The flare is a property of any wide Beta, not of the spread rule: it is nearly the
-same under `tapered` and `mean_abs` (@ch-spread). It fades with less spread: at
+same under `mean_abs` (@ch-spread). It fades with less spread: at
 $D = 0.2$ the B|E border rises by only $0.030$, like normal voters at $D = 0.3$.
 
 == Summary
@@ -1323,7 +1311,7 @@ $D = 0.2$ the B|E border rises by only $0.030$, like normal voters at $D = 0.3$.
 
 = Choosing the spread rule <ch-spread>
 
-@sec-spreads defined three spread rules. They agree at the centre pixel and differ only
+@sec-spreads defined two spread rules. They agree at the centre pixel and differ only
 in how the spread changes towards the walls. This chapter shows what that changes in
 the diagrams, explains which property of a rule keeps borders straight, and gives the
 evidence for the default `rms`. Unless stated otherwise the numbers use the candidates
@@ -1331,11 +1319,11 @@ A–E, $D = 0.3$ and $300 times 300$ pixels. `docs/figures.py` reproduces the fi
 the numbers on the default candidates; the benchmark over random candidate layouts
 (@sec-bench) was run with separate scripts.
 
-== The three rules on the default candidates
+== The two rules on the default candidates
 
 #figure(
   image("figures/spread_rules.png", width: 100%),
-  caption: [The three spread rules of @sec-spreads on the default candidates,
+  caption: [The two spread rules of @sec-spreads on the default candidates,
     $D = 0.3$. Only `mean_abs` has the round IRV edge. Black: no Condorcet winner.],
 ) <fig-spread-rules>
 
@@ -1347,17 +1335,16 @@ the numbers on the default candidates; the benchmark over random candidate layou
   [voter model], [cycle pixels], [Schulze $!=$ Voronoi], [round IRV edge], [flare of B],
   table.hline(stroke: 0.5pt),
   [Beta, `rms`], [1.23 %], [14.2 %], [no], [0.083],
-  [Beta, `tapered`], [1.32 %], [14.9 %], [no], [0.086],
   [Beta, `mean_abs`], [2.06 %], [20.2 %], [yes], [0.096],
   [normal], [0], [0], [no], [0.030],
   table.hline(),
 ))
 
 (Flare of B: rise of the B|E border over the last $0.075$ before the left wall,
-@sec-flare.) `rms` and `tapered` give nearly the same diagrams. `mean_abs` has 1.7
-times as many cycle pixels, more distorted Condorcet regions and a round IRV edge. The
-FPTP flare is almost the same under all three rules: it comes from the crowding of
-voters at the wall, which does not depend on the rule.
+@sec-flare.) Compared with `rms`, `mean_abs` has 1.7 times as many cycle pixels, more
+distorted Condorcet regions and a round IRV edge. The FPTP flare is almost the same
+under both rules: it comes from the crowding of voters at the wall, which does not
+depend on the rule.
 
 == The round IRV edge of `mean_abs` <sec-irv-edge>
 
@@ -1433,25 +1420,19 @@ i.e. when $(m - E X) slash (m - 1/2)$ is constant. No small-spread assumption is
   table.hline(stroke: 0.5pt),
   [fixed $a + b$], [0.40], [0.39], [0.38], [0.35], [0.27],
   [`rms`], [0.40], [0.40], [0.39], [0.37], [0.35],
-  [`tapered`, $tau = 0.2$], [0.40], [0.40], [0.40], [0.39], [0.37],
-  [`tapered`, $tau = 0.25$], [0.40], [0.41], [0.41], [0.41], [0.40],
   [`mean_abs`], [0.41], [0.44], [0.48], [0.54], [0.59],
   table.hline(),
 ))
 
 There are two ways to fail. With a fixed $a + b$ the far tail thins out near a wall,
 the mean catches up with the median and the pull stalls. With a fixed $E|X - m|$ the
-far half is pushed away (@eq-push) and the pull accelerates. `rms` and `tapered` lie in
-between, close to constant.
+far half is pushed away (@eq-push) and the pull accelerates. `rms` lies in between,
+close to constant.
 
 *Diagonal borders.* At $45 degree$ both coordinates are skewed at once. Exact border
 shapes bend one way for fixed $a + b$ and the other way for fixed $E|X - m|$, confirming
-the two failure modes, but the balance point moves with position: near the centre a
-smaller $tau$ is straighter, towards the corners $tau approx 0.2$–$0.25$. Near-axis
-borders prefer $0.25$, diagonal ones near the centre less, and the benchmark below puts
-the compromise at $0.2$. Above $0.25$ both kinds bend the wrong way, which is why the
-optimum is sharp. The textbook skewness approximation of the median is off by about a
-factor of two at $D = 0.3$, so the exponent has to be found empirically.
+the two failure modes. Where the balance between them lies depends on the position in
+the square, so no single curve $kappa(m)$ keeps every border straight.
 
 *Why cycles survive.* Straightness depends on how the pull changes with the position
 of the pixel, cycles on how it changes with the direction $nu$. Projections of two
@@ -1496,12 +1477,12 @@ comparison is the bend at the *same share of cycle pixels*.
 The benchmark therefore swept $D in {0.2, 0.25, 0.3, 0.35, 0.4}$ for every rule and
 compared the bend at equal shares of cycle pixels, interpolating in $D$. The score is
 the bend of the _visible_ Condorcet borders (where both candidates beat all others),
-on layouts of 3–6 candidates drawn uniformly from $[0.1, 0.9]^2$. A first screen on 24
-layouts ruled out most rules (bend relative to `rms`): fixed $a + b$ 2.83, `mean_abs`
-2.41, RMS of $arcsin sqrt(X)$ 2.00, $tau = 0.1$ 1.92, far-side RMS 1.84, $L_3$ 1.35,
-$L_(2.5)$ 1.21, $L_(2.25)$ 1.10. The remaining rules were checked on 30 new layouts,
-with 95 % bootstrap intervals over layouts, at three cycle levels (those of `rms` at
-$D = 0.25, 0.3, 0.35$):
+on layouts of 3–6 candidates drawn uniformly from $[0.1, 0.9]^2$. On a first set of 24
+layouts most rules bend more than `rms` (bend relative to `rms`): fixed $a + b$ 2.83,
+`mean_abs` 2.41, RMS of $arcsin sqrt(X)$ 2.00, far-side RMS 1.84, $L_3$ 1.35,
+$L_(2.5)$ 1.21, $L_(2.25)$ 1.10. The power means below $2$ were checked on 30 new
+layouts, with 95 % bootstrap intervals over layouts, at three cycle levels (those of
+`rms` at $D = 0.25, 0.3, 0.35$):
 
 #align(center, table(
   columns: 4,
@@ -1510,20 +1491,14 @@ $D = 0.25, 0.3, 0.35$):
   table.hline(),
   [rule], [$D = 0.25$ level], [$D = 0.3$ level], [$D = 0.35$ level],
   table.hline(stroke: 0.5pt),
-  [`tapered`, $tau = 0.2$], [0.66 [0.62, 0.70]], [0.63 [0.59, 0.70]], [0.56 [0.49, 0.65]],
-  [`tapered`, $tau = 0.25$], [0.76 [0.67, 0.87]], [0.90 [0.75, 1.07]], [1.03 [0.81, 1.28]],
-  [`tapered`, $tau = 0.3$], [1.52], [1.97], [2.14],
-  [`tapered`, $tau = 0.4$], [3.55], [4.49], [4.30],
-  [`tapered`, $tau = 0.5$], [5.94], [7.25], [6.80],
   [$L_(1.75)$], [1.01 [0.96, 1.05]], [0.92 [0.88, 0.98]], [0.77 [0.73, 0.80]],
   [$L_(1.5)$], [1.14 [1.05, 1.24]], [0.94 [0.83, 1.08]], [0.67 [0.60, 0.77]],
   table.hline(),
 ))
 
-The whole pairwise borders (visible or not) give the same picture: $tau = 0.2$ at 0.79,
-0.79 and 0.52 of `rms`. In absolute terms the gain is small: at $D = 0.3$ visible
-borders bend by 1.5 pixels on average with `rms` and 1.0 with `tapered` (90th
-percentile 3.1 and 2.0 pixels; the single worst border 4.9 and 7.7 pixels).
+They bend as much as `rms` or more at the lowest level and less at the higher ones. In
+absolute terms the bend of `rms` is small: at $D = 0.3$ its visible borders bend by 1.5
+pixels on average (90th percentile 3.1 pixels, the single worst border 4.9 pixels).
 
 == Other ways to fix the spread
 
@@ -1537,12 +1512,11 @@ percentile 3.1 and 2.0 pixels; the single worst border 4.9 and 7.7 pixels).
 
 == Conclusion
 
-- *`rms`* is the default. It fixes a quantity with a clear meaning, pushes the far half
-  of the voters out only by $sqrt(2)$ near a wall, has no round IRV edge, and its
-  borders bend only slightly more than those of the best rule found (1.5 against 1.0
-  pixels on average).
-- *`tapered`* keeps Condorcet borders a little straighter at the same number of cycles
-  and otherwise behaves like `rms`; its exponent is empirical.
+- *`rms`* is the default, and the only rule of the web UI. It fixes a quantity with a
+  clear meaning, pushes the far half of the voters out only by $sqrt(2)$ near a wall,
+  has no round IRV edge, and its borders bend by 1.5 pixels on average at $D = 0.3$; of
+  the rules compared, only power means slightly below $2$ bend less, and only at larger
+  spreads.
 - *`mean_abs`* is kept to reproduce results made with it (caches and plots are kept
   apart per rule, `pixels/cache/beta/<spread>/`, `pixels/plots/beta/<spread>/`). By @eq-push it
   pushes the far half of the voters out twice as far near a wall, which bends borders
@@ -1785,7 +1759,6 @@ between two medians, over all $t$.
   [rule], [grows from], [largest rise], [grows from], [largest rise],
   table.hline(stroke: 0.5pt),
   [`rms`], [0.773], [0.011], [0.900], [0.018],
-  [`tapered`], [0.885], [0.013], [0.884], [0.036],
   [`mean_abs`], [0.673], [0.097], [0.654], [0.146],
   table.hline(),
 ))
@@ -1839,8 +1812,8 @@ on the number of pixels at all. Drawing the diagram as curves instead of pixels
 from computing fewer integrals (@sec-needs), keeping those a drag does not change
 (@sec-edge-cache), making each one cheaper (@sec-tables), and compiling the loops that
 remain (@sec-compiled). This chapter describes `margin/` (`shares.py`, `beta_tables.py`
-and `regions.py`) and the methods built from blocks in `build/`, which `web/app.py`
-uses for the UI.
+and `regions.py`; `geometric.py` is the subject of @ch-geometric) and the methods built
+from blocks in `build/`, which `web/app.py` uses for the UI.
 `docs/figures.py` (apart from the examples of @sec-zero-sets), the plots and the tests of
 @sec-validation still use the pipeline of @ch-compute, which is in `pixels/`. The two never import each other; what both need
 (`ranking_cells.py`, `normal.py`, `voting.py`, `threads.py`) is at the top of the package.
@@ -2342,3 +2315,247 @@ the integral of $omega$ along each bisector were tabulated once, as a function o
 position on it, every edge would be a difference of two values, and the cost would grow
 with the number of lines (28 for 8 candidates) instead of edges (468). This is not
 implemented.
+
+#pagebreak()
+
+= Pixels at the geometric median <ch-geometric>
+
+A Beta pixel is the median of its voters along $x$ and along $y$. That is a median only
+in the directions of the axes, which is the root of the distorted Condorcet regions of
+@ch-compare. The web UI can draw every election at the *geometric median* of its voters
+instead (_Pixel is: the geometric median_), a centre that does not depend on the axes.
+This chapter defines it, describes the part of the square that the diagram then covers,
+shows what it does to the borders between the candidates, and how it is computed
+(`margin/geometric.py`). The numbers and the figure are produced by `docs/figures.py`.
+
+== The map $g$ <sec-g>
+
+The geometric median of the voters $V = (X, Y)$ of a pixel is the point with the smallest
+mean distance to them. For the voters with the medians $m = (m_x, m_y)$ along the axes,
+
+$ g(m) = op("arg min", limits: #true)_p d_m (p), quad d_m (p) = E_m |V - p| . $ <eq-geometric>
+
+(In this chapter $g$ is this map, as in the code, and not the density of $Y$.) The voters
+do not lie on one line, so $d_m$ is strictly convex and the minimum is unique. In one
+dimension the point with the smallest mean distance is the median. In the plane it is a
+different point from the pair of medians along the axes, and unlike that pair it turns
+with the voters when the plane is rotated.
+
+A diagram of geometric medians shows at the point $p$ the election of the voters with
+$g(m) = p$. The voters, their shares, the methods and the margins are those of the pixel
+$m$; only the point at which the election is drawn moves from $m$ to $g(m)$. $g$ depends
+on the voter model alone ($D$ and the spread rule), never on the candidates.
+
+- *Normal voters* are symmetric about their pixel, so $g(m) = m$ and the diagram is the
+  usual one.
+- *Symmetry.* For Beta voters $g$ leaves the centre of the square in place and commutes
+  with mirroring an axis and with swapping the axes, as the voters do. A median of $1/2$
+  along one axis stays $1/2$.
+- *Towards the centre.* Everywhere else $g$ moves the pixel towards the centre of the
+  square, the more the closer the pixel is to a wall. In the table below it lies between
+  the median and the mean of the voters.
+- *Both axes at once.* The first coordinate of $g$ depends on $m_y$ too: the same voters
+  along $x$ are moved less when $Y$ is crowded against a wall as well. So $g$ cannot be
+  found one axis at a time, as the median and the mean can.
+- *One to one.* Two different electorates of the model are never drawn at the same
+  point. This is checked numerically: the pixel grid moved by $g$ keeps the order of its
+  neighbours along both axes and never folds over, for $D = 0.05$, $0.25$ and $0.4$ and
+  both spread rules (`tests/test_geometric.py`).
+
+First coordinate of $g$ for the medians $(m, 1/2)$ and $(m, m)$, and the mean of $X$
+(`rms`, $D = 0.3$; the last row is the outermost pixel):
+
+#align(center, table(
+  columns: 4,
+  align: right,
+  stroke: none,
+  table.hline(),
+  [median $m$], [$g$ at $(m, 1/2)$], [$g$ at $(m, m)$], [mean],
+  table.hline(stroke: 0.5pt),
+  [0.50], [0.500], [0.500], [0.500],
+  [0.70], [0.662], [0.665], [0.621],
+  [0.90], [0.823], [0.844], [0.750],
+  [0.98], [0.896], [0.938], [0.812],
+  [$599 slash 600$], [0.930], [0.983], [0.838],
+  table.hline(),
+))
+
+== The coloured region <sec-g-image>
+
+#figure(
+  image("figures/geometric.png", width: 100%),
+  caption: [Beta voters (`rms`, $D = 0.3$). Left and middle: the Condorcet winner with
+    pixels at the medians along the axes and at the geometric medians. White lines: the
+    Voronoi borders (bisectors); black: no Condorcet winner. Right: the lines of equal
+    $m_x$ and of equal $m_y$ for the values $1 slash 600$, $0.1$, …, $0.9$,
+    $599 slash 600$, moved by $g$; the thick outline belongs to the outermost medians.],
+) <fig-geometric>
+
+With pixels at geometric medians the diagram no longer fills the square
+(@fig-geometric). The coloured region is exactly the set of points of the unit square
+that are the geometric median of some electorate of the model. Each of its points
+belongs to exactly one electorate, because $g$ is one to one.
+
+*It is not a part cut out of the usual diagram.* Every election of the usual diagram is
+in it and none is missing; each is only moved from its medians along the axes to its
+geometric median. The usual diagram has shrunk into the region as a whole, and nothing
+was cropped.
+
+*"Of the model" matters.* The region is not a property of the geometric median as such,
+but of this family of voters:
+
+- *The shape of the voters:* independent Beta distributions along the axes, with the
+  chosen $D$ and spread rule. So the outline changes with the _Deviation_ slider, and
+  with the rule.
+- *The range of the medians:* from $1 slash 600$ to $1 - 1 slash 600$, the outermost
+  pixel centres of the UI's $300$ pixels per axis. Medians closer to a wall would fill
+  the corners (under `rms`), but narrow the strip in the middle of a wall only slowly.
+- *Other voters* can have their geometric median anywhere in the square. Normal voters
+  have it at their pixel and cover the whole square.
+
+The table gives the width of the empty strip, that is the distance of $g$ from the wall
+for the outermost medians, in the middle of a wall and at a corner, and the part of the
+square that stays empty. The last two columns are the widths if the medians reached to
+$10^(-6)$ from the walls.
+
+#align(center, table(
+  columns: 7,
+  align: (left, right, right, right, right, right, right),
+  stroke: none,
+  table.hline(),
+  [], [], table.cell(colspan: 3, align: center)[medians from $1 slash 600$],
+  table.cell(colspan: 2, align: center)[from $10^(-6)$],
+  [rule], [$D$], [middle], [corner], [empty], [middle], [corner],
+  table.hline(stroke: 0.5pt),
+  [`rms`], [0.1], [0.018], [0.007], [6.8 %], [0.007], [0.0001],
+  [], [0.2], [0.038], [0.011], [13.4 %], [0.019], [0.0002],
+  [], [0.3], [0.070], [0.017], [22.5 %], [0.044], [0.0004],
+  [], [0.4], [0.125], [0.032], [35.9 %], [0.094], [0.0012],
+  table.hline(stroke: 0.3pt),
+  [`mean_abs`], [0.2], [0.064], [0.025], [22.7 %], [0.044], [0.0011],
+  [], [0.3], [0.141], [0.087], [45.9 %], [0.120], [0.0270],
+  table.hline(),
+))
+
+*Why a strip stays empty.* At the minimum of $d_m$ the unit vectors from $p$ towards the
+voters cancel,
+
+$ nabla d_m (p) = E_m [(p - V) / (|V - p|)] = 0 . $ <eq-balance>
+
+A median counts voters, while the geometric median balances directions. A pixel next to
+the wall $x = 0$ has half of its voters between the wall and $m_x$, which is what holds
+the median there. But these voters are spread along the wall in $y$. Seen from a point
+near the wall they lie up and down the wall, so their unit vectors nearly cancel and
+have almost no component towards the wall. The other half pulls away from the wall with
+its full weight. The balance is therefore reached inside the square, and further inside
+the further out that half lies. This is the push of @eq-push, which is why `mean_abs`
+leaves a wider strip than `rms`. In a corner both coordinates are crowded against their
+walls, so many voters sit next to the pixel in every direction and hold $g$ there: the
+strip is narrowest in the corners.
+
+No spread rule can fill the square as long as the voters keep a spread at the wall. At a
+point $p$ of the wall $x = 0$ the derivative of $d_m$ across the wall is
+$-E_m [X slash abs(V - p)]$, which is negative unless all the voters lie on the wall. So
+for voters inside the square the geometric median reaches a wall only if their spread
+across it vanishes there. Normal voters fill the square because they may leave it.
+
+== The borders between the candidates <sec-g-borders>
+
+By @ch-compare a majority prefers $c_i$ to $c_j$ where the median of the projected voters
+$V dot nu$ lies on $c_i$'s side. That median, the effective centre of the pixel in the
+direction $nu$, is shifted from $m dot nu$ towards the mean of the voters, and $g(m)$ is
+shifted the same way (@sec-g). Drawing the election at $g(m)$ therefore takes back part
+of the shift in every direction at once, and the borders move towards the bisectors
+(@fig-geometric).
+
+The table measures how far the pairwise majority borders $pi_(i j) = 1/2$ of all ten
+pairs of the candidates A–E lie from their bisectors, at the points where a border
+crosses a line of the $300 times 300$ pixel grid: the mean distance and, in brackets,
+the largest.
+
+#align(center, table(
+  columns: 4,
+  align: (left, right, right, right),
+  stroke: none,
+  table.hline(),
+  [rule], [$D$], [pixels at the medians along the axes], [pixels at the geometric medians],
+  table.hline(stroke: 0.5pt),
+  [`rms`], [0.2], [0.0165 (0.054)], [0.0106 (0.029)],
+  [], [0.3], [0.0411 (0.106)], [0.0255 (0.060)],
+  table.hline(stroke: 0.3pt),
+  [`mean_abs`], [0.2], [0.0208 (0.089)], [0.0130 (0.054)],
+  [], [0.3], [0.0549 (0.223)], [0.0317 (0.132)],
+  table.hline(),
+))
+
+About 60 % of the mean distance and a little more than half of the largest remain. For
+`rms` that is $3.2$ pixels instead of $5.0$ on average at $D = 0.2$, and $7.7$ instead
+of $12.3$ at $D = 0.3$. For the border between D and E at $D = 0.25$ the tests check the
+same: $0.045$ to $0.075$ from the bisector with pixels at the medians along the axes,
+$0.025$ to $0.039$ with pixels at the geometric medians.
+
+What the geometric median does not do:
+
+- *It does not give the Voronoi diagram.* $g(m)$ is not a median in every direction: a
+  slanted line through it need not split the voters in half, and a product of skewed
+  Beta distributions has no point through which every line does (@ch-compare). The rest
+  of the bend is the skew of the voters, and it stays.
+- *The cycles stay.* The elections are the same, so every election without a Condorcet
+  winner is still there, drawn at another point (black in @fig-geometric).
+- *Areas are not comparable.* $g$ compresses the diagram most near the walls, so the
+  share of the coloured region that a candidate wins is not its share of the pixels.
+- *The spread rule still refers to the medians along the axes.* `rms` fixes
+  $sqrt(E(X - m_x)^2)$, not the distance of the voters from $g(m)$.
+
+Every method is drawn this way. The Voronoi diagram of the UI is then drawn only inside
+the coloured region, so that a method can be compared with it.
+
+== Computing $g$ (`margin/geometric.py`) <sec-g-compute>
+
+*The mean distance.* $d_m (p)$ is a sum over the rectangles of the voter grid of
+@sec-approval. The rectangle $[x_k, x_(k + 1)] times [x_l, x_(l + 1)]$ holds the exact
+share $mu_k nu_l$ of the voters, so the infinite density of a Beta with $a < 1$ at a wall
+does no harm. Its voters count at their exact mean $(overline(x)_k, overline(y)_l)$ (the
+first moment of $Beta(a, b)$ between two lines is $a slash (a + b)$ times the share of
+$Beta(a + 1, b)$ between them), at the distance
+
+$ sqrt((overline(x)_k - p_x)^2 + (overline(y)_l - p_y)^2 + s_(k l)^2), quad
+  s_(k l)^2 = ((x_(k + 1) - x_k)^2 + (x_(l + 1) - x_l)^2) / 24 , $
+
+where $s_(k l)^2$ is the variance of a uniform distribution over the rectangle along one
+axis, averaged over the two axes. For a square cell this is the mean distance of its
+voters from $p$ to second order in the size of the cell. It also keeps $d_m$ smooth and
+convex: with plain distances the voters next to a corner, half of them in a few cells,
+would trap the minimum at the mean of a cell.
+
+*Minimisation.* Newton's method, started at $m$, takes about five steps. A step that
+would leave the square is replaced by Weiszfeld's step, the mean of the voters weighted
+by one over their distance, which never leaves it.
+
+*Accuracy.* Against a voter grid with cells a quarter as wide, $g$ changes by less than
+$5 dot 10^(-5)$ for the narrowest voters of the UI ($D = 0.05$), by $2 dot 10^(-5)$ at
+$D = 0.1$ and by $3 dot 10^(-6)$ from $D = 0.25$ on. The geometric median of a million
+sampled voters, itself accurate to about $3 dot 10^(-4)$, agrees with it within the
+$1.5 dot 10^(-3)$ of the tests.
+
+*Nodes.* $g$ is smooth in $m$, so it is computed at the $N times N$ nodes of
+@sec-interpolation and interpolated in $logit m$, as the shares are. A quarter of the
+nodes is enough; the others are their mirror images. The interpolant is within
+$4 dot 10^(-5)$ of $g$ computed at the point itself. The table of a model is built once,
+in about 0.2 s, and kept.
+
+*Drawing (`margin/regions.py`).* The regions are traced as in @sec-tracing, on the grid
+moved by $g$: the grid point with the medians $m$ is drawn at $g(m)$, and a crossing is
+placed along the moved edge by the same linear interpolation of $psi_c$. The grid points
+at and next to a wall share the outermost median and would be drawn at the same point,
+so only one of them is kept. The moved grid ends short of the walls, and so do the
+regions. The Voronoi diagram is traced on the moved grid as well, with the nearest
+candidate as the winner and the difference of the two smallest squared distances as the
+margin. That difference is linear along a straight edge, so its borders still lie
+exactly on the bisectors.
+
+*Hovering (`pixels_at`, `GET /api/geometric`).* To show the voters of a hovered point the
+UI needs the inverse of $g$: for the centre of every pixel, the pixel whose voters have
+their geometric median nearest to it (a k-d tree over $g$ of all pixels), or none if the
+centre lies in the strip, beyond the curve that $g$ follows along the outermost pixels
+of a side. The UI gets one quarter of the square per deviation and mirrors it.

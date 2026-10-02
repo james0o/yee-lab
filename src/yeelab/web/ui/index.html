@@ -24,7 +24,6 @@
     #square { box-sizing: border-box; border: 1px solid #222; background: #fff; cursor: crosshair; touch-action: none; }
     .choices { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 0 0 1rem; }
     .choices > span { font-size: .9rem; color: #666; }  /* row labels only, not KaTeX spans */
-    #spreads { flex-direction: column; align-items: flex-start; }  /* one rule per line */
     .choices > label { font-size: .9rem; display: flex; align-items: center; gap: .3rem; cursor: pointer; }
     .choices input[type=checkbox] { accent-color: #222; margin: 0; }
     #deviation, #half, #levels { width: 12rem; accent-color: #222; }
@@ -49,7 +48,6 @@
         <label><input type="checkbox" id="showJoint" checked>joint distribution</label>
       </div>
       <div class="choices"><span>Deviation:</span><input type="range" id="deviation"><output id="deviationValue"></output></div>
-      <div class="choices" id="spreads"><span>Beta spread fixed:</span></div>
       <div class="choices" id="pixelMedians"><span>Pixel is:</span></div>
       <div class="choices" id="methods"><span>Voting method:</span></div>
       <div class="choices"><span>Approval (mix):</span><span>largest gap</span><input type="range" id="half" min="0" max="100" step="5"><span>half</span><output id="halfValue"></output></div>
@@ -75,7 +73,6 @@
     const methods = document.getElementById("methods");
     const ideals = document.getElementById("ideals");
     const distributions = document.getElementById("distributions");
-    const spreads = document.getElementById("spreads");
     const pixelMedians = document.getElementById("pixelMedians");
     const deviationSlider = document.getElementById("deviation");
     const deviationValue = document.getElementById("deviationValue");
@@ -126,11 +123,10 @@
     let method = null;    // name of the selected method
     let labels = {};      // method name -> label shown in the UI (FPTP, Borda, ...)
     let distribution = null;  // name of the selected voter distribution
-    let spread = null;    // name of the selected Beta spread rule
-    let spreadInfo = {};  // spread name -> {label, tex, description} from the backend
+    let spreadInfo = {};  // what the Beta voters keep the same for every pixel: {label, tex, description}
     let pixelMedian = null;  // what a pixel is: the "marginal" medians of its voters (along each
                              // axis) or their "geometric" median; the same point for normal voters
-    let pixelsAt = {};    // "deviation spread" -> for the points of a quarter of the square, the pixel
+    let pixelsAt = {};    // deviation -> for the points of a quarter of the square, the pixel
                           // whose voters have their geometric median there (/api/geometric)
     let deviation = 0;    // mean absolute deviation of the voters from their pixel
     let approvalMix = null;  // name of the method the mix slider belongs to
@@ -139,7 +135,7 @@
     let scoreMethod = null;  // name of the method the categories slider belongs to
     let levels = 0;          // its number of scores on a ballot
     let voters = {};      // deviation -> {sigma, beta_params} from the backend, where
-                          // beta_params is spread name -> [a, b] along one axis, per pixel
+                          // beta_params is [a, b] along one axis, per pixel
     let hovered = [0.5, 0.5];  // point whose voters are shown in the strip and the shade
     let showDensity = false;   // their 2D density over the square, while hovering it (if shown at all)
     let regions = null;   // last computed win regions [{winner, path}], path a Path2D in the unit square
@@ -215,7 +211,7 @@
       const m = (k + 0.5) / pixels;
       const { sigma, beta_params } = voters[deviation];
       if (distribution === "beta") {
-        const [a, b] = beta_params[spread][k];
+        const [a, b] = beta_params[k];
         const logB = lgamma(a) + lgamma(b) - lgamma(a + b);
         return {
           m, text: `Beta(${a.toFixed(3)}, ${b.toFixed(3)})`,
@@ -331,14 +327,14 @@
     // The pixel [k, l] whose voters a point of the square shows: the one it lies in, or, with
     // pixels at geometric medians, the one whose voters have theirs closest to it. null if no
     // voters have it there (the strip along the walls), or while the lookup is on its way: it is
-    // asked for once per deviation and spread rule.
+    // asked for once per deviation.
     function pixelAt(point) {
       const [i, j] = point.map(v => Math.min(pixels - 1, Math.floor(v * pixels)));
       if (!geometric()) return [i, j];
-      const key = `${deviation} ${spread}`;
+      const key = deviation;  // the slider may have moved by the time the answer is back
       if (!(key in pixelsAt)) {
         pixelsAt[key] = null;
-        fetch(`/api/geometric?deviation=${deviation}&spread=${spread}`)
+        fetch(`/api/geometric?deviation=${key}`)
           .then(response => response.json())
           .then(answer => { pixelsAt[key] = answer.pixels; drawVoters(); });
       }
@@ -365,7 +361,7 @@
         if (showDensity) fillDensity(x, y);
       } else {
         stripX.clear();
-        votersText.textContent = pixelsAt[`${deviation} ${spread}`]
+        votersText.textContent = pixelsAt[deviation]
           ? `No voters have their geometric median at ${at}` : "";
         densityCanvas.getContext("2d").clearRect(0, 0, DENSITY_SIZE, DENSITY_SIZE);
       }
@@ -414,7 +410,7 @@
     // What an answer depends on besides the candidates' positions and the sliders. An answer to
     // other settings (or to a candidate added or removed since, whose colours shifted) is not drawn;
     // one to an older slider value is, so sliding it shows the newest diagram it can, like a drag.
-    const settings = () => JSON.stringify([method, distribution, spread, pixelMedian, candidates.length]);
+    const settings = () => JSON.stringify([method, distribution, pixelMedian, candidates.length]);
 
     // Ask the backend for the win regions, traced on `grid` points per axis. While an answer is
     // on its way, only remember that another is needed: it is asked for as soon as the answer is
@@ -442,7 +438,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            candidates, method, distribution, spread, pixel_median: pixelMedian, deviation, half, levels, grid,
+            candidates, method, distribution, pixel_median: pixelMedian, deviation, half, levels, grid,
           }),
         });
         if (!response.ok) throw new Error(await response.text());
@@ -475,9 +471,10 @@
         message.textContent = `${name}${where}${tail}`;
       } else if (distribution === "beta") {
         const formula = document.createElement("span");
-        typeset(formula, spreadInfo[spread]);
+        typeset(formula, spreadInfo);
+        formula.title = spreadInfo.description;
         const where = pixelMedian === "geometric" ? ", pixels at their geometric median" : "";
-        message.replaceChildren(`${name} · beta voters, deviation ${deviation}, `, formula, where + tail);
+        message.replaceChildren(`${name} · beta voters, deviation ${deviation}, `, formula, " fixed" + where + tail);
       } else {
         message.textContent = `${name} · ${distribution} voters, deviation ${deviation}${tail}`;
       }
@@ -561,10 +558,9 @@
       }
     }
 
-    // The spread rules and the choice of what a pixel is only apply to Beta voters.
-    function updateSpreads() {
-      for (const row of [spreads, pixelMedians])
-        for (const button of row.querySelectorAll("button")) button.disabled = distribution !== "beta";
+    // The choice of what a pixel is only applies to Beta voters.
+    function updatePixelMedians() {
+      for (const button of pixelMedians.querySelectorAll("button")) button.disabled = distribution !== "beta";
     }
 
     // The mix and the categories sliders only apply to their methods.
@@ -583,9 +579,9 @@
     pixels = config.pixels;
     dragGrid = config.drag_grid;
     finalGrid = config.final_grid;
-    spreadInfo = Object.fromEntries(config.spreads.map(info => [info.name, info]));
+    spreadInfo = config.spread;
     voters = Object.fromEntries(config.voters.map(({ deviation, ...rest }) => [deviation, rest]));
-    choices(distributions, config.distributions, name => { distribution = name; updateSpreads(); drawVoters(); });
+    choices(distributions, config.distributions, name => { distribution = name; updatePixelMedians(); drawVoters(); });
     // The slider picks an index into the offered deviations, so the values stay exact. Moving it
     // updates the voters shown and recomputes the diagram on the coarser grid, like a drag;
     // letting go asks for the fine one.
@@ -623,15 +619,12 @@
       slider.addEventListener("input", () => { pick(); compute(dragGrid); });
       slider.addEventListener("change", () => compute());
     }
-    choices(spreads, config.spreads, name => { spread = name; drawVoters(); });
     choices(pixelMedians, config.pixel_medians, name => { pixelMedian = name; drawVoters(); });
     choices(methods, config.methods, pickMethod, [methods, ideals]);
     choices(ideals, config.ideals, pickMethod, [methods, ideals]);
     labels = Object.fromEntries([...config.methods, ...config.ideals].map(({ name, label }) => [name, label]));
     distribution = config.distributions[0].name;
     distributions.querySelector("button").classList.add("active");
-    spread = config.spread;
-    spreads.querySelectorAll("button")[config.spreads.findIndex(info => info.name === spread)].classList.add("active");
     pixelMedian = config.pixel_median;
     pixelMedians.querySelectorAll("button")[config.pixel_medians.findIndex(info => info.name === pixelMedian)]
       .classList.add("active");
@@ -639,7 +632,7 @@
     pickMix();
     pickLevels();
     pickMethod(null);  // none yet: the mix and categories sliders wait for their methods
-    updateSpreads();
+    updatePixelMedians();
     draw();
     drawVoters();
   </script>
