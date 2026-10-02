@@ -20,7 +20,7 @@ from yeelab.margin.geometric import (
     node_table,
     pixels_at,
 )
-from yeelab.margin.regions import MARGINS, grid, regions, winners
+from yeelab.margin.regions import MARGINS, grid, nearest, regions, winners
 from yeelab.margin.shares import PIXELS, Model
 from yeelab.ranking_cells import SPREADS, beta_params_at, pixel_medians
 from yeelab.web.app import app
@@ -276,12 +276,36 @@ def test_condorcet_border_is_closer_to_the_bisector(spread):
 
 
 def test_only_beta_voters_are_drawn_elsewhere():
-    """Normal voters have both medians at their pixel, and Voronoi has no voters."""
+    """Normal voters have both medians at their pixel, and so have no voters at all."""
     normal = Model("normal", 0.2)
-    assert regions("irv", CANDIDATES, normal, 64, "geometric") == regions("irv", CANDIDATES, normal, 64)
-    assert regions("voronoi", CANDIDATES, MODEL, 64, "geometric") == regions("voronoi", CANDIDATES, MODEL, 64)
-    assert regions("irv", CANDIDATES, MODEL, 64, "geometric") != regions("irv", CANDIDATES, MODEL, 64)
-    assert regions("irv", CANDIDATES, MODEL, 64, "marginal") == regions("irv", CANDIDATES, MODEL, 64)
+    for method in ("irv", "voronoi"):
+        assert regions(method, CANDIDATES, normal, 64, "geometric") == regions(method, CANDIDATES, normal, 64)
+        assert regions(method, CANDIDATES, None, 64, "geometric") == regions(method, CANDIDATES, None, 64)
+        assert regions(method, CANDIDATES, MODEL, 64, "geometric") != regions(method, CANDIDATES, MODEL, 64)
+        assert regions(method, CANDIDATES, MODEL, 64, "marginal") == regions(method, CANDIDATES, MODEL, 64)
+
+
+def test_voronoi_is_drawn_only_where_the_methods_are():
+    """With pixels at geometric medians the Voronoi diagram has the outline of a
+    method's diagram and nothing in the strip. Inside, it is the Voronoi diagram: the
+    nearest candidate, with borders on the bisectors."""
+    shapes = regions("voronoi", CANDIDATES, MODEL, 320, "geometric")
+    method = regions("condorcet", CANDIDATES, MODEL, 320, "geometric")
+
+    def total(shapes):
+        return sum(_area(ring) for region in shapes for polygon in region["polygons"] for ring in polygon)
+
+    assert total(shapes) == pytest.approx(total(method), abs=1e-5) and total(shapes) < 0.83
+    assert (_rasterize(shapes, np.array([[0.02, 0.5], [0.5, 0.97], [0.01, 0.01]])) == -2).all()
+
+    points = geometric_medians(MODEL, pixel_medians(150)).reshape(-1, 2)
+    winner, margin = nearest(CANDIDATES, points)
+    clear = margin > 1e-6  # not right on a border
+    np.testing.assert_array_equal(_rasterize(shapes, points)[clear], winner[clear])
+    border = _border(shapes, D, E)
+    distance = np.abs(border[:, 1] - border[:, 0] - 0.2) / np.sqrt(2)
+    # rounded to 6 decimals; the grid cell of a corner of three regions is only close
+    assert len(border) > 100 and np.median(distance) < 1e-6 and distance.max() < 2e-3
 
 
 @pytest.mark.parametrize("method", MARGINS)
@@ -312,6 +336,8 @@ def test_api_draws_pixels_at_either_median():
     assert shapes(pixel_median="geometric") == regions("condorcet", CANDIDATES, MODEL, 64, "geometric")
     assert shapes(pixel_median="geometric") != shapes()
     assert shapes(pixel_median="geometric", distribution="normal") == shapes(distribution="normal")
+    assert shapes(method="voronoi", pixel_median="geometric") == regions("voronoi", CANDIDATES, MODEL, 64, "geometric")
+    assert shapes(method="voronoi", pixel_median="geometric") != shapes(method="voronoi")
     request = {"candidates": CANDIDATES.tolist(), "method": "condorcet", "pixel_median": "mean"}
     assert client.post("/api/regions", json=request).status_code == 422
 

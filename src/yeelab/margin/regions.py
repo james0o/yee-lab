@@ -24,6 +24,8 @@ A grid point need not be drawn where its median is. With pixels at the geometric
 of their voters (geometric.py) the same winners and margins are traced on the grid moved
 by g: the point of the median m is drawn at g(m), and a crossing is placed along the
 moved edge as before. The moved grid ends short of the walls, and so do the regions.
+The Voronoi diagram is then traced on the moved grid too (nearest), so that it is drawn
+only where the methods are and the two can be compared.
 """
 
 import contourpy
@@ -138,6 +140,17 @@ def voronoi_regions(candidates):
             for c, cell in enumerate(voronoi_cells(candidates)) if cell is not None]
 
 
+def nearest(candidates, points):
+    """(winner, margin) of the Voronoi diagram at the `points` (..., 2): the nearest
+    candidate, and by how much the square of the distance to the next one is larger. A
+    difference of two squared distances is linear in the point, so along a straight grid
+    edge the crossing is placed exactly on the bisector."""
+    candidates = np.asarray(candidates, dtype=np.float64)
+    squared = ((points[..., None, :] - candidates) ** 2).sum(axis=-1)
+    closest = np.partition(squared, 1, axis=-1)
+    return squared.argmin(axis=-1), closest[..., 1] - closest[..., 0]
+
+
 def geometric_grid(model: Model, size: int):
     """(keep (G,), points (K, K, 2)) of the grid(size) with pixels at their geometric
     median: the grid points of the medians marked in `keep` are drawn at `points`. The
@@ -154,11 +167,17 @@ def regions(method: str | Winner, candidates, model: Model | None, size: int,
     None means every voter at their pixel, which is the Voronoi diagram for every method.
     `pixel_median` "geometric" draws each pixel at the geometric median of its voters
     (geometric.py), which leaves a strip along the walls empty. It only matters for Beta
-    voters: no voters, or normal ones, have both medians at the same point."""
+    voters: normal ones have both medians at the same point. The Voronoi diagram of a
+    model of Beta voters leaves the same strip empty: its borders are the same straight
+    lines, drawn only where the model has pixels."""
+    moved = pixel_median == "geometric" and model is not None and model.distribution == "beta"
     if method == "voronoi" or model is None:
-        return voronoi_regions(candidates)
+        if not moved:
+            return voronoi_regions(candidates)
+        keep, points = geometric_grid(model, size)
+        return contour_regions(grid(size, model.pixels)[0][keep], *nearest(candidates, points), points)
     coords, winner, margin = winners(method, candidates, model, size)
-    if pixel_median == "geometric" and model.distribution == "beta":
+    if moved:
         keep, points = geometric_grid(model, size)
         kept = np.ix_(keep, keep)
         return contour_regions(coords[keep], winner[kept], margin[kept], points)

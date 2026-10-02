@@ -470,8 +470,9 @@
       let name = labels[method];
       if (method === scoreMethod) name += `, ${levels} categories`;
       if (method === approvalMix) name += `, ${percent(half)} % approve half`;
-      if (method === "voronoi") {  // nearest candidate, no voters involved
-        message.textContent = `${name}${tail}`;
+      if (method === "voronoi") {  // nearest candidate, no voters involved but for where it is drawn
+        const where = geometric() ? " · only where voters have their geometric median" : "";
+        message.textContent = `${name}${where}${tail}`;
       } else if (distribution === "beta") {
         const formula = document.createElement("span");
         typeset(formula, spreadInfo[spread]);

@@ -105,7 +105,9 @@ METHOD_INFO = {
               "voter approves the candidates closer than halfway between the closest and the "
               "farthest. The expression is the slider's default."},
     "voronoi": {"label": "Voronoi", "description": "The nearest candidate to the pixel, without "
-                "voters: what the ranked methods draw when all voters are at their pixel."},
+                "voters: what the ranked methods draw when all voters are at their pixel. With "
+                "pixels at geometric medians it is drawn only where the voters above have one, "
+                "to compare it with the methods."},
 }
 assert set(METHOD_INFO) == set(DIAGRAMS)
 # Each voter distribution along one axis, per pixel: plain label, LaTeX label (typeset
@@ -161,7 +163,8 @@ PIXEL_MEDIAN_INFO = {
         "description": "A pixel is the geometric median of its voters, the point with the "
         "smallest mean distance to them, which does not depend on the axes. The voters are the "
         "same; every election is only drawn somewhere else, closer to the centre. No voters "
-        "have their geometric median next to a wall, so a strip along the walls stays empty.",
+        "have their geometric median next to a wall, so a strip along the walls stays empty, "
+        "in the Voronoi diagram too.",
     },
 }
 assert set(PIXEL_MEDIAN_INFO) == set(PIXEL_MEDIANS)
