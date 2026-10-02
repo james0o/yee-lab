@@ -5,6 +5,7 @@ against sampled voters and against a finer voter grid, for the symmetries of the
 and for being one to one. The diagram drawn with it (regions.py, /api/regions) must be
 the usual one with every election moved from m to g(m), leave the strip along the walls
 empty, and bring the Condorcet border between two candidates closer to their bisector.
+The steps of the UI's move between the two diagrams draw every election part of the way.
 """
 
 import numpy as np
@@ -20,7 +21,7 @@ from yeelab.margin.geometric import (
     node_table,
     pixels_at,
 )
-from yeelab.margin.regions import MARGINS, grid, nearest, regions, winners
+from yeelab.margin.regions import MARGINS, geometric_grid, grid, nearest, regions, winners
 from yeelab.margin.shares import PIXELS, Model
 from yeelab.ranking_cells import SPREADS, beta_params_at, pixel_medians
 from yeelab.web.app import app
@@ -247,6 +248,38 @@ def test_regions_are_the_same_elections_moved_by_g(method):
     assert (_rasterize(shapes, np.array([[0.02, 0.5], [0.5, 0.97], [0.01, 0.01]])) == -2).all()
 
 
+@pytest.mark.parametrize("shift", [0.0, 0.4])
+def test_regions_part_of_the_way_to_the_geometric_medians(shift):
+    """Every election is drawn `shift` of the way from its medians along the axes to its
+    geometric median. The grid on the way does not fold over, and its regions cover less
+    of the square than the usual diagram and more than the one at geometric medians:
+    with no shift at all, the whole square."""
+    pixels = 150
+    centres = pixel_medians(pixels)
+    points = np.stack(np.meshgrid(centres, centres, indexing="ij"), axis=-1).reshape(-1, 2)
+    usual = _rasterize(regions("condorcet", CANDIDATES, MODEL, 300), points)
+    moved = points + shift * (geometric_medians(MODEL, centres).reshape(-1, 2) - points)
+    shapes = regions("condorcet", CANDIDATES, MODEL, 300, "geometric", shift)
+    assert (_rasterize(shapes, moved) == usual).mean() > 0.995
+
+    _, grid_points = geometric_grid(MODEL, 300, shift)
+    along_x, along_y = np.diff(grid_points, axis=0), np.diff(grid_points, axis=1)
+    assert along_x[..., 0].min() > 0 and along_y[..., 1].min() > 0
+    cells = along_x[:, :-1, 0] * along_y[:-1, :, 1] - along_x[:, :-1, 1] * along_y[:-1, :, 0]
+    assert cells.min() > 0
+
+    def total(shapes):
+        return sum(_area(ring) for region in shapes for polygon in region["polygons"] for ring in polygon)
+
+    at_geometric = total(regions("condorcet", CANDIDATES, MODEL, 300, "geometric"))
+    if shift == 0:
+        assert total(shapes) == pytest.approx(1, abs=1e-3)
+    else:
+        assert at_geometric + 0.01 < total(shapes) < 0.99
+    assert regions("condorcet", CANDIDATES, MODEL, 64, "geometric", 1.0) == regions(
+        "condorcet", CANDIDATES, MODEL, 64, "geometric")
+
+
 def _border(shapes, one, other):
     """The vertices on the rings of both winners: the crossings their regions share."""
     def vertices(winner):
@@ -336,9 +369,15 @@ def test_api_draws_pixels_at_either_median():
     assert shapes(pixel_median="geometric") == regions("condorcet", CANDIDATES, MODEL, 64, "geometric")
     assert shapes(pixel_median="geometric") != shapes()
     assert shapes(pixel_median="geometric", distribution="normal") == shapes(distribution="normal")
+    assert shapes(pixel_median="geometric", shift=1) == shapes(pixel_median="geometric")
+    assert shapes(pixel_median="geometric", shift=0.5) == regions("condorcet", CANDIDATES, MODEL, 64,
+                                                                  "geometric", 0.5)
     assert shapes(method="voronoi", pixel_median="geometric") == regions("voronoi", CANDIDATES, MODEL, 64, "geometric")
     assert shapes(method="voronoi", pixel_median="geometric") != shapes(method="voronoi")
     request = {"candidates": CANDIDATES.tolist(), "method": "condorcet", "pixel_median": "mean"}
+    assert client.post("/api/regions", json=request).status_code == 422
+    request = {"candidates": CANDIDATES.tolist(), "method": "condorcet", "pixel_median": "geometric",
+               "shift": 1.5}
     assert client.post("/api/regions", json=request).status_code == 422
 
 

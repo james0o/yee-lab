@@ -25,7 +25,9 @@ of their voters (geometric.py) the same winners and margins are traced on the gr
 by g: the point of the median m is drawn at g(m), and a crossing is placed along the
 moved edge as before. The moved grid ends short of the walls, and so do the regions.
 The Voronoi diagram is then traced on the moved grid too (nearest), so that it is drawn
-only where the methods are and the two can be compared.
+only where the methods are and the two can be compared. The grid can also be moved only
+part of the way, from where the usual diagram draws a point towards g(m) (`shift`): the
+web UI steps through these to move the diagram between the two.
 """
 
 import contourpy
@@ -151,22 +153,35 @@ def nearest(candidates, points):
     return squared.argmin(axis=-1), closest[..., 1] - closest[..., 0]
 
 
-def geometric_grid(model: Model, size: int):
+def geometric_grid(model: Model, size: int, shift: float = 1.0):
     """(keep (G,), points (K, K, 2)) of the grid(size) with pixels at their geometric
     median: the grid points of the medians marked in `keep` are drawn at `points`. The
     points at and next to a wall can share a median, the outermost one of the model, and
-    only one of them is kept: they would be drawn at the same point."""
-    medians = grid(size, model.pixels)[1]
+    only one of them is kept: they would be drawn at the same point.
+
+    `shift` below 1 moves each point only that part of the way, on a straight line from
+    where the usual diagram draws it (the outermost ones: on the walls) to its geometric
+    median. Both ends keep the order of the neighbours along each axis and the
+    orientation of every cell, and so does every point in between: the grid does not
+    fold over on the way."""
+    coords, medians = grid(size, model.pixels)
     keep = np.concatenate([[True], np.diff(medians) > 0])
-    return keep, geometric_medians(model, medians[keep])
+    points = geometric_medians(model, medians[keep])
+    if shift < 1:
+        usual = coords[keep]
+        usual[[0, -1]] = coords[[0, -1]]  # the outermost medians are drawn up to the walls
+        usual = np.stack(np.meshgrid(usual, usual, indexing="ij"), axis=-1)
+        points = usual + shift * (points - usual)
+    return keep, points
 
 
 def regions(method: str | Winner, candidates, model: Model | None, size: int,
-            pixel_median: PixelMedian = PIXEL_MEDIAN):
+            pixel_median: PixelMedian = PIXEL_MEDIAN, shift: float = 1.0):
     """Win regions of `method` ("voronoi", a key of MARGINS or a built method); model
     None means every voter at their pixel, which is the Voronoi diagram for every method.
     `pixel_median` "geometric" draws each pixel at the geometric median of its voters
-    (geometric.py), which leaves a strip along the walls empty. It only matters for Beta
+    (geometric.py), which leaves a strip along the walls empty; `shift` below 1 draws it
+    only that part of the way there (geometric_grid). It only matters for Beta
     voters: normal ones have both medians at the same point. The Voronoi diagram of a
     model of Beta voters leaves the same strip empty: its borders are the same straight
     lines, drawn only where the model has pixels."""
@@ -174,11 +189,11 @@ def regions(method: str | Winner, candidates, model: Model | None, size: int,
     if method == "voronoi" or model is None:
         if not moved:
             return voronoi_regions(candidates)
-        keep, points = geometric_grid(model, size)
+        keep, points = geometric_grid(model, size, shift)
         return contour_regions(grid(size, model.pixels)[0][keep], *nearest(candidates, points), points)
     coords, winner, margin = winners(method, candidates, model, size)
     if moved:
-        keep, points = geometric_grid(model, size)
+        keep, points = geometric_grid(model, size, shift)
         kept = np.ix_(keep, keep)
         return contour_regions(coords[keep], winner[kept], margin[kept], points)
     return contour_regions(coords, winner, margin)

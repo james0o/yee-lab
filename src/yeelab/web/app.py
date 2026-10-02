@@ -163,6 +163,9 @@ class DiagramRequest(BaseModel):
     method: Annotated[str, Field(pattern=f"^({'|'.join(DIAGRAMS)})$")]
     distribution: Distribution = "beta"
     pixel_median: PixelMedian = PIXEL_MEDIAN  # Beta only
+    # "geometric" only: how far the pixels are drawn from their medians along the axes
+    # towards their geometric median. The UI moves the diagram between the two in steps.
+    shift: float = Field(1.0, ge=0, le=1)
     deviation: float = DEVIATION
     half: float = Field(HALF_SHARE, ge=0, le=1)  # approval_mix only
     levels: int = Field(SCORE_LEVELS, ge=2, le=MAX_LEVELS)  # score only
@@ -252,7 +255,7 @@ def diagram_regions(request: DiagramRequest):
     model = Model(request.distribution, request.deviation, spread)
     build = SLIDERS.get(request.method)  # built from the sliders
     method = build(request) if build else request.method
-    shapes = regions(method, request.candidates, model, request.grid, request.pixel_median)
+    shapes = regions(method, request.candidates, model, request.grid, request.pixel_median, request.shift)
     payload = {"regions": shapes, "ms": round(1000 * (time.perf_counter() - start), 1)}
     # json.dumps directly: FastAPI's encoder is slow on thousands of vertices
     return Response(json.dumps(payload, separators=(",", ":")), media_type="application/json")

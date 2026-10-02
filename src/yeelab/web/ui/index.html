@@ -126,6 +126,9 @@
     let spreadInfo = {};  // what the Beta voters keep the same for every pixel: {label, tex, description}
     let pixelMedian = null;  // what a pixel is: the "marginal" medians of its voters (along each
                              // axis) or their "geometric" median; the same point for normal voters
+    let moving = null;    // {from, to, start}: the diagram is on its way between the two, since
+                          // `start` (ms), from pixels drawn `from` of the way to their geometric
+                          // median to `to` of it (0: at their medians along the axes, 1: there)
     let pixelsAt = {};    // deviation -> for the points of a quarter of the square, the pixel
                           // whose voters have their geometric median there (/api/geometric)
     let deviation = 0;    // mean absolute deviation of the voters from their pixel
@@ -324,6 +327,18 @@
     // have it at their pixel).
     const geometric = () => distribution === "beta" && pixelMedian === "geometric";
 
+    // Picking what a pixel is moves the diagram there over MOVE ms instead of jumping: every
+    // election travels on a straight line between the two points it can be drawn at. Not for
+    // those who asked their system for less motion.
+    const MOVE = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 700;
+
+    // How far the pixels are drawn towards their geometric median right now, from 0 to 1.
+    function shift() {
+      if (!moving) return geometric() ? 1 : 0;
+      const t = MOVE > 0 ? Math.min(1, (performance.now() - moving.start) / MOVE) : 1;
+      return moving.from + (moving.to - moving.from) * t * t * (3 - 2 * t);  // eases in and out
+    }
+
     // The pixel [k, l] whose voters a point of the square shows: the one it lies in, or, with
     // pixels at geometric medians, the one whose voters have theirs closest to it. null if no
     // voters have it there (the strip along the walls), or while the lookup is on its way: it is
@@ -430,6 +445,9 @@
 
     async function request(grid) {
       inFlight = true;
+      if (moving && performance.now() - moving.start >= MOVE) moving = null;  // it has arrived
+      if (moving) grid = dragGrid;  // on its way: the coarser grid, like a drag
+      const part = shift();
       const asked = settings(), sliders = [deviation, half, levels];
       if (grid === finalGrid) message.textContent = `Computing ${labels[method]}…`;
       const start = performance.now();
@@ -438,7 +456,8 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            candidates, method, distribution, pixel_median: pixelMedian, deviation, half, levels, grid,
+            candidates, method, distribution, deviation, half, levels, grid,
+            pixel_median: part > 0 ? "geometric" : "marginal", shift: part,
           }),
         });
         if (!response.ok) throw new Error(await response.text());
@@ -456,6 +475,8 @@
           const next = queued;
           queued = null;
           compute(next);
+        } else if (moving) {
+          compute();  // the next step of the move; the last one is on the fine grid
         }
       }
     }
@@ -619,7 +640,13 @@
       slider.addEventListener("input", () => { pick(); compute(dragGrid); });
       slider.addEventListener("change", () => compute());
     }
-    choices(pixelMedians, config.pixel_medians, name => { pixelMedian = name; drawVoters(); });
+    choices(pixelMedians, config.pixel_medians, name => {
+      const from = shift();  // where the diagram is now, also in the middle of a move
+      pixelMedian = name;
+      const to = geometric() ? 1 : 0;
+      moving = from === to ? null : { from, to, start: performance.now() };
+      drawVoters();
+    });
     choices(methods, config.methods, pickMethod, [methods, ideals]);
     choices(ideals, config.ideals, pickMethod, [methods, ideals]);
     labels = Object.fromEntries([...config.methods, ...config.ideals].map(({ name, label }) => [name, label]));

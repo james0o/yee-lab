@@ -2554,6 +2554,15 @@ candidate as the winner and the difference of the two smallest squared distances
 margin. That difference is linear along a straight edge, so its borders still lie
 exactly on the bisectors.
 
+*Moving between the two diagrams.* When the choice of what a pixel is changes, the UI
+moves the diagram instead of jumping. For $0.7$ s it asks for the regions with every grid
+point drawn at $q + t (g(m) - q)$, where $q$ is the point at which the usual diagram draws
+it ($m$, or the wall for the outermost medians) and $t$ eases from $0$ to $1$ or back
+(`shift` of `POST /api/regions`). So every election travels on a straight line between
+its two points, and the grid does not fold over on the way (tests). The steps are traced
+on the coarser grid, like a drag, at about 15 to 45 ms each for five candidates, and the
+last one on the fine grid. Where the system asks for less motion the diagram jumps.
+
 *Hovering (`pixels_at`, `GET /api/geometric`).* To show the voters of a hovered point the
 UI needs the inverse of $g$: for the centre of every pixel, the pixel whose voters have
 their geometric median nearest to it (a k-d tree over $g$ of all pixels), or none if the
