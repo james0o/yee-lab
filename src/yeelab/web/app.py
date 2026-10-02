@@ -13,10 +13,11 @@ from typing import Annotated
 
 from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AfterValidator, BaseModel, Field, field_validator
 
 from yeelab.build import Highest, Score, Tally, Winner, mixed_approval
 from yeelab.distributions import DISTRIBUTIONS, Distribution
+from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, pixels_at
 from yeelab.margin.regions import MARGINS, regions
 from yeelab.margin.shares import PIXELS, Model
 from yeelab.normal import sigma_from_deviation
@@ -147,6 +148,23 @@ SPREAD_INFO = {
     },
 }
 assert set(SPREAD_INFO) == set(SPREADS)
+# What a pixel is, for Beta voters: label and tooltip, in the order the UI lists them.
+PIXEL_MEDIAN_INFO = {
+    "marginal": {
+        "label": "the median along each axis",
+        "description": "A pixel is the median of its voters along x and along y. It is a median "
+        "only in the directions of the axes: a slanted line through the pixel does not split "
+        "its voters in half, which bends slanted borders.",
+    },
+    "geometric": {
+        "label": "the geometric median",
+        "description": "A pixel is the geometric median of its voters, the point with the "
+        "smallest mean distance to them, which does not depend on the axes. The voters are the "
+        "same; every election is only drawn somewhere else, closer to the centre. No voters "
+        "have their geometric median next to a wall, so a strip along the walls stays empty.",
+    },
+}
+assert set(PIXEL_MEDIAN_INFO) == set(PIXEL_MEDIANS)
 
 app = FastAPI()
 
@@ -158,6 +176,7 @@ class DiagramRequest(BaseModel):
     method: Annotated[str, Field(pattern=f"^({'|'.join(DIAGRAMS)})$")]
     distribution: Distribution = "beta"
     spread: Spread = SPREAD  # Beta only
+    pixel_median: PixelMedian = PIXEL_MEDIAN  # Beta only
     deviation: float = DEVIATION
     half: float = Field(HALF_SHARE, ge=0, le=1)  # approval_mix only
     levels: int = Field(SCORE_LEVELS, ge=2, le=MAX_LEVELS)  # score only
@@ -166,19 +185,24 @@ class DiagramRequest(BaseModel):
     @field_validator("deviation")
     @classmethod
     def offered(cls, deviation: float) -> float:
-        if deviation not in DEVIATIONS:
-            raise ValueError(f"deviation must be one of {DEVIATIONS}")
-        return deviation
+        return _offered(deviation)
+
+
+def _offered(deviation: float) -> float:
+    if deviation not in DEVIATIONS:
+        raise ValueError(f"deviation must be one of {DEVIATIONS}")
+    return deviation
 
 
 def _warm_up():
-    """Build the default voters' CDF tables (~0.2 s) and load the compiled kernels
-    (compiled on the very first run, then from numba's cache) before the first
-    request needs them."""
+    """Build the default voters' CDF tables (~0.2 s) and their geometric medians (~0.2 s),
+    and load the compiled kernels (compiled on the very first run, then from numba's
+    cache) before the first request needs them."""
     for distribution in DISTRIBUTIONS:
         model = Model(distribution, DEVIATION, SPREAD if distribution == "beta" else None)
         for method in DIAGRAMS:
             regions(method, CANDIDATES, model, 32)
+    regions(DIAGRAMS[0], CANDIDATES, Model("beta", DEVIATION, SPREAD), 32, "geometric")
 
 
 threading.Thread(target=_warm_up, daemon=True).start()
@@ -214,6 +238,8 @@ def config():
         "distributions": [{"name": name, **info} for name, info in DISTRIBUTION_INFO.items()],
         "spreads": [{"name": name, **info} for name, info in SPREAD_INFO.items()],
         "spread": SPREAD,
+        "pixel_medians": [{"name": name, **info} for name, info in PIXEL_MEDIAN_INFO.items()],
+        "pixel_median": PIXEL_MEDIAN,
         "candidates": CANDIDATES,
         "max_candidates": MAX_CANDIDATES,
         "pixels": PIXELS,
@@ -243,10 +269,29 @@ def diagram_regions(request: DiagramRequest):
     model = Model(request.distribution, request.deviation, spread)
     build = SLIDERS.get(request.method)  # built from the sliders
     method = build(request) if build else request.method
-    shapes = regions(method, request.candidates, model, request.grid)
+    shapes = regions(method, request.candidates, model, request.grid, request.pixel_median)
     payload = {"regions": shapes, "ms": round(1000 * (time.perf_counter() - start), 1)}
     # json.dumps directly: FastAPI's encoder is slow on thousands of vertices
     return Response(json.dumps(payload, separators=(",", ":")), media_type="application/json")
+
+
+@lru_cache(maxsize=len(DEVIATIONS) * len(SPREADS))  # ~0.1 MB each, built in ~0.1 s
+def _pixels_at(deviation: float, spread: Spread) -> str:
+    at = pixels_at(Model("beta", deviation, spread))
+    return json.dumps({"pixels": at[:PIXELS // 2, :PIXELS // 2].ravel().tolist()}, separators=(",", ":"))
+
+
+assert PIXELS % 2 == 0  # so a quarter of the pixels is a quarter of the square
+
+
+@app.get("/api/geometric")
+def geometric_pixels(deviation: Annotated[float, AfterValidator(_offered)], spread: Spread = SPREAD):
+    """For the voters shown while hovering a diagram of geometric medians (Beta voters):
+    {"pixels": [...]}, for the point (i + 1/2, j + 1/2) / PIXELS at [i * PIXELS / 2 + j]
+    the pixel (k, l), as k * PIXELS + l, whose voters have their geometric median closest
+    to the point, or -1 if no voters have it there. Only the quarter of the square next
+    to the origin, i, j < PIXELS / 2: the rest are its mirror images."""
+    return Response(_pixels_at(deviation, spread), media_type="application/json")
 
 
 # Last, so that /api/... is matched first; "/" serves ui/index.html.

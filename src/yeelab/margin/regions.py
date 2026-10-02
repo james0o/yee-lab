@@ -19,12 +19,18 @@ approval and score shares are computed at the grid points themselves
 Polygons follow GeoJSON: an outer ring counter-clockwise, then its holes clockwise.
 A region can have several polygons (FPTP flares at the walls) and holes (an island
 of another winner).
+
+A grid point need not be drawn where its median is. With pixels at the geometric median
+of their voters (geometric.py) the same winners and margins are traced on the grid moved
+by g: the point of the median m is drawn at g(m), and a crossing is placed along the
+moved edge as before. The moved grid ends short of the walls, and so do the regions.
 """
 
 import contourpy
 import numpy as np
 
 from yeelab.build import FIRST, METHODS, PAIRWISE, PROFILE, Approved, Scored, Share, Voters, Winner
+from yeelab.margin.geometric import PIXEL_MEDIAN, PixelMedian, geometric_medians
 from yeelab.margin.shares import (
     Model,
     first_choice_shares,
@@ -107,13 +113,16 @@ def _area(points):
     return 0.5 * np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y)
 
 
-def contour_regions(coords, winner, margin):
+def contour_regions(coords, winner, margin, points=None):
     """[{"winner": c, "polygons": [[outer, hole, ...], ...]}] per winner, each ring
-    flat [x0, y0, x1, y1, ...], from winner and margin on the grid of coords."""
+    flat [x0, y0, x1, y1, ...], from winner and margin on the grid of coords. With
+    `points` (G, G, 2) the grid point [i, j] is drawn at points[i, j] instead of
+    (coords[i], coords[j]): a grid of quadrilaterals, which must not fold over."""
+    x, y = (coords, coords) if points is None else (points[..., 0].T, points[..., 1].T)
     regions = []
     for label in np.unique(winner):
         psi = np.where(winner == label, margin, -margin).astype(np.float64)
-        generator = contourpy.contour_generator(coords, coords, psi.T, fill_type="OuterOffset")
+        generator = contourpy.contour_generator(x, y, psi.T, fill_type="OuterOffset")
         polygons = []
         for p, o in zip(*generator.filled(0.0, np.inf)):
             rings = [p[o[k]:o[k + 1]] for k in range(len(o) - 1)]
@@ -129,9 +138,28 @@ def voronoi_regions(candidates):
             for c, cell in enumerate(voronoi_cells(candidates)) if cell is not None]
 
 
-def regions(method: str | Winner, candidates, model: Model | None, size: int):
+def geometric_grid(model: Model, size: int):
+    """(keep (G,), points (K, K, 2)) of the grid(size) with pixels at their geometric
+    median: the grid points of the medians marked in `keep` are drawn at `points`. The
+    points at and next to a wall can share a median, the outermost one of the model, and
+    only one of them is kept: they would be drawn at the same point."""
+    medians = grid(size, model.pixels)[1]
+    keep = np.concatenate([[True], np.diff(medians) > 0])
+    return keep, geometric_medians(model, medians[keep])
+
+
+def regions(method: str | Winner, candidates, model: Model | None, size: int,
+            pixel_median: PixelMedian = PIXEL_MEDIAN):
     """Win regions of `method` ("voronoi", a key of MARGINS or a built method); model
-    None means every voter at their pixel, which is the Voronoi diagram for every method."""
+    None means every voter at their pixel, which is the Voronoi diagram for every method.
+    `pixel_median` "geometric" draws each pixel at the geometric median of its voters
+    (geometric.py), which leaves a strip along the walls empty. It only matters for Beta
+    voters: no voters, or normal ones, have both medians at the same point."""
     if method == "voronoi" or model is None:
         return voronoi_regions(candidates)
-    return contour_regions(*winners(method, candidates, model, size))
+    coords, winner, margin = winners(method, candidates, model, size)
+    if pixel_median == "geometric" and model.distribution == "beta":
+        keep, points = geometric_grid(model, size)
+        kept = np.ix_(keep, keep)
+        return contour_regions(coords[keep], winner[kept], margin[kept], points)
+    return contour_regions(coords, winner, margin)
