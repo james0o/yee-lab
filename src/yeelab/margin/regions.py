@@ -13,7 +13,8 @@ psi_c along a grid edge. Two neighbouring regions get the same crossing, a / (a 
 along the edge from the side with margin a, so they meet without gaps. The grid only
 has to be fine enough to catch thin slivers; the shares come from the Chebyshev
 interpolant (ranking_cells.interpolate_to), which is exact to ~1e-5 at any point. The
-approval shares are computed at the grid points themselves (shares.unapproved_shares).
+approval and score shares are computed at the grid points themselves
+(shares.unapproved_shares, shares.unscored_shares).
 
 Polygons follow GeoJSON: an outer ring counter-clockwise, then its holes clockwise.
 A region can have several polygons (FPTP flares at the walls) and holes (an island
@@ -23,13 +24,14 @@ of another winner).
 import contourpy
 import numpy as np
 
-from yeelab.build import FIRST, METHODS, PAIRWISE, PROFILE, Approved, Share, Voters
+from yeelab.build import FIRST, METHODS, PAIRWISE, PROFILE, Approved, Scored, Share, Voters, Winner
 from yeelab.margin.shares import (
     Model,
     first_choice_shares,
     pairwise_shares,
     ranking_shares,
     unapproved_shares,
+    unscored_shares,
     voronoi_cells,
 )
 from yeelab.ranking_cells import interpolate_to
@@ -53,8 +55,8 @@ def grid(size: int, pixels: int):
 
 def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Voters:
     """The shares in `needs` (yeelab.build.voters) at the points of grid(size),
-    computed at the nodes and interpolated (the approval shares: at the points
-    themselves); [i, j] is the point (coordinates[i], coordinates[j])."""
+    computed at the nodes and interpolated (the approval and score shares: at the
+    points themselves); [i, j] is the point (coordinates[i], coordinates[j])."""
     medians = grid(size, model.pixels)[1]
 
     def interpolate(values):
@@ -80,13 +82,17 @@ def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Vote
     if cuts:
         shares["unapproved"] = {cut: unapproved_shares(candidates, model, cut, medians)
                                 for cut in cuts}
+    levels = [share.levels for share in needs if isinstance(share, Scored)]
+    if levels:
+        shares["unscored"] = {n: unscored_shares(candidates, model, n, medians) for n in levels}
     return Voters(**shares)
 
 
-def winners(method: str, candidates, model: Model, size: int):
+def winners(method: str | Winner, candidates, model: Model, size: int):
     """(coordinates (G,), winner (G, G), margin (G, G)) with G = size + 2 on the grid();
-    [i, j] is the point (coordinates[i], coordinates[j])."""
-    rule = MARGINS[method]
+    [i, j] is the point (coordinates[i], coordinates[j]). `method` is a key of MARGINS
+    or a built method itself."""
+    rule = MARGINS[method] if isinstance(method, str) else method
     coords = grid(size, model.pixels)[0]
     return coords, *rule.evaluate(voters(rule.needs, candidates, model, size))
 
@@ -123,9 +129,9 @@ def voronoi_regions(candidates):
             for c, cell in enumerate(voronoi_cells(candidates)) if cell is not None]
 
 
-def regions(method: str, candidates, model: Model | None, size: int):
-    """Win regions of `method` ("voronoi" or a key of MARGINS); model None means
-    every voter at their pixel, which is the Voronoi diagram for every method."""
+def regions(method: str | Winner, candidates, model: Model | None, size: int):
+    """Win regions of `method` ("voronoi", a key of MARGINS or a built method); model
+    None means every voter at their pixel, which is the Voronoi diagram for every method."""
     if method == "voronoi" or model is None:
         return voronoi_regions(candidates)
     return contour_regions(*winners(method, candidates, model, size))

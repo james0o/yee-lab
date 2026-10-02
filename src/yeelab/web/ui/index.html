@@ -27,8 +27,8 @@
     #spreads { flex-direction: column; align-items: flex-start; }  /* one rule per line */
     .choices > label { font-size: .9rem; display: flex; align-items: center; gap: .3rem; cursor: pointer; }
     .choices input[type=checkbox] { accent-color: #222; margin: 0; }
-    #deviation { width: 12rem; accent-color: #222; }
-    #deviationValue { font-size: .9rem; min-width: 6rem; }
+    #deviation, #half, #levels { width: 12rem; accent-color: #222; }
+    #deviationValue, #halfValue, #levelsValue { font-size: .9rem; min-width: 6rem; }
     button { font: inherit; padding: .4rem .9rem; border: 1px solid #222; border-radius: 4px; background: #fff; cursor: pointer; }
     button.active { background: #222; color: #fff; }
     button:disabled { opacity: .35; cursor: default; }
@@ -51,6 +51,8 @@
       <div class="choices"><span>Deviation:</span><input type="range" id="deviation"><output id="deviationValue"></output></div>
       <div class="choices" id="spreads"><span>Beta spread fixed:</span></div>
       <div class="choices" id="methods"><span>Voting method:</span></div>
+      <div class="choices"><span>Approval (mix):</span><span>largest gap</span><input type="range" id="half" min="0" max="100" step="5"><span>half</span><output id="halfValue"></output></div>
+      <div class="choices"><span>Score categories:</span><input type="range" id="levels" min="2" step="1"><output id="levelsValue"></output></div>
       <div class="choices" id="ideals"><span>Ideal scenario:</span></div>
       <p>Drag a candidate to move it · click empty space to add one · right-click to remove</p>
       <p>Hover the square to see the voters of a pixel along x (above) and in 2D</p>
@@ -75,6 +77,10 @@
     const spreads = document.getElementById("spreads");
     const deviationSlider = document.getElementById("deviation");
     const deviationValue = document.getElementById("deviationValue");
+    const mixSlider = document.getElementById("half");
+    const mixValue = document.getElementById("halfValue");
+    const levelsSlider = document.getElementById("levels");
+    const levelsValue = document.getElementById("levelsValue");
     const joint = document.getElementById("joint");
     const votersText = document.getElementById("voters");
     const showMarginal = document.getElementById("showMarginal");  // the strip above the square
@@ -121,6 +127,11 @@
     let spread = null;    // name of the selected Beta spread rule
     let spreadInfo = {};  // spread name -> {label, tex, description} from the backend
     let deviation = 0;    // mean absolute deviation of the voters from their pixel
+    let approvalMix = null;  // name of the method the mix slider belongs to
+    let half = 0;            // its share of the voters who approve half of the candidates; the
+                             // others approve those above their largest gap
+    let scoreMethod = null;  // name of the method the categories slider belongs to
+    let levels = 0;          // its number of scores on a ballot
     let voters = {};      // deviation -> {sigma, beta_params} from the backend, where
                           // beta_params is spread name -> [a, b] along one axis, per pixel
     let hovered = [0.5, 0.5];  // point whose pixel's voters are shown in the strip and the shade
@@ -353,9 +364,9 @@
       return path;
     }
 
-    // What an answer depends on besides the candidates' positions and the deviation. An answer to
+    // What an answer depends on besides the candidates' positions and the sliders. An answer to
     // other settings (or to a candidate added or removed since, whose colours shifted) is not drawn;
-    // one to an older deviation is, so sliding it shows the newest diagram it can, like a drag.
+    // one to an older slider value is, so sliding it shows the newest diagram it can, like a drag.
     const settings = () => JSON.stringify([method, distribution, spread, candidates.length]);
 
     // Ask the backend for the win regions, traced on `grid` points per axis. While an answer is
@@ -376,21 +387,21 @@
 
     async function request(grid) {
       inFlight = true;
-      const asked = settings(), askedDeviation = deviation;
+      const asked = settings(), sliders = [deviation, half, levels];
       if (grid === finalGrid) message.textContent = `Computing ${labels[method]}…`;
       const start = performance.now();
       try {
         const response = await fetch("/api/regions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ candidates, method, distribution, spread, deviation, grid }),
+          body: JSON.stringify({ candidates, method, distribution, spread, deviation, half, levels, grid }),
         });
         if (!response.ok) throw new Error(await response.text());
         const answer = await response.json();
         if (asked === settings()) {
           regions = answer.regions.map(({ winner, polygons }) => ({ winner, path: toPath(polygons) }));
           draw();
-          describe(askedDeviation, Math.round(performance.now() - start), Math.round(answer.ms));
+          describe(...sliders, Math.round(performance.now() - start), Math.round(answer.ms));
         }
       } catch (error) {
         if (asked === settings()) message.textContent = `Error: ${error.message}`;
@@ -405,9 +416,11 @@
     }
 
     // What the diagram shows, and how long it took (round trip, and computing it on the backend).
-    function describe(deviation, total, server) {
+    function describe(deviation, half, levels, total, server) {
       const tail = ` · ${candidates.length} candidates · ${total} ms (${server} ms computing)`;
-      const name = labels[method];
+      let name = labels[method];
+      if (method === scoreMethod) name += `, ${levels} categories`;
+      if (method === approvalMix) name += `, ${percent(half)} % approve half`;
       if (method === "voronoi") {  // nearest candidate, no voters involved
         message.textContent = `${name}${tail}`;
       } else if (distribution === "beta") {
@@ -502,6 +515,15 @@
       for (const button of spreads.querySelectorAll("button")) button.disabled = distribution !== "beta";
     }
 
+    // The mix and the categories sliders only apply to their methods.
+    function pickMethod(name) {
+      method = name;
+      mixSlider.disabled = method !== approvalMix;
+      levelsSlider.disabled = method !== scoreMethod;
+    }
+
+    const percent = share => Math.round(100 * share);
+
     // Start: default candidates, distributions and methods (names, tooltips) come from the backend.
     const config = await (await fetch("/api/config")).json();
     candidates = config.candidates;
@@ -525,15 +547,42 @@
     deviationSlider.value = config.deviations.indexOf(config.deviation);
     deviationSlider.addEventListener("input", () => { pickDeviation(); drawVoters(); compute(dragGrid); });
     deviationSlider.addEventListener("change", () => compute());
+    // The mix slider is in percent, from all voters approving down to their largest gap (left) to
+    // all approving half of the candidates (right). The categories slider is the number of scores
+    // of a score ballot. Both recompute like the deviation slider.
+    approvalMix = config.approval_mix;
+    scoreMethod = config.score;
+    function pickMix() {
+      half = mixSlider.valueAsNumber / 100;
+      mixValue.textContent = `${percent(half)} %`;
+    }
+    function pickLevels() {
+      levels = levelsSlider.valueAsNumber;
+      levelsValue.textContent = `${levels} (scores 0 to ${levels - 1})`;
+    }
+    mixSlider.value = percent(config.half);
+    mixSlider.title = "Share of the voters who approve half of the candidates; the others " +
+      "approve those above their largest gap. For Approval (mix) only.";
+    Object.assign(levelsSlider, { max: config.max_levels, value: config.levels });
+    levelsSlider.title = "Number of scores on a ballot: the top one for the closest candidate, 0 " +
+      "for the farthest, and the others in proportion to their distance between the two. " +
+      "For Score only.";
+    for (const [slider, pick] of [[mixSlider, pickMix], [levelsSlider, pickLevels]]) {
+      slider.addEventListener("input", () => { pick(); compute(dragGrid); });
+      slider.addEventListener("change", () => compute());
+    }
     choices(spreads, config.spreads, name => { spread = name; drawVoters(); });
-    choices(methods, config.methods, name => method = name, [methods, ideals]);
-    choices(ideals, config.ideals, name => method = name, [methods, ideals]);
+    choices(methods, config.methods, pickMethod, [methods, ideals]);
+    choices(ideals, config.ideals, pickMethod, [methods, ideals]);
     labels = Object.fromEntries([...config.methods, ...config.ideals].map(({ name, label }) => [name, label]));
     distribution = config.distributions[0].name;
     distributions.querySelector("button").classList.add("active");
     spread = config.spread;
     spreads.querySelectorAll("button")[config.spreads.findIndex(info => info.name === spread)].classList.add("active");
     pickDeviation();
+    pickMix();
+    pickLevels();
+    pickMethod(null);  // none yet: the mix and categories sliders wait for their methods
     updateSpreads();
     draw();
     drawVoters();

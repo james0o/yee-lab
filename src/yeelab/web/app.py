@@ -15,7 +15,7 @@ from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from yeelab.build import Winner
+from yeelab.build import Highest, Score, Tally, Winner, mixed_approval
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.regions import MARGINS, regions
 from yeelab.margin.shares import PIXELS, Model
@@ -36,6 +36,23 @@ DIAGRAMS = [*MARGINS, *IDEALS]
 # is the default.
 DEVIATIONS = [round(0.05 * k, 2) for k in range(1, 9)]
 assert DEVIATION in DEVIATIONS
+# The mix slider of "approval_mix": the share of its voters who approve half of the
+# candidates, from 0 (all approve down to their largest gap, "approval_gap") to 1 (all
+# approve half, "approval"). HALF_SHARE is its default. The categories slider of "score":
+# the number of scores on its ballot, from 2 to MAX_LEVELS (scores 0 to 10). SCORE_LEVELS
+# is its default. SLIDERS builds the two methods from a request's sliders; they are
+# listed with the defaults.
+APPROVAL_MIX = "approval_mix"
+HALF_SHARE = 0.5
+SCORE = "score"
+SCORE_LEVELS = 6
+MAX_LEVELS = 11
+SLIDERS = {
+    APPROVAL_MIX: lambda request: mixed_approval(request.half),
+    SCORE: lambda request: Highest(Tally(Score(request.levels))),
+}
+assert MARGINS[APPROVAL_MIX] == mixed_approval(HALF_SHARE)
+assert MARGINS[SCORE] == Highest(Tally(Score(SCORE_LEVELS)))
 # Win regions are traced on a grid of this many points per axis: coarser while a
 # candidate is dragged, finer once it is dropped (see margin/regions.py).
 DRAG_GRID = 160
@@ -75,6 +92,17 @@ METHOD_INFO = {
     "approval_gap": {"label": "Approval (gap)", "description": "Approval (gap): a voter puts "
                      "the candidates in order of distance and approves those above the largest "
                      "gap. The candidate approved by the most voters wins."},
+    "approval_mix": {"label": "Approval (mix)", "description": "Approval (mix): both kinds of "
+                     "voters. The mix slider below sets the share who approve half of the "
+                     "candidates, as in Approval; the others approve those above their largest "
+                     "gap, as in Approval (gap). The candidate approved by the most voters wins. "
+                     "The expression is the slider's default."},
+    "score": {"label": "Score", "description": "Score: a voter gives the closest candidate the "
+              "top score, the farthest 0, and every other one the score in proportion to where "
+              "its distance is between those two, rounded to a whole score. The highest mean "
+              "score wins. The slider below sets the number of categories (scores); with two, a "
+              "voter approves the candidates closer than halfway between the closest and the "
+              "farthest. The expression is the slider's default."},
     "voronoi": {"label": "Voronoi", "description": "The nearest candidate to the pixel, without "
                 "voters: what the ranked methods draw when all voters are at their pixel."},
 }
@@ -131,6 +159,8 @@ class DiagramRequest(BaseModel):
     distribution: Distribution = "beta"
     spread: Spread = SPREAD  # Beta only
     deviation: float = DEVIATION
+    half: float = Field(HALF_SHARE, ge=0, le=1)  # approval_mix only
+    levels: int = Field(SCORE_LEVELS, ge=2, le=MAX_LEVELS)  # score only
     grid: int = Field(FINAL_GRID, ge=32, le=512)
 
     @field_validator("deviation")
@@ -191,6 +221,12 @@ def config():
         "final_grid": FINAL_GRID,
         "deviations": DEVIATIONS,
         "deviation": DEVIATION,
+        # the methods of the mix slider and of the categories slider, and their defaults
+        "approval_mix": APPROVAL_MIX,
+        "half": HALF_SHARE,
+        "score": SCORE,
+        "levels": SCORE_LEVELS,
+        "max_levels": MAX_LEVELS,
         # for the voter distribution plots of the hovered pixel
         "voters": _voters(),
     }
@@ -205,7 +241,9 @@ def diagram_regions(request: DiagramRequest):
     start = time.perf_counter()
     spread = request.spread if request.distribution == "beta" else None
     model = Model(request.distribution, request.deviation, spread)
-    shapes = regions(request.method, request.candidates, model, request.grid)
+    build = SLIDERS.get(request.method)  # built from the sliders
+    method = build(request) if build else request.method
+    shapes = regions(method, request.candidates, model, request.grid)
     payload = {"regions": shapes, "ms": round(1000 * (time.perf_counter() - start), 1)}
     # json.dumps directly: FastAPI's encoder is slow on thousands of vertices
     return Response(json.dumps(payload, separators=(",", ":")), media_type="application/json")

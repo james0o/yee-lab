@@ -841,10 +841,11 @@ looks at a single defeat and not at paths of defeats.
 has a winner, never a cycle, and like Schulze, Baldwin and Nanson, Black differs from
 the Condorcet winner diagram only where there is a cycle.
 
-== Approval voting (`approval`, `approval_gap`) <sec-approval>
+== Approval voting (`approval`, `approval_gap`, `approval_mix`) <sec-approval>
 
-These two are only in the web UI as well, built from blocks as
-`Highest(Tally(Approval()))` and `Highest(Tally(GapApproval()))`. An approval ballot is
+These are only in the web UI as well, built from blocks as
+`Highest(Tally(Approval()))` and `Highest(Tally(GapApproval()))`; `approval_mix` has
+voters of both kinds (below). An approval ballot is
 not a ranking: the voter approves some of the candidates, and the candidate approved by
 the most voters wins. Whom a voter approves depends on how far the candidates are and
 not only on their order, so the model needs one more assumption than the ranked methods
@@ -948,6 +949,24 @@ margin (@sec-zero-sets) is its lead over the second: the second smallest $u_i$ m
 smallest. The tally of an approval ballot in `yeelab.build` is $-u_i = q_i - 1$, the
 share counted down from $1$. The shares $q_i$ do not sum to $1$: their sum is the mean
 number of approved candidates.
+
+*A mix of both ballots.* `approval_mix` is
+`Highest(Tally(Mix(GapApproval(), Approval(), share=s)))`: the share $s$ of the voters of
+every pixel approve half of the candidates and the others those above their largest gap.
+A tally is a mean over the voters, so it is linear in them, and the share who do not
+approve $c_i$ is
+
+$ u_i = (1 - s) thin u_i^"gap" + s thin u_i^"half" $ <eq-approval-mix>
+
+with the two shares of @eq-grid-share. Nothing new is integrated: both are computed as
+before and mixed at every traced point. The sum has no negative terms, so a small $u_i$
+stays as exact as its two parts, and the margin stays continuous in the median. At $s = 0$
+and $s = 1$ only one ballot is marked, and the method is `approval_gap` or `approval`
+itself, from the shares of that ballot alone. The slider of the web UI sets $s$, from $0$
+at its left end to $1$ at its right; the method is listed with $s = 0.5$. A candidate who
+wins a pixel at both ends wins it for every $s$, and the winner at $s = 0$, once it has
+lost a pixel, does not win it back as $s$ grows: its lead over each other candidate is
+linear in $s$.
 
 #figure(
   image("figures/approval.png", width: 100%),

@@ -17,6 +17,9 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
                                       their cut: these voters have curved borders, so
                                       the shares come from a grid of voters, not from
                                       polygons
+    approval_mix                      those of both cuts, which it mixes
+    score                             the part of the top score a candidate does not get:
+                                      from the same grid of voters
 
 (Borda needs only pairwise shares: a ballot gives c one point per candidate ranked
 below c, so c's expected score is sum_e d[c, e].)
@@ -30,8 +33,8 @@ For normal voters a half-plane holds Phi(signed distance / sigma) of the voters,
 their pairwise shares need no edges at all.
 
 All of these are at the interpolation nodes, shape (N, N, ...); regions.py
-interpolates them to the points where the methods are evaluated. The approval shares
-are computed at those points themselves (unapproved_shares).
+interpolates them to the points where the methods are evaluated. The approval and score
+shares are computed at those points themselves (unapproved_shares, unscored_shares).
 """
 
 import os
@@ -43,7 +46,7 @@ from functools import cached_property, lru_cache
 import numpy as np
 from scipy.special import betainc, betaincc, logit, ndtr
 
-from yeelab import normal, ranking_cells, threads
+from yeelab import normal, ranking_cells, score, threads
 from yeelab.approval import Cut, coverage
 from yeelab.distributions import Distribution
 from yeelab.margin.beta_tables import TabulatedBeta
@@ -368,3 +371,18 @@ def unapproved_shares(candidates, model: Model, cut: Cut, medians) -> np.ndarray
     lines, mass = _voter_grid(model, medians)
     rest = np.subtract(1.0, coverage(lines, lines, candidates, cut, APPROVAL_SUB), dtype=np.float64)
     return np.moveaxis(mass @ rest @ mass.T, 0, -1)
+
+
+def unscored_shares(candidates, model: Model, levels: int, medians) -> np.ndarray:
+    """unscored[i, j, c] = mean part of the top score that the voters with median
+    (medians[i], medians[j]) do not give c on a score ballot with `levels` scores
+    (yeelab.score), from 0 to 1, shape (M, M, C). The mean score of c is the top score,
+    levels - 1, times 1 minus this.
+
+    The same sum over the voter grid as unapproved_shares, of the points below the top
+    score in place of the voters who do not approve, and for the same reason: it has no
+    negative terms, so it stays exact where nearly all voters give two candidates the
+    top score."""
+    lines, mass = _voter_grid(model, medians)
+    short = score.unscored(lines, lines, candidates, levels, APPROVAL_SUB).astype(np.float64)
+    return np.moveaxis(mass @ short @ mass.T, 0, -1) / (levels - 1)

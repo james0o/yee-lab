@@ -7,7 +7,9 @@
 Every block has one type of output:
 
     Ballot           Plurality(), BordaCount(),         points one voter gives a candidate
-                     Approval(), GapApproval()
+                     Approval(), GapApproval(),
+                     Score(levels),
+                     Mix(first, second, share=...)
     CandidateTotals  Tally(ballot), Weakest(diffs)      a total of each candidate at a point
     PairShares       Pairwise()                         share of the voters ranking c above e
     PairDiffs        Margins(shares),                   how strongly c beats e (antisymmetric)
@@ -24,6 +26,11 @@ approval ballot gives one point to each candidate the voter approves, the closes
 down to a cut that depends on how far the candidates are and not only on their order
 (yeelab.approval): Approval approves half of them, GapApproval those above the largest
 gap; its total is counted down from 1, a point lost per voter who does not approve.
+A score ballot, Score(levels), gives a score from 0 to levels - 1 (yeelab.score): the
+top score to the closest candidate, 0 to the farthest, and to the others in proportion
+to where their distance is between the two; its total is counted down from 1 likewise.
+Mix(first, second, share=s) is two kinds of voters: s of them mark `second`, the others
+`first`.
 Each ballot also knows the cheapest formula for its mean over the voters (Ballot.tally),
 from the shares in voters.Voters. Tally averages them over the voters of a point.
 
@@ -57,7 +64,7 @@ import numpy as np
 
 from yeelab.approval import GAP, HALF, Cut
 from yeelab.build.rounds import drop_below_mean, drop_lowest
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Approved, Share, Voters
+from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Approved, Scored, Share, Voters
 from yeelab.voting import CYCLE, irv_rounds
 
 Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) at every point
@@ -252,6 +259,89 @@ class GapApproval(Ballot):
 
     def tally(self, voters: Voters, alive: np.ndarray | None) -> np.ndarray:
         return _approving(voters, GAP, alive)
+
+
+@dataclass(frozen=True)
+class Score(Ballot):
+    """A score from 0 to levels - 1 for every candidate (yeelab.score): the top score for
+    the closest, 0 for the farthest, and for the others the score in proportion to where
+    their distance is between those two, rounded to a whole score.
+
+    The total is the mean score as a part of the top score, counted down from 1 like
+    that of an approval ballot. Score(2) is one: the voter approves the candidates closer
+    than halfway between the closest and the farthest."""
+
+    levels: int
+
+    def __post_init__(self):
+        if isinstance(self.levels, bool) or not isinstance(self.levels, int) or self.levels < 2:
+            raise ValueError(f"Score levels must be a whole number of at least 2, got {self.levels!r}")
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return frozenset({Scored(self.levels)})
+
+    needs_remaining = needs
+
+    def tally(self, voters: Voters, alive: np.ndarray | None) -> np.ndarray:
+        """Minus the part of the top score the voters do not give each candidate
+        (Voters.unscored), as _approving: the remaining candidates of an elimination
+        keep their totals, the others get -1."""
+        totals = -voters.unscored[self.levels]
+        return totals if alive is None else np.where(alive, totals, -1.0)
+
+    def __repr__(self):
+        return f"Score({self.levels})"
+
+
+@dataclass(frozen=True)
+class Mix(Ballot):
+    """Two kinds of voters: `share` of the voters of every point mark `second`, the
+    others `first`. The tally is that mix of the two tallies, which is linear in the
+    voters; share=0 is `first` and share=1 is `second`, and a ballot no one marks is
+    not tallied (nor are its shares needed). The points of the two ballots are added up,
+    so they must be on one scale, as those of two approval ballots are:
+
+        Mix(GapApproval(), Approval(), share=0.25)
+
+    is a quarter of the voters approving half of the candidates and three quarters
+    those above their largest gap."""
+
+    first: Ballot
+    second: Ballot
+    share: float
+
+    def __post_init__(self):
+        _expect(self, self.first, Ballot, "a Ballot")
+        _expect(self, self.second, Ballot, "a Ballot")
+        if not 0 <= self.share <= 1:
+            raise ValueError(f"Mix share must be between 0 and 1, got {self.share!r}")
+
+    @property
+    def marked(self) -> tuple[Ballot, ...]:
+        """The ballots some of the voters mark."""
+        if self.share == 0:
+            return (self.first,)
+        if self.share == 1:
+            return (self.second,)
+        return (self.first, self.second)
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return frozenset().union(*(ballot.needs for ballot in self.marked))
+
+    @property
+    def needs_remaining(self) -> frozenset[Share]:
+        return frozenset().union(*(ballot.needs_remaining for ballot in self.marked))
+
+    def tally(self, voters: Voters, alive: np.ndarray | None) -> np.ndarray:
+        tallies = [ballot.tally(voters, alive) for ballot in self.marked]
+        if len(tallies) == 1:
+            return tallies[0]
+        return (1 - self.share) * tallies[0] + self.share * tallies[1]
+
+    def __repr__(self):
+        return f"Mix({self.first!r}, {self.second!r}, share={self.share!r})"
 
 # ---------------------------------------------------------------- PairShares
 

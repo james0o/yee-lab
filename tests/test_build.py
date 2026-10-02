@@ -16,7 +16,9 @@ Runoff is checked against a Python reference of its duel between the built final
 king_runoff on the profiles, other finalists (with cycles and ties) on random shares.
 The approval ballots tally the shares not approving they are given, which
 test_approval.py checks; here the most approved candidate must win, with its lead as the
-margin.
+margin. A Mix of two ballots must tally the mix of their voters, and be the one ballot
+itself where all voters mark it. The score ballot tallies the parts of the top score not
+given, which test_score.py checks, the same way as the approval ballots.
 
 Wrong blocks must fail when built, and every method must print as the expression
 that builds it.
@@ -44,14 +46,18 @@ from yeelab.build import (
     GapApproval,
     Highest,
     Margins,
+    Mix,
     Pairwise,
     Plurality,
     Runoff,
+    Score,
+    Scored,
     StrongestPaths,
     Tally,
     Unbeaten,
     Voters,
     Weakest,
+    mixed_approval,
 )
 from yeelab.pixels import beta as pixel_beta, methods as pixel_methods, normal as pixel_normal
 from yeelab.voting import CYCLE
@@ -550,6 +556,119 @@ def test_an_approval_ballot_is_not_marked_again_in_an_elimination():
     np.testing.assert_allclose(margin, np.diff(ordered, axis=-1).min(axis=-1), rtol=0, atol=1e-12)
 
 
+@pytest.mark.parametrize("share", [0.25, 0.5, 0.9])
+def test_a_mix_tallies_both_kinds_of_voters(share):
+    """Mix(first, second, share): `share` of the voters mark second and the others first,
+    so every total is that mix of the two, among any remaining candidates, and the
+    candidate the fewest of all voters do not approve wins."""
+    voters, ballot = _approving_voters(), Mix(GapApproval(), Approval(), share=share)
+    unapproved = (1 - share) * voters.unapproved[GAP] + share * voters.unapproved[HALF]
+    np.testing.assert_allclose(ballot.tally(voters, None), -unapproved, rtol=1e-12, atol=0)
+    alive = np.random.default_rng(1).random(unapproved.shape) < 0.5
+    np.testing.assert_allclose(ballot.tally(voters, alive), np.where(alive, -unapproved, -1),
+                               rtol=1e-12, atol=0)
+    winner, margin = Highest(Tally(ballot)).evaluate(voters)
+    ordered = np.sort(unapproved, axis=-1)
+    clear = ordered[..., 1] - ordered[..., 0] > 1e-12
+    np.testing.assert_array_equal(winner[clear], unapproved.argmin(axis=-1)[clear])
+    np.testing.assert_allclose(margin, ordered[..., 1] - ordered[..., 0], rtol=0, atol=1e-12)
+
+
+def test_a_mix_all_voters_mark_one_ballot_of_is_that_ballot():
+    """At share 0 all voters mark the first ballot and at 1 the second: the same totals,
+    bit for bit, from the shares of that ballot alone."""
+    voters = _approving_voters()
+    alive = np.random.default_rng(1).random((4, 6, 5)) < 0.5
+    for share, ballot, cut in ((0, GapApproval(), GAP), (1, Approval(), HALF), (1.0, Approval(), HALF)):
+        mix = Mix(GapApproval(), Approval(), share=share)
+        assert mix.needs == mix.needs_remaining == {Approved(cut)}
+        only = Voters(unapproved={cut: voters.unapproved[cut]})  # the other cut is not read
+        for remaining in (None, alive):
+            np.testing.assert_array_equal(mix.tally(only, remaining), ballot.tally(voters, remaining))
+        for result, expected in zip(mixed_approval(share).evaluate(only),
+                                    Highest(Tally(ballot)).evaluate(voters)):
+            np.testing.assert_array_equal(result, expected)
+
+
+def test_a_mix_keeps_a_lead_among_candidates_nearly_all_approve():
+    """All but 3e-30 and 1e-30 of the one kind of voters and all but 1e-30 and 5e-30 of
+    the other approve two candidates: of half of each, 2e-30 and 3e-30 do not."""
+    unapproved = {GAP: np.array([[3e-30, 1e-30, 0.4]]), HALF: np.array([[1e-30, 5e-30, 0.4]])}
+    winner, margin = mixed_approval(0.5).evaluate(Voters(unapproved=unapproved))
+    np.testing.assert_array_equal(winner, [0])
+    np.testing.assert_allclose(margin, [1e-30], rtol=1e-12, atol=0)
+
+
+def test_a_mix_of_ranked_ballots_is_eliminated_round_by_round(profile):
+    """Mix takes any two ballots and has no formula of its own for an elimination:
+    Eliminate tallies the remaining candidates again each round, from the shares both
+    ballots need for that."""
+    voters = _voters(*profile)
+    ballot = Mix(Plurality(), BordaCount(), share=0.3)
+    assert ballot.needs == {FIRST, PAIRWISE} and ballot.needs_remaining == {PROFILE, PAIRWISE}
+    np.testing.assert_allclose(ballot.tally(voters, None),
+                               0.7 * voters.first + 0.3 * voters.pairwise.sum(axis=-1), rtol=0, atol=1e-6)
+    method = Eliminate(Tally(ballot), how="min")
+    assert method.needs == {PROFILE, PAIRWISE}
+    winner, margin = method.evaluate(voters)
+    alive = np.ones((*voters.shape, voters.n_candidates), dtype=bool)
+    for _ in range(voters.n_candidates - 1):  # the lowest total of the remaining ones goes
+        totals = np.where(alive, ballot.tally(voters, alive), np.inf)
+        np.put_along_axis(alive, totals.argmin(axis=-1)[..., None], False, axis=-1)
+    clear = margin > TOLERANCE
+    np.testing.assert_array_equal(winner[clear], alive.argmax(axis=-1)[clear])
+
+
+@pytest.mark.parametrize("share", [-0.1, 1.5, float("nan")])
+def test_a_mix_share_is_a_share(share):
+    with pytest.raises(ValueError, match=re.escape(f"Mix share must be between 0 and 1, got {share!r}")):
+        Mix(GapApproval(), Approval(), share=share)
+
+
+def test_the_highest_mean_score_wins():
+    """Highest(Tally(Score(levels))) on the shares of its own number of levels: the
+    candidate the voters give the largest part of the top score wins, and the margin is
+    its lead over the second. Like an approval ballot's, the tally is counted down from
+    1, the remaining candidates of an elimination keep theirs, and the others get -1."""
+    rng = np.random.default_rng(0)
+    voters = Voters(unscored={levels: rng.random((4, 6, 5)) for levels in (4, 6)})
+    assert voters.shape == (4, 6) and voters.n_candidates == 5
+    for levels in (4, 6):
+        ballot, shares = Score(levels), voters.unscored[levels]
+        assert ballot.needs == ballot.needs_remaining == {Scored(levels)}
+        np.testing.assert_array_equal(ballot.tally(voters, None), -shares)
+        alive = np.random.default_rng(1).random(shares.shape) < 0.5
+        np.testing.assert_array_equal(ballot.tally(voters, alive), np.where(alive, -shares, -1))
+        winner, margin = Highest(Tally(ballot)).evaluate(voters)
+        ordered = np.sort(shares, axis=-1)
+        np.testing.assert_array_equal(winner, shares.argmin(axis=-1))
+        np.testing.assert_array_equal(margin, ordered[..., 1] - ordered[..., 0])
+
+
+def test_a_lead_among_candidates_nearly_all_give_the_top_score_is_kept():
+    """Two candidates short of the top score by 3e-30 and 1e-30 of it: both mean scores
+    are the top score in floating point, and the second still wins by 2e-30."""
+    unscored = np.array([[3e-30, 1e-30, 0.4], [1e-40, 2e-40, 1.0]])
+    winner, margin = Highest(Tally(Score(6))).evaluate(Voters(unscored={6: unscored}))
+    np.testing.assert_array_equal(winner, [1, 0])
+    np.testing.assert_allclose(margin, [2e-30, 1e-40], rtol=1e-12, atol=0)
+
+
+def test_score_takes_the_number_of_levels():
+    assert Score(3) == Score(levels=3) != Score(4)
+    assert repr(Score(3)) == "Score(3)"
+    for levels in (1, 0, -3, 2.5, "3", True):
+        with pytest.raises(ValueError, match=re.escape(
+                f"Score levels must be a whole number of at least 2, got {levels!r}")):
+            Score(levels)
+    with pytest.raises(TypeError):  # no cut to choose, unlike the two approval ballots
+        Score(3, "gap")
+    # as a ballot like any other: mixed with another, and eliminated round by round
+    mixed = Mix(Approval(), Score(4), share=0.5)
+    assert mixed.needs == {Approved(HALF), Scored(4)}
+    assert Eliminate(Tally(Score(4)), how="min").needs == {Scored(4)}
+
+
 def test_approval_ballots_take_no_arguments():
     """Each has its one cut: there is no threshold to set."""
     for ballot in (Approval, GapApproval):
@@ -588,7 +707,7 @@ def test_condorcet_ties():
         np.testing.assert_array_equal(margin, 0.0, err_msg=name)
 
 
-def test_methods_are_the_thirteen_expressions():
+def test_methods_are_the_fifteen_expressions():
     pairwise = Pairwise()
     margins = Margins(pairwise)
     assert METHODS == {
@@ -608,10 +727,13 @@ def test_methods_are_the_thirteen_expressions():
             Eliminate(Tally(Plurality()), how="min")),
         "approval": Highest(Tally(Approval())),
         "approval_gap": Highest(Tally(GapApproval())),
+        "approval_mix": Highest(Tally(Mix(GapApproval(), Approval(), share=0.5))),
+        "score": Highest(Tally(Score(6))),
     }
     assert list(METHODS) == ["fptp", "irv", "borda", "baldwin", "nanson", "schulze",
                              "condorcet", "minimax", "black", "koth", "king_runoff",
-                             "approval", "approval_gap"]
+                             "approval", "approval_gap", "approval_mix", "score"]
+    assert mixed_approval(0.5) == METHODS["approval_mix"] != mixed_approval(0.25)
 
 
 def test_repr_is_the_expression():
@@ -630,6 +752,8 @@ def test_repr_is_the_expression():
         'Eliminate(Tally(Plurality()), how="min"))')
     assert repr(METHODS["approval"]) == "Highest(Tally(Approval()))"
     assert repr(METHODS["approval_gap"]) == "Highest(Tally(GapApproval()))"
+    assert repr(METHODS["approval_mix"]) == "Highest(Tally(Mix(GapApproval(), Approval(), share=0.5)))"
+    assert repr(METHODS["score"]) == "Highest(Tally(Score(6)))"
     challenged =Unbeaten(StrongestPaths(Margins(Pairwise())), against=METHODS["black"],
                           order=Weakest(Margins(Pairwise())))
     for method in [*METHODS.values(), *ELIMINATIONS, *BALLOTS, *PAIR_BLOCKS, challenged, *RUNOFFS]:
@@ -665,6 +789,8 @@ def test_needs():
     assert all(block.needs == {PAIRWISE} for block in PAIR_BLOCKS)
     assert METHODS["approval"].needs == {Approved(HALF)}
     assert METHODS["approval_gap"].needs == {Approved(GAP)}
+    assert METHODS["approval_mix"].needs == {Approved(GAP), Approved(HALF)}
+    assert METHODS["score"].needs == {Scored(6)}
     assert Eliminate(Tally(GapApproval()), how="min").needs == {Approved(GAP)}
     assert Fallback(METHODS["condorcet"], METHODS["approval"]).needs == {PAIRWISE, Approved(HALF)}
 
@@ -694,6 +820,10 @@ def test_unbeaten_against_needs_the_shares_of_all_three():
     (lambda: Tally(Margins(Pairwise())), "Tally expects a Ballot, got PairDiffs: Margins(Pairwise())"),
     (lambda: Tally(Plurality), "Tally expects a Ballot, got the class Plurality; call it: Plurality()"),
     (lambda: Tally(3), "Tally expects a Ballot, got int 3"),
+    (lambda: Mix(Tally(Plurality()), Approval(), share=0.5),
+     "Mix expects a Ballot, got CandidateTotals: Tally(Plurality())"),
+    (lambda: Mix(GapApproval(), Approval, share=0.5),
+     "Mix expects a Ballot, got the class Approval; call it: Approval()"),
     (lambda: Eliminate(BordaCount(), how="min"), "Eliminate expects a Tally"),
     (lambda: Eliminate(Highest(Tally(Plurality())), how="min"),
      "Eliminate expects a Tally (it tallies the remaining candidates again), got a Winner"),

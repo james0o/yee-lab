@@ -12,6 +12,11 @@ pixels/.
                 as Approved(cut). The share approving is 1 minus this. It is not kept
                 itself: where nearly all voters approve two candidates, both shares are
                 1 to rounding, and only the shares not approving tell them apart
+    unscored    {levels: mean part of the top score that the voters do not give each
+                candidate (..., C)}, from 0 to 1, one entry per number of levels of the
+                score ballots (yeelab.score); a method names each as Scored(levels). The
+                mean score is the top score, levels - 1, times 1 minus this. Kept this way
+                for the same reason as `unapproved`
 """
 
 from dataclasses import dataclass
@@ -29,7 +34,14 @@ class Approved:
     cut: Cut
 
 
-Share = Literal["first", "pairwise", "profile"] | Approved
+@dataclass(frozen=True)
+class Scored:
+    """The scores on a ballot with `levels` scores."""
+
+    levels: int
+
+
+Share = Literal["first", "pairwise", "profile"] | Approved | Scored
 FIRST: Share = "first"
 PAIRWISE: Share = "pairwise"
 PROFILE: Share = "profile"
@@ -44,6 +56,13 @@ class Voters:
     rankings: np.ndarray | None = None
     probs: np.ndarray | None = None
     unapproved: dict[Cut, np.ndarray] | None = None
+    unscored: dict[int, np.ndarray] | None = None
+
+    @property
+    def _marked(self) -> np.ndarray:
+        """The shares of one of the approval or score ballots, (..., C)."""
+        shares = self.unapproved if self.unapproved is not None else self.unscored
+        return next(iter(shares.values()))
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -54,7 +73,7 @@ class Voters:
             return self.pairwise.shape[:-2]
         if self.probs is not None:
             return self.probs.shape[:-1]
-        return next(iter(self.unapproved.values())).shape[:-1]
+        return self._marked.shape[:-1]
 
     @property
     def n_candidates(self) -> int:
@@ -64,4 +83,4 @@ class Voters:
             return self.pairwise.shape[-1]
         if self.rankings is not None:
             return self.rankings.shape[1]
-        return next(iter(self.unapproved.values())).shape[-1]
+        return self._marked.shape[-1]

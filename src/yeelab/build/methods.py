@@ -9,9 +9,11 @@ from yeelab.build.blocks import (
     GapApproval,
     Highest,
     Margins,
+    Mix,
     Pairwise,
     Plurality,
     Runoff,
+    Score,
     StrongestPaths,
     Tally,
     Unbeaten,
@@ -38,6 +40,19 @@ king_runoff = Runoff(M, koth, irv)                   # the king of the hill agai
 approval = Highest(Tally(Approval()))                # approved by the most voters, each approving half
 approval_gap = Highest(Tally(GapApproval()))         # ... each approving down to their largest gap
 
+
+def mixed_approval(half: float) -> Winner:
+    """Approval by both kinds of voters: the share `half` of them approve half of the
+    candidates, the others down to their largest gap. It is approval_gap at 0 and
+    approval at 1."""
+    return Highest(Tally(Mix(GapApproval(), Approval(), share=half)))
+
+
+approval_mix = mixed_approval(0.5)                   # ... half of them each way
+
+
+score = Highest(Tally(Score(6)))                     # the highest mean score, of 0 to 5
+
 METHODS: dict[str, Winner] = {
     "fptp": fptp,
     "irv": irv,
@@ -52,4 +67,6 @@ METHODS: dict[str, Winner] = {
     "king_runoff": king_runoff,
     "approval": approval,
     "approval_gap": approval_gap,
+    "approval_mix": approval_mix,
+    "score": score,
 }

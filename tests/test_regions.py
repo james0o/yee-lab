@@ -11,9 +11,9 @@ import pytest
 from fastapi.testclient import TestClient
 from matplotlib.path import Path as MplPath
 
-from yeelab.build import Approved, Voters
+from yeelab.build import Approved, Highest, Score, Scored, Tally, Voters, mixed_approval
 from yeelab.margin.regions import MARGINS, grid, regions, winners
-from yeelab.margin.shares import Model, first_choice_shares, unapproved_shares
+from yeelab.margin.shares import Model, first_choice_shares, unapproved_shares, unscored_shares
 from yeelab.pixels import beta as pixel_beta, methods as pixel_methods, normal as pixel_normal
 from yeelab.ranking_cells import pixel_medians
 from yeelab.voting import irv_rounds
@@ -34,17 +34,19 @@ def _voters(rankings, probs):
 
 def _pixel_winners(method, model, rankings, probs):
     """Winner of every pixel: pixels.methods, or, for the methods only yeelab.build has
-    (checked in test_build.py), the method on the complete profile. The approval shares
-    are not in a profile of rankings (checked in test_approval.py): they are taken at the
-    pixel centres."""
+    (checked in test_build.py), the method on the complete profile. The approval and
+    score shares are not in a profile of rankings (checked in test_approval.py and
+    test_score.py): they are taken at the pixel centres."""
     if method in pixel_methods.METHODS:
         return pixel_methods.METHODS[method](rankings, probs)
     cuts = [share.cut for share in MARGINS[method].needs if isinstance(share, Approved)]
-    if not cuts:
+    levels = [share.levels for share in MARGINS[method].needs if isinstance(share, Scored)]
+    if not cuts and not levels:
         return MARGINS[method].evaluate(_voters(rankings, probs))[0]
     centres = pixel_medians(probs.shape[0])
     unapproved = {cut: unapproved_shares(CANDIDATES, model, cut, centres) for cut in cuts}
-    return MARGINS[method].evaluate(Voters(unapproved=unapproved))[0]
+    unscored = {n: unscored_shares(CANDIDATES, model, n, centres) for n in levels}
+    return MARGINS[method].evaluate(Voters(unapproved=unapproved or None, unscored=unscored or None))[0]
 
 
 def _irv_reference(rankings, probs):
@@ -147,11 +149,12 @@ def test_regions_reproduce_pixel_diagram(profile, method):
 
 @pytest.mark.parametrize("model", [Model("beta", 0.05, "rms"), Model("normal", 0.05)],
                          ids=lambda m: m.distribution)
-@pytest.mark.parametrize("method", ["approval", "approval_gap"])
+@pytest.mark.parametrize("method", ["approval", "approval_gap", "approval_mix", "score"])
 def test_approval_is_decided_where_nearly_all_voters_approve_the_same(model, method):
     """Narrow voters far from the candidates all approve the same ones, whose shares are
     1 to rounding. Their lead must survive: no ties (a margin of 0 is in no region) and
-    no specks of rounding noise, but a few regions that tile the square."""
+    no specks of rounding noise, but a few regions that tile the square. Likewise for
+    the candidates nearly all voters give the top score."""
     candidates = [[0.5, 0.5], [0.32, 0.55], [0.18, 0.32], [0.16, 0.12]]
     _, winner, margin = winners(method, candidates, model, 160)
     assert (margin > 0).all()
@@ -193,9 +196,16 @@ def test_config_lists_every_method():
     assert [m["name"] for m in methods] == list(MARGINS)
     assert [m["label"] for m in methods + config["ideals"]] == [
         "FPTP", "IRV", "Borda", "Baldwin", "Nanson", "Schulze", "Condorcet", "Minimax",
-        "Black", "King of the hill", "King runoff", "Approval", "Approval (gap)", "Voronoi"]
-    nanson = next(m for m in methods if m["name"] == "nanson")
-    assert nanson["description"].endswith('\nEliminate(Tally(BordaCount()), how="mean")')
+        "Black", "King of the hill", "King runoff", "Approval", "Approval (gap)",
+        "Approval (mix)", "Score", "Voronoi"]
+    descriptions = {m["name"]: m["description"] for m in methods}
+    assert descriptions["nanson"].endswith('\nEliminate(Tally(BordaCount()), how="mean")')
+    # the sliders: their methods, and their defaults, which the methods are listed with
+    assert config["approval_mix"] == "approval_mix" and config["half"] == 0.5
+    assert config["score"] == "score" and config["levels"] == 6 and config["max_levels"] == 11
+    assert descriptions["approval_mix"].endswith(
+        "\nHighest(Tally(Mix(GapApproval(), Approval(), share=0.5)))")
+    assert descriptions["score"].endswith("\nHighest(Tally(Score(6)))")
 
 
 @pytest.mark.parametrize("distribution", ["beta", "normal"])
@@ -209,6 +219,93 @@ def test_api_returns_regions(distribution, method):
     assert response.status_code == 200
     shapes = response.json()["regions"]
     assert shapes and all(region["polygons"] for region in shapes)
+
+
+@pytest.mark.parametrize("model", MODELS, ids=lambda m: m.distribution)
+def test_a_built_method_is_drawn_like_a_named_one(model):
+    """winners() and regions() take a method of yeelab.build itself. The approval mix
+    with all voters of one kind is the approval method of that kind."""
+    for half, name in ((0, "approval_gap"), (1, "approval"), (0.5, "approval_mix")):
+        for got, expected in zip(winners(mixed_approval(half), CANDIDATES, model, 64),
+                                 winners(name, CANDIDATES, model, 64)):
+            np.testing.assert_array_equal(got, expected)
+        assert regions(mixed_approval(half), CANDIDATES, model, 64) == regions(name, CANDIDATES, model, 64)
+
+
+@pytest.mark.parametrize("model", MODELS, ids=lambda m: m.distribution)
+def test_the_approval_mix_goes_from_one_approval_method_to_the_other(model):
+    """Every total of the mix is between those of the two methods, so a candidate who
+    wins a point with both kinds of voters wins it with any mix of them; elsewhere the
+    winner changes with the share."""
+    _, gap, _ = winners("approval_gap", CANDIDATES, model, 64)
+    _, half, _ = winners("approval", CANDIDATES, model, 64)
+    assert (gap != half).any()
+    changed = []
+    for share in (0.25, 0.5, 0.75):
+        _, winner, margin = winners(mixed_approval(share), CANDIDATES, model, 64)
+        assert (margin >= 0).all()
+        np.testing.assert_array_equal(winner[gap == half], gap[gap == half])
+        changed.append((winner != gap).mean())
+    assert 0 < changed[0] < changed[1] < changed[2] < (half != gap).mean()
+
+
+def _score(levels):
+    return Highest(Tally(Score(levels)))
+
+
+@pytest.mark.parametrize("model", MODELS, ids=lambda m: m.distribution)
+def test_score_with_two_levels_is_approval_of_three_candidates_only(model):
+    """Two levels approve the candidates closer than halfway between the closest and the
+    farthest. For three candidates that is the approval ballot at either cut: the same
+    diagram. For five it is the diagram of neither approval method."""
+    for name in ("approval", "approval_gap"):
+        _, winner, margin = winners(_score(2), CANDIDATES[:3], model, 64)
+        _, approved, lead = winners(name, CANDIDATES[:3], model, 64)
+        np.testing.assert_array_equal(winner, approved)
+        np.testing.assert_allclose(margin, lead, rtol=1e-9, atol=0)
+        assert (winners(_score(2), CANDIDATES, model, 64)[1] != winners(name, CANDIDATES, model, 64)[1]).any()
+
+
+@pytest.mark.parametrize("model", MODELS, ids=lambda m: m.distribution)
+def test_score_levels_change_the_diagram_less_and_less(model):
+    """Every number of levels is a method of its own, but more levels round the same
+    part of the way less: from 2 to 3 levels the diagram changes more than from 11 to 16."""
+    seen = [winners(_score(levels), CANDIDATES, model, 64)[1] for levels in (2, 3, 6, 11, 16)]
+    changed = [(one != other).mean() for one, other in zip(seen, seen[1:])]
+    assert all(0 < change < 0.5 for change in changed)
+    assert changed[0] > 5 * changed[-1]
+
+
+def test_api_builds_the_methods_of_the_sliders():
+    """half is the share of the voters of approval_mix who approve half of the
+    candidates: approval_gap at 0 and approval at 1. levels is the number of scores of
+    score. Both default to what the methods are listed with, and the other methods
+    ignore them."""
+    client = TestClient(app)
+
+    def shapes(method, **settings):
+        request = {"candidates": CANDIDATES.tolist(), "method": method, "grid": 64, **settings}
+        response = client.post("/api/regions", json=request)
+        assert response.status_code == 200
+        return response.json()["regions"]
+
+    assert shapes("approval_mix", half=0) == shapes("approval_gap")
+    assert shapes("approval_mix", half=1) == shapes("approval")
+    assert shapes("approval_mix") == shapes("approval_mix", half=0.5)
+    assert shapes("approval_mix", half=0.25) not in (
+        shapes("approval_gap"), shapes("approval"), shapes("approval_mix"))
+    assert shapes("approval", half=0, levels=5) == shapes("approval")
+    assert shapes("approval_mix", levels=5) == shapes("approval_mix")
+
+    assert shapes("score") == shapes("score", levels=6) == shapes("score", half=0)
+    seen = [shapes("score", levels=levels) for levels in (2, 3, 6, 11)]
+    assert all(one != other for one, other in zip(seen, seen[1:]))
+    assert seen[0] not in (shapes("approval"), shapes("approval_gap"), shapes("approval_mix"))
+
+    for settings in ({"half": -0.05}, {"half": 1.05}, {"levels": 1}, {"levels": 12}, {"levels": 2.5}):
+        for method in ("approval_mix", "score"):
+            request = {"candidates": CANDIDATES.tolist(), "method": method, **settings}
+            assert client.post("/api/regions", json=request).status_code == 422, settings
 
 
 def test_api_offers_deviations_from_005():
