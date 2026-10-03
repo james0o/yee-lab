@@ -2505,10 +2505,17 @@ What the geometric median does not do:
 - *Areas are not comparable.* $g$ compresses the diagram most near the walls, so the
   share of the coloured region that a candidate wins is not its share of the pixels.
 - *The spread rule still refers to the medians along the axes.* `rms` fixes
-  $sqrt(E(X - m_x)^2)$, not the distance of the voters from $g(m)$.
+  $sqrt(E(X - m_x)^2)$, not the distance of the voters from $g(m)$. Fixing the spread
+  around $g(m)$ instead ($sqrt(E(X - g_x)^2)$ or $E|V - g|$) makes the coloured region
+  smaller. And since $g$ depends on both axes, the parameters of $X$ then depend on $m_y$
+  too, so the shares are no longer edge integrals of one Beta per column and one per row
+  (@sec-edges), and take a much slower computation: two to four times as long per
+  diagram while a candidate is dragged, and about $6$~s instead of $0.2$~s to prepare the
+  voters of each deviation.
 
-Every method is drawn this way. The Voronoi diagram of the UI is then drawn only inside
-the coloured region, so that a method can be compared with it.
+A spread around the geometric median gains little that shows in the diagrams and costs
+time, so the UI uses the geometric median only as the point where an election is drawn;
+the voters keep the `rms` rule around the medians along the axes.
 
 == Computing $g$ (`margin/geometric.py`) <sec-g-compute>
 
