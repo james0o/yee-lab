@@ -2459,6 +2459,16 @@ $-E_m [X slash abs(V - p)]$, which is negative unless all the voters lie on the 
 for voters inside the square the geometric median reaches a wall only if their spread
 across it vanishes there. Normal voters fill the square because they may leave it.
 
+Nor does a thinner far tail close the strip. The pull counts voters, the spread counts
+squared distances, so putting the spread into a few voters on the opposite wall narrows
+the strip. This was tried as *ZOIB voters* (a zero-or-one inflated Beta, 5.5 % of a
+pixel's voters on the opposite wall at $D = 0.2$): the strip in the middle of a wall
+narrowed from $0.038$ to $0.016$. But the voters below $g$ still lie along the wall, and
+their pull towards it vanishes as $g$ approaches it, while the far ones keep pulling with
+their full weight, so the strip stays. ZOIB voters are not used: they do not make the
+diagram easier to interpret. They are there only to fill the picture, nothing about
+real voters calls for them, and they bend the borders next to the walls.
+
 == The borders between the candidates <sec-g-borders>
 
 By @ch-compare a majority prefers $c_i$ to $c_j$ where the median of the projected voters
