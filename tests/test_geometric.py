@@ -19,6 +19,7 @@ from yeelab.margin.geometric import (
     geometric_median_at,
     geometric_medians,
     node_table,
+    outline,
     pixels_at,
 )
 from yeelab.margin.regions import MARGINS, geometric_grid, grid, nearest, regions, winners
@@ -242,6 +243,8 @@ def test_regions_are_the_same_elections_moved_by_g(method):
     image = np.concatenate([edge[:, 0], edge[-1, 1:], edge[-2::-1, -1], edge[0, -2:0:-1]])
     total = sum(_area(r) for outer, holes in rings for r in [outer, *holes])
     assert total == pytest.approx(_area(image), abs=1e-3) and total < 0.83
+    # the outline the UI keeps the candidates within is the border of the regions
+    assert _area(outline(MODEL).ravel()) == pytest.approx(total, abs=1e-3)
     # nothing is drawn in the strip, not even next to a corner
     vertices = np.concatenate([np.reshape(r, (-1, 2)) for outer, holes in rings for r in [outer, *holes]])
     assert vertices.min() >= edge.min() - 1e-6 and vertices.max() <= edge.max() + 1e-6
@@ -388,5 +391,11 @@ def test_api_returns_a_quarter_of_the_pixels_of_each_point():
     half = PIXELS // 2
     np.testing.assert_array_equal(np.reshape(response.json()["pixels"], (half, half)),
                                   pixels_at(MODEL)[:half, :half])
+    ring = np.reshape(response.json()["outline"], (-1, 2))
+    np.testing.assert_allclose(ring, outline(MODEL), rtol=0, atol=5e-7)
+    # counter-clockwise, symmetric like g, and inside the square but for the strip
+    assert 0.82 < _area(ring.ravel()) < 0.83
+    np.testing.assert_allclose(np.sort(ring[:, 0]), np.sort(1 - ring[:, 0]), atol=1e-6)
+    assert ring.min() > 0.013 and ring.max() < 0.987
     assert client.get("/api/geometric", params={"deviation": 0.26}).status_code == 422
     assert client.get("/api/geometric").status_code == 422

@@ -129,8 +129,9 @@
     let moving = null;    // {from, to, start}: the diagram is on its way between the two, since
                           // `start` (ms), from pixels drawn `from` of the way to their geometric
                           // median to `to` of it (0: at their medians along the axes, 1: there)
-    let pixelsAt = {};    // deviation -> for the points of a quarter of the square, the pixel
-                          // whose voters have their geometric median there (/api/geometric)
+    let lookups = {};     // deviation -> /api/geometric: {pixels, outline}, for the points of a
+                          // quarter of the square the pixel whose voters have their geometric
+                          // median there, and the border of the coloured region
     let deviation = 0;    // mean absolute deviation of the voters from their pixel
     let approvalMix = null;  // name of the method the mix slider belongs to
     let half = 0;            // its share of the voters who approve half of the candidates; the
@@ -339,25 +340,78 @@
       return moving.from + (moving.to - moving.from) * t * t * (3 - 2 * t);  // eases in and out
     }
 
+    // What a diagram of geometric medians needs at this deviation, /api/geometric, or null while
+    // it is on its way: asked for once per deviation. When it arrives the candidates are moved
+    // into the coloured region, and the voters shown again.
+    function lookup() {
+      const key = deviation;  // the slider may have moved by the time the answer is back
+      if (!(key in lookups)) {
+        lookups[key] = null;
+        fetch(`/api/geometric?deviation=${key}`)
+          .then(response => response.json())
+          .then(answer => {
+            lookups[key] = answer;
+            if (confineAll()) compute();
+            drawVoters();
+          });
+      }
+      return lookups[key];
+    }
+
+    // Is the point inside the ring [x0, y0, x1, y1, ...]? (Even-odd: a ray to the right crosses
+    // it an odd number of times.)
+    function inside(ring, [x, y]) {
+      let odd = false;
+      for (let k = 0, j = ring.length - 2; k < ring.length; j = k, k += 2) {
+        const [xk, yk, xj, yj] = [ring[k], ring[k + 1], ring[j], ring[j + 1]];
+        if ((yk > y) !== (yj > y) && x < xk + (y - yk) * (xj - xk) / (yj - yk)) odd = !odd;
+      }
+      return odd;
+    }
+
+    // The point of the ring [x0, y0, x1, y1, ...] closest to the point.
+    function closestOn(ring, [x, y]) {
+      let best = null, distance = Infinity;
+      for (let k = 0, j = ring.length - 2; k < ring.length; j = k, k += 2) {
+        const [ax, ay, dx, dy] = [ring[j], ring[j + 1], ring[k] - ring[j], ring[k + 1] - ring[j + 1]];
+        const t = clamp(((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy || 1));
+        const [px, py] = [ax + t * dx, ay + t * dy];
+        const d = (px - x) ** 2 + (py - y) ** 2;
+        if (d < distance) [best, distance] = [[px, py], d];
+      }
+      return best;
+    }
+
+    // With pixels at geometric medians a candidate stays within the coloured region: a point
+    // beyond its border goes to the closest point of it. Anywhere while the border is on its way.
+    function confine(point) {
+      const ring = geometric() ? lookup()?.outline : null;
+      return !ring || inside(ring, point) ? point : closestOn(ring, point);
+    }
+
+    // Moves every candidate within the coloured region; true if one had to move.
+    function confineAll() {
+      let moved = false;
+      candidates = candidates.map(candidate => {
+        const kept = confine(candidate);
+        moved ||= kept !== candidate;
+        return kept;
+      });
+      return moved;
+    }
+
     // The pixel [k, l] whose voters a point of the square shows: the one it lies in, or, with
     // pixels at geometric medians, the one whose voters have theirs closest to it. null if no
-    // voters have it there (the strip along the walls), or while the lookup is on its way: it is
-    // asked for once per deviation.
+    // voters have it there (the strip along the walls), or while the lookup is on its way.
     function pixelAt(point) {
       const [i, j] = point.map(v => Math.min(pixels - 1, Math.floor(v * pixels)));
       if (!geometric()) return [i, j];
-      const key = deviation;  // the slider may have moved by the time the answer is back
-      if (!(key in pixelsAt)) {
-        pixelsAt[key] = null;
-        fetch(`/api/geometric?deviation=${key}`)
-          .then(response => response.json())
-          .then(answer => { pixelsAt[key] = answer.pixels; drawVoters(); });
-      }
-      if (!pixelsAt[key]) return null;
+      const table = lookup()?.pixels;
+      if (!table) return null;
       // the lookup has the quarter of the square next to the origin; the rest are its mirror images
       const side = pixels / 2;
       const mirror = (k, flip) => flip ? pixels - 1 - k : k;
-      const found = pixelsAt[key][mirror(i, i >= side) * side + mirror(j, j >= side)];
+      const found = table[mirror(i, i >= side) * side + mirror(j, j >= side)];
       if (found < 0) return null;
       return [mirror(Math.floor(found / pixels), i >= side), mirror(found % pixels, j >= side)];
     }
@@ -376,7 +430,7 @@
         if (showDensity) fillDensity(x, y);
       } else {
         stripX.clear();
-        votersText.textContent = pixelsAt[deviation]
+        votersText.textContent = lookups[deviation]
           ? `No voters have their geometric median at ${at}` : "";
         densityCanvas.getContext("2d").clearRect(0, 0, DENSITY_SIZE, DENSITY_SIZE);
       }
@@ -510,7 +564,7 @@
           message.textContent = `At most ${maxCandidates} candidates.`;
           return;
         }
-        candidates.push(point);
+        candidates.push(confine(point));
         dragged = candidates.length - 1;
       }
       canvas.setPointerCapture(event.pointerId);  // keep getting moves outside the canvas
@@ -521,7 +575,7 @@
     canvas.addEventListener("pointermove", event => {
       hovered = toUnit(event);
       if (dragged !== -1) {
-        candidates[dragged] = hovered;
+        candidates[dragged] = confine(hovered);
         compute(dragGrid);  // follow the drag on a coarser grid; the drop asks for the fine one
       }
       showDensity = dragged === -1 && showJoint.checked;  // not while dragging, so the diagram stays visible
@@ -602,7 +656,12 @@
     finalGrid = config.final_grid;
     spreadInfo = config.spread;
     voters = Object.fromEntries(config.voters.map(({ deviation, ...rest }) => [deviation, rest]));
-    choices(distributions, config.distributions, name => { distribution = name; updatePixelMedians(); drawVoters(); });
+    choices(distributions, config.distributions, name => {
+      distribution = name;
+      updatePixelMedians();
+      confineAll();
+      drawVoters();
+    });
     // The slider picks an index into the offered deviations, so the values stay exact. Moving it
     // updates the voters shown and recomputes the diagram on the coarser grid, like a drag;
     // letting go asks for the fine one.
@@ -614,7 +673,7 @@
     }
     Object.assign(deviationSlider, { min: 0, max: config.deviations.length - 1, step: 1 });
     deviationSlider.value = config.deviations.indexOf(config.deviation);
-    deviationSlider.addEventListener("input", () => { pickDeviation(); drawVoters(); compute(dragGrid); });
+    deviationSlider.addEventListener("input", () => { pickDeviation(); confineAll(); drawVoters(); compute(dragGrid); });
     deviationSlider.addEventListener("change", () => compute());
     // The mix slider is in percent, from all voters approving down to their largest gap (left) to
     // all approving half of the candidates (right). The categories slider is the number of scores
@@ -645,6 +704,7 @@
       pixelMedian = name;
       const to = geometric() ? 1 : 0;
       moving = from === to ? null : { from, to, start: performance.now() };
+      confineAll();
       drawVoters();
     });
     choices(methods, config.methods, pickMethod, [methods, ideals]);

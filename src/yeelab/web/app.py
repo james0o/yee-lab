@@ -11,13 +11,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
+import numpy as np
 from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import AfterValidator, BaseModel, Field, field_validator
 
 from yeelab.build import Highest, Score, Tally, Winner, mixed_approval
 from yeelab.distributions import DISTRIBUTIONS, Distribution
-from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, pixels_at
+from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
 from yeelab.margin.regions import MARGINS, regions
 from yeelab.margin.shares import PIXELS, Model
 from yeelab.normal import sigma_from_deviation
@@ -148,7 +149,7 @@ PIXEL_MEDIAN_INFO = {
         "smallest mean distance to them, which does not depend on the axes. The voters are the "
         "same; every election is only drawn somewhere else, closer to the centre. No voters "
         "have their geometric median next to a wall, so a strip along the walls stays empty, "
-        "in the Voronoi diagram too.",
+        "in the Voronoi diagram too. The candidates are kept within the coloured region.",
     },
 }
 assert set(PIXEL_MEDIAN_INFO) == set(PIXEL_MEDIANS)
@@ -263,8 +264,11 @@ def diagram_regions(request: DiagramRequest):
 
 @lru_cache(maxsize=len(DEVIATIONS))  # ~0.1 MB each, built in ~0.1 s
 def _pixels_at(deviation: float) -> str:
-    at = pixels_at(Model("beta", deviation, SPREAD))
-    return json.dumps({"pixels": at[:PIXELS // 2, :PIXELS // 2].ravel().tolist()}, separators=(",", ":"))
+    model = Model("beta", deviation, SPREAD)
+    at = pixels_at(model)
+    payload = {"pixels": at[:PIXELS // 2, :PIXELS // 2].ravel().tolist(),
+               "outline": np.round(outline(model), 6).ravel().tolist()}
+    return json.dumps(payload, separators=(",", ":"))
 
 
 assert PIXELS % 2 == 0  # so a quarter of the pixels is a quarter of the square
@@ -272,11 +276,13 @@ assert PIXELS % 2 == 0  # so a quarter of the pixels is a quarter of the square
 
 @app.get("/api/geometric")
 def geometric_pixels(deviation: Annotated[float, AfterValidator(_offered)]):
-    """For the voters shown while hovering a diagram of geometric medians (Beta voters):
-    {"pixels": [...]}, for the point (i + 1/2, j + 1/2) / PIXELS at [i * PIXELS / 2 + j]
-    the pixel (k, l), as k * PIXELS + l, whose voters have their geometric median closest
-    to the point, or -1 if no voters have it there. Only the quarter of the square next
-    to the origin, i, j < PIXELS / 2: the rest are its mirror images."""
+    """For a diagram of geometric medians (Beta voters): {"pixels": [...], "outline": [...]}.
+    pixels, for the voters shown while hovering: for the point (i + 1/2, j + 1/2) / PIXELS
+    at [i * PIXELS / 2 + j] the pixel (k, l), as k * PIXELS + l, whose voters have their
+    geometric median closest to the point, or -1 if no voters have it there. Only the
+    quarter of the square next to the origin, i, j < PIXELS / 2: the rest are its mirror
+    images. outline, which the candidates are kept within: the border of the coloured
+    region, [x0, y0, x1, y1, ...] counter-clockwise (geometric.outline)."""
     return Response(_pixels_at(deviation), media_type="application/json")
 
 

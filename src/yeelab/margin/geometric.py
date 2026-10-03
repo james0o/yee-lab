@@ -218,6 +218,14 @@ def geometric_medians(model: Model, medians) -> np.ndarray:
 # ---------------------------------------------------------------- The inverse of g
 
 
+def outline(model: Model) -> np.ndarray:
+    """The border of the part of the square that g covers, shape (K, 2), counter-clockwise
+    from the bottom left: the curve g follows as the median runs along the outermost
+    pixels of each side. The regions drawn at geometric medians end there."""
+    g = geometric_medians(model, pixel_medians(model.pixels))
+    return np.concatenate([g[:, 0], g[-1, 1:], g[-2::-1, -1], g[0, -2:0:-1]])
+
+
 def pixels_at(model: Model) -> np.ndarray:
     """The inverse of g for the pixels: at[i, j] = k * pixels + l is the pixel (k, l)
     whose voters have their geometric median closest to the centre of the pixel (i, j),

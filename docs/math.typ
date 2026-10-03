@@ -2585,3 +2585,11 @@ UI needs the inverse of $g$: for the centre of every pixel, the pixel whose vote
 their geometric median nearest to it (a k-d tree over $g$ of all pixels), or none if the
 centre lies in the strip, beyond the curve that $g$ follows along the outermost pixels
 of a side. The UI gets one quarter of the square per deviation and mirrors it.
+
+*Candidates stay in the coloured region (`outline`).* With the lookup comes the border of
+the coloured region, the curve $g$ follows along the outermost pixels, counter-clockwise.
+A candidate in the strip would stand where no electorate has its geometric median, so
+with pixels at geometric medians the UI keeps every candidate within the border: one
+dragged or added beyond it, or left beyond it when the diagram moves to geometric medians
+or a larger deviation widens the strip, goes to the closest point of the border. It stays
+there when the pixels go back to their medians along the axes.
