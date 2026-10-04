@@ -38,30 +38,34 @@ distances r_i = |v - c_i|, in one of three ways (`rule`):
 
             A gap may get several steps or none, so candidates at nearly the same
             distance share a score however many levels there are; that is what keeps
-            it from Borda, which it would be if every gap got one step. With two levels
-            the one step goes to the largest gap, whatever delta: the ballot of
-            approval.GAP
+            it from Borda, which it would be if every gap got one step
 
-Nothing changes when all distances are scaled. With two levels RANGE and AVG are
-approval ballots as well. AVG is approval.AVG: the voter approves the candidates closer
-than the mean distance (at it, the half is rounded to 0: not approved). RANGE approves
-those closer than halfway between the closest and the farthest. For three candidates
-that is the ballot of yeelab.approval, at every cut; for more it is none of them.
+Nothing changes when all distances are scaled. With two levels every rule is an
+approval ballot: the voter approves the candidates with the top score, from the closest
+alone to all but the farthest. RANGE approves those closer than halfway between the
+closest and the farthest, AVG those closer than the mean distance (at it, the half is
+rounded to 0: not approved) and DHONDT, whatever delta, those above the largest gap
+(ties: the first). AVG's is the best ballot of a voter with the utility -r_i who takes
+every pair of candidates to be as likely to tie (Weber): approving c is worth
+sum_e (r_e - r_c), which is positive for these. For three candidates the three are the
+same ballot; for more they differ. The gaps are those of the distances, not of their
+squares: a voter at the squared distances 0, 0.35, 0.45, 0.55 and 1 has the gaps 0.59,
+0.08, 0.07 and 0.26, so DHONDT approves only the candidate the voter stands on.
 
 As the number of levels grows, AVG comes closer to its part of the way, and RANGE and
-DHONDT to the part of the way of RANGE, (r_max - r_i) / (r_max - r_min): for delta up to 1, DHONDT keeps every gap within C - 1
-steps of its share of them, (levels - 1) g_k / (r_max - r_min), with delta = 1 never
-below the share rounded down, and one more level adds a step to one gap and takes none
-away. The large gaps gain about as many steps at any number of levels, so as a part of
-the top score their advantage fades.
+DHONDT to that of RANGE, (r_max - r_i) / (r_max - r_min): for delta up to 1, DHONDT
+keeps every gap within C - 1 steps of its share of them, (levels - 1) g_k /
+(r_max - r_min), with delta = 1 never below the share rounded down, and one more level
+adds a step to one gap and takes none away. The large gaps gain about as many steps at
+any number of levels, so as a part of the top score their advantage fades.
 
 Borders. A RANGE score changes where its part of the way is half a score,
-r_max - r_i = (k + 1/2) / (levels - 1) * (r_max - r_min), an AVG score likewise with rbar
-for one end of its part of the way; a DHONDT step moves where two
-gaps tie, (l + delta) (r_a - r_b) = (k + delta) (r_c - r_d). These are curves, like the
-borders of the approval ballots, so the mean score is not a sum over polygons either.
-`unscored` gives, for a grid of rectangles, the mean points below the top score of each
-candidate in each rectangle; margin/shares.py weighs it with the voters of each rectangle.
+r_max - r_i = (k + 1/2) / (levels - 1) * (r_max - r_min), an AVG score likewise with
+rbar for one end of its part of the way; a DHONDT step moves where two gaps tie,
+(l + delta) (r_a - r_b) = (k + delta) (r_c - r_d). Unlike the bisectors these are
+curves, so the mean score is not a sum over polygons. `unscored` gives, for a grid of
+rectangles, the mean points below the top score of each candidate in each rectangle;
+margin/shares.py weighs it with the voters of each rectangle.
 """
 
 import math
@@ -71,7 +75,6 @@ import numpy as np
 from numba import njit
 
 from yeelab import threads
-from yeelab.approval import ROWS, by_distance, distances
 
 RANGE = "range"
 DHONDT = "dhondt"
@@ -83,6 +86,14 @@ MASK = (1 << BITS) - 1
 MAX_CANDIDATES = 63 // BITS  # a ballot is a code in an int64
 MAX_LEVELS = MASK + 1  # the points below the top score fit the bits of a candidate
 DELTA = 0.8  # of DHONDT: each step to the largest g_k / (d_k + DELTA)
+ROWS = 8  # grid rows per task of the compiled loop (threads.py)
+
+
+def distances(points, candidates) -> np.ndarray:
+    """r[..., c] = |p - c| for points (..., 2) and candidates (C, 2)."""
+    points = np.asarray(points, dtype=np.float64)
+    candidates = np.asarray(candidates, dtype=np.float64)
+    return np.sqrt(((points[..., None, :] - candidates) ** 2).sum(axis=-1))
 
 
 def _check(rule, delta):
@@ -130,6 +141,20 @@ def _dhondt_below(r, top, delta):
     return np.take_along_axis(below, np.argsort(order, axis=-1, kind="stable"), axis=-1)
 
 # ---------------------------------------------------------------- Compiled
+
+
+@njit(inline="always", error_model="numpy")
+def by_distance(x, y, candidates, r, order):
+    """The distances r[c] = |(x, y) - c| and the candidates in order of distance,
+    closest first, into r and order (C,); ties keep the lowest index first, like a
+    stable argsort."""
+    for c in range(candidates.shape[0]):  # insertion sort
+        r[c] = math.hypot(x - candidates[c, 0], y - candidates[c, 1])
+        k = c
+        while k > 0 and r[order[k - 1]] > r[c]:
+            order[k] = order[k - 1]
+            k -= 1
+        order[k] = c
 
 
 @njit(inline="always", error_model="numpy")

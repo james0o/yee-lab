@@ -53,7 +53,9 @@ package `src/yeelab/`):
   [what a pixel is (Beta, UI)], [], [_Pixel is_, `PIXEL_MEDIAN` (`margin/geometric.py`)], [median along each axis],
   [interpolation nodes per axis], [$N$], [`--nodes` (`NODES`)], [49],
   [Gauss–Legendre points per edge], [$Q$], [`QUAD_NODES`], [24],
-  [voter grid of the approval shares], [$K$], [`APPROVAL_CELLS`, `APPROVAL_SUB` (`margin/shares.py`)], [256, 8],
+  [score levels (UI)], [$L$], [_Score categories_, `SCORE_LEVELS` (`web/app.py`)], [6],
+  [divisor of `ScoreDH` (UI)], [$delta$], [_D'Hondt δ_, `DELTA` (`score.py`)], [0.8],
+  [voter grid of the score shares], [$K$], [`GRID_CELLS`, `GRID_SUB` (`margin/shares.py`)], [256, 8],
   [contour grid per axis (UI)], [$G$], [`DRAG_GRID` / `FINAL_GRID` (`web/app.py`)], [160 / 320],
   table.hline(),
 ))
@@ -826,84 +828,129 @@ looks at a single defeat and not at paths of defeats.
 has a winner, never a cycle, and like Schulze, Baldwin and Nanson, Black differs from
 the Condorcet winner diagram only where there is a cycle.
 
-== Approval voting (`approval_gap`, `approval_avg`) <sec-approval>
+== Score voting (`score_range`, `score_avg`, `score_dh`) <sec-score>
 
-These are only in the web UI as well, built from blocks as
-`Highest(Tally(GapApproval()))` and `Highest(Tally(AvgApproval()))`. An approval ballot is
-not a ranking: the voter approves some of the candidates, and the candidate approved by
-the most voters wins. Whom a voter approves depends on how far the candidates are and
-not only on their order, so the model needs one more assumption than the ranked methods
-(`approval.py`).
+These are only in the web UI as well, built from blocks as `Highest(Tally(Score(6)))`,
+`Highest(Tally(ScoreAvg(6)))` and `Highest(Tally(ScoreDH(6)))`. A score ballot is not a
+ranking: the voter gives every candidate a score from $0$ to $L - 1$, and the candidate
+with the highest mean score wins. The scores depend on how far the candidates are and not
+only on their order, so the model needs one more assumption than the ranked methods
+(`score.py`). The number of scores $L$ is the _Score categories_ slider of the web UI, by
+default $6$. With $L = 2$ a score ballot is an approval ballot, and approval voting is
+score voting with two levels.
 
 *The ballot.* A voter at $p$ puts the candidates in order of distance,
 
 $ r_((1)) <= r_((2)) <= dots <= r_((C)), quad r_i = |p - c_i|, $ <eq-distances>
 
-and approves the closest ones, down to a cut. The cut depends on the gaps between
-neighbours in that order, $g_k = r_((k + 1)) - r_((k))$, or on their mean. Three ballots
-are blocks of `yeelab.build`; the web UI draws the last two.
+and gives the closest the top score $L - 1$ and the farthest $0$. The scores of the others
+come from one of three rules.
 
-- `Approval()` approves the closest half of the candidates, $h = floor(C slash 2)$ of
-  them. With an odd number the middle candidate, the $(h + 1)$-th, goes with the
-  neighbour it is closer to: it is approved too when $g_h < g_(h + 1)$. The cut is the
-  larger of the two gaps next to the middle candidate, and the voter approves $h$ or
-  $h + 1$ candidates.
-- `GapApproval()` approves the candidates above the largest gap of all, the first $k$
-  for the $k$ with the largest $g_k$: between one candidate and all but one.
-- `AvgApproval()` approves the candidates closer than the mean distance,
-  $ r_i < overline(r) = 1/C sum_j r_j , $ <eq-avg-cut>
-  also between one candidate and all but one.
+- `Score` (range) gives a candidate the score in proportion to where its distance is
+  between the closest and the farthest,
+  $ "score"_i = "round"((r_((C)) - r_i) / (r_((C)) - r_((1))) (L - 1)), $ <eq-range>
+  with a half rounded to the even score. Only the closest and the farthest candidate set
+  the scale.
+- `ScoreAvg` puts the mean distance $overline(r) = 1/C sum_j r_j$ in the middle of the
+  scale: the part of the way $t_i$ goes linearly from $1$ at the closest to $1/2$ at
+  $overline(r)$, and from there to $0$ at the farthest,
+  $ t_i = cases(1/2 + (overline(r) - r_i) / (2 (overline(r) - r_((1)))) & "if" r_i < overline(r),
+      (r_((C)) - r_i) / (2 (r_((C)) - overline(r))) & "otherwise"), quad
+    "score"_i = "round"(t_i (L - 1)) . $ <eq-avg>
+  `Score` is this with the middle at $(r_((1)) + r_((C))) slash 2$. Here every candidate
+  moves the scale, through $overline(r)$.
+- `ScoreDH` shares the $L - 1$ steps from the top score to $0$ out among the gaps between
+  neighbours in that order, $g_k = r_((k + 1)) - r_((k))$, by a divisor method: each step
+  in turn goes to the gap with the largest $g_k slash (d_k + delta)$, with $d_k$ the steps
+  it has so far (ties: the first such gap). A candidate gets the steps of the gaps below
+  it, $"score"_((m)) = d_m + dots + d_(C - 1)$. A gap may get several steps or none, so
+  candidates at nearly the same distance share a score however many levels there are;
+  with one step for every gap it would be Borda.
 
-*Why the mean.* `AvgApproval()` is the ballot that a voter with the utility $u_i = -r_i$
-would choose if they knew nothing about how the others vote (Weber). Adding $c_i$ to the
-ballot changes the outcome only where $c_i$ ties with some $c_j$, with probability
-$p_(i j)$, and there it gains $u_i - u_j$. The expected gain is
+A voter as far from every candidate gives them all the top score. By every rule the
+closest candidate gets the top score and the farthest $0$, a closer candidate never gets
+a lower score, and the ballot does not change when all distances are scaled, so no unit
+of distance has to be chosen.
+
+*The divisor $delta$.* $delta = 1$ is D'Hondt's method, which favours the large gaps;
+$delta = 1/2$ is Sainte-Laguë's, which on average favours neither. The _D'Hondt δ_
+slider of the web UI goes from $0.5$ to $1$ in steps of $0.01$, by default $0.8$
+(`DELTA` in `score.py`). A lower $delta$ gives the small gaps more steps. The distances
+$0.1$, $0.5$, $0.65$, $0.8$, $0.9$ and $1$ have one large gap, $0.4$, and small ones of
+$0.15$ and $0.1$; with $L = 6$, $delta = 0.5$ gives the scores $5, 3, 2, 1, 0, 0$ and
+$delta = 0.8$ or $1$ gives $5, 2, 1, 0, 0, 0$ (`Score` gives $5, 3, 2, 1, 1, 0$). Towards
+$delta = 0$ every gap gets a step first, which is Borda when there are enough of them; a
+large $delta$ gives every step to the largest gap.
+
+For $delta <= 1$ every gap stays within $C - 1$ steps of its share
+$(L - 1) g_k slash (r_((C)) - r_((1)))$, and with $delta = 1$ it never gets less than the
+share rounded down. One more level adds a step to one gap and takes none away. The large
+gaps gain about the same number of steps at any $L$ (about $0.6$ for $delta = 1$), so as
+a part of the top score their advantage fades: as $L$ grows, `ScoreDH` comes closer to
+`Score`, and `ScoreAvg` to its $t_i$.
+
+*Two levels: approval.* With $L = 2$ the voter approves the candidates with the top
+score, from the closest alone to all but the farthest, and the mean score is the share of
+the voters who approve. `Score` approves the candidates closer than halfway between the
+closest and the farthest, `ScoreDH`, whatever $delta$, those above the largest gap
+(ties: the first), and `ScoreAvg` those closer than the mean distance,
+
+$ r_i < overline(r) $ <eq-avg-cut>
+
+(at $overline(r)$ the half is rounded to $0$: not approved). For two and for three
+candidates the three are the same ballot: for three, the middle candidate is approved by
+@eq-avg-cut when $3 r_((2)) < r_((1)) + r_((2)) + r_((3))$, that is
+$r_((2)) - r_((1)) < r_((3)) - r_((2))$, as by the other two. For more candidates they
+differ.
+
+*Why the mean.* With two levels `ScoreAvg` is the ballot that a voter with the utility
+$u_i = -r_i$ would choose if they knew nothing about how the others vote (Weber). Adding
+$c_i$ to the ballot changes the outcome only where $c_i$ ties with some $c_j$, with
+probability $p_(i j)$, and there it gains $u_i - u_j$. The expected gain is
 $sum_(j != i) p_(i j) (u_i - u_j)$. If every pair is equally likely to tie,
 $p_(i j) = p$, this is
 $ p sum_j (u_i - u_j) = p thin C (overline(r) - r_i), $
 which is positive exactly for the candidates of @eq-avg-cut. The ballot is sincere: it
-never approves a candidate without approving every closer one.
-
-Every way the closest candidate is approved and the farthest is not, and the ballot does
-not change when all distances are scaled, so no unit of distance has to be chosen. For
-two and for three candidates the three are the same ballot: for three, the middle
-candidate is approved by @eq-avg-cut when $3 r_((2)) < r_((1)) + r_((2)) + r_((3))$, that
-is $r_((2)) - r_((1)) < r_((3)) - r_((2))$, as for the other two. For an even number `Approval()`
-does not use the distances at all: it approves the top half of the ranking.
+never approves a candidate without approving every closer one. With more levels the
+expected gain of a ballot, $p thin C sum_i "score"_i (overline(r) - r_i)$, is linear in
+the scores, so this voter would still give only $0$ and the top score: the scores in
+between are sincere, not strategic. `ScoreAvg` keeps the mean as the middle of its scale.
 
 *Distances, not their squares.* Take a voter who stands on a candidate, with the others
 at the squared distances $0.35$, $0.45$, $0.55$ and $1$. The distances are $0$, $0.59$,
 $0.67$, $0.74$ and $1$, with the gaps $0.59$, $0.08$, $0.07$ and $0.26$: the candidate
-at the voter is far ahead of the rest, and `GapApproval()` approves it alone. The squares
-have the gaps $0.35$, $0.10$, $0.10$ and $0.45$, which would put the cut before the last
-candidate and approve four. `Approval()` approves two of the five here: the middle
-candidate is closer to the fourth ($0.07$) than to the second ($0.08$).
+at the voter is far ahead of the rest, and `ScoreDH` with two levels approves it alone.
+The squares have the gaps $0.35$, $0.10$, $0.10$ and $0.45$, which would put the cut
+before the last candidate and approve four.
 
-*Curved borders.* Two ballots meet where two gaps are equal,
+*Curved borders.* A score of `Score` changes where its part of the way is half a score,
+$r_((C)) - r_i = (k + 1/2) slash (L - 1) dot (r_((C)) - r_((1)))$, and one of `ScoreAvg`
+likewise with $overline(r)$ for one end; with two levels the border of $c_i$ is
+$C r_i = sum_j r_j$. A step of `ScoreDH` moves where two gaps tie,
 
-$ r_a - r_b = r_c - r_d $ <eq-gap-border>
+$ (l + delta) (r_a - r_b) = (k + delta) (r_c - r_d), $ <eq-gap-border>
 
-for the neighbours $a, b$ of one gap and $c, d$ of the other. For `Approval()` with an
-odd number of candidates that is $2 r_m = r_a + r_b$, with the middle candidate $m$ and
-its two neighbours. For `AvgApproval()` the border of $c_i$ is $C r_i = sum_j r_j$. Unlike the bisector of @eq-bisector this is a curve: there the
-squares $|p|^2$ cancel, here the distances are not squared. The voters who approve a
-candidate are therefore not a union of polygons (@fig-approval, left), and their share is
-not a sum of the edge terms of @sec-green.
+for the neighbours $a, b$ of one gap, which has $l$ steps, and $c, d$ of the other, which
+has $k$; with two levels $r_a - r_b = r_c - r_d$. Unlike the bisector of @eq-bisector
+these are curves: there the squares $|p|^2$ cancel, here the distances are not squared.
+The voters who give a candidate a score are therefore not a union of polygons
+(@fig-approval, left), and the mean score is not a sum of the edge terms of @sec-green.
 
-*Shares from a grid.* The approval share $q_i$ is the share of the voters who approve
-$c_i$, and $u_i = 1 - q_i$ is the share who do not. Like a ranking, a ballot depends only
-on where the voter is, so the voters who approve $c_i$ fill a fixed region $A_i$, the same
-for every pixel, and $q_i = P((X, Y) in A_i)$. The plane is
-cut into rectangles by the lines $x_0 < x_1 < dots < x_K$, the same along both axes. $X$
-and $Y$ are independent, so the rectangle $[x_k, x_(k + 1)] times [x_l, x_(l + 1)]$ holds
-the share $mu_k nu_l$ of the voters, with $mu_k = F(x_(k + 1)) - F(x_k)$ from the exact
-CDF $F$ of $X$, and $nu_l$ likewise from that of $Y$. With $a_(i k l)$ the part of that
-rectangle in $A_i$,
+*Shares from a grid.* Let $q_i$ be the mean score of $c_i$ as a part of the top score,
+and $u_i = 1 - q_i$ the part not given; with two levels $u_i$ is the share of the voters
+who do not approve $c_i$. Like a ranking, a ballot depends only on where the voter is,
+so the points $b_i (x, y)$ that a voter at $(x, y)$ gives below the top score are the
+same for every pixel, and $u_i = E[b_i (X, Y)] slash (L - 1)$. The plane is cut into
+rectangles by the lines $x_0 < x_1 < dots < x_K$, the same along both axes. $X$ and $Y$
+are independent, so the rectangle $[x_k, x_(k + 1)] times [x_l, x_(l + 1)]$ holds the
+share $mu_k nu_l$ of the voters, with $mu_k = F(x_(k + 1)) - F(x_k)$ from the exact CDF
+$F$ of $X$, and $nu_l$ likewise from that of $Y$. With $a_(i k l)$ the mean of
+$b_i slash (L - 1)$ over that rectangle,
 
-$ u_i approx sum_(k, l) mu_k thin (1 - a_(i k l)) thin nu_l . $ <eq-grid-share>
+$ u_i approx sum_(k, l) mu_k thin a_(i k l) thin nu_l . $ <eq-grid-share>
 
-For all medians at once these are two matrix products per candidate (`unapproved_shares`
-in `margin/shares.py`). `coverage` in `approval.py` finds $a$: a rectangle whose four
+For all medians at once these are two matrix products per candidate (`unscored_shares`
+in `margin/shares.py`). `unscored` in `score.py` finds $a$: a rectangle whose four
 corners have the same ballot counts as all of that ballot, and in the others, about 2% of
 them, the ballots at $8 times 8$ points are averaged.
 
@@ -913,16 +960,17 @@ infinite at the wall, and the voters of a pixel next to a wall sit within a smal
 an equal cell. For normal voters the cells grow by a factor of $1.1$ each beyond the
 square, out to the box of @sec-normal.
 
-Only $a$ is approximate: within a rectangle the border of $A_i$ is replaced by a share of
-the rectangle. Where exact shares are known the grid is
-within $2 dot 10^(-4)$ of them for $D >= 0.2$ and within $8 dot 10^(-4)$ for $D = 0.05$
-(`tests/test_approval.py`): `Approval()` with an even number of candidates is the top
-half of the ranking, a sum of the shares of @eq-share, and with two candidates both
-ballots approve the first choice.
+Only $a$ is approximate: within a rectangle the borders are replaced by a mean over the
+rectangle. Where exact shares are known the grid is within $2 dot 10^(-4)$ of them for
+$D >= 0.2$ and within $5 dot 10^(-4)$ for $D = 0.05$
+(`tests/test_score.py`): with two candidates every ballot gives the first choice the top
+score and the other $0$, so $u_i$ is a share of @eq-first-choice. With two levels the
+share who approve a candidate is also between the exact shares of the voters with it
+first and with it among the $C - 1$ closest.
 
-*Why the share who do not approve.* Narrow voters far from the candidates all approve
-the same candidates. With four candidates and $D = 0.05$ the voters of a pixel in a far
-corner approve the same two, and both $q_i$ are $1$ up to $10^(-20)$ or less. Double
+*Why the part not given.* Narrow voters far from the candidates all give the same
+candidates the top score. With four candidates and $D = 0.05$ the voters of a pixel in a
+far corner approve the same two, and both $q_i$ are $1$ up to $10^(-20)$ or less. Double
 precision cannot tell $1 - 10^(-20)$ from $1$, so on a large part of the square the two
 $q_i$ would be equal, or differ only by rounding. The winner there is the candidate with
 the smaller $u_i$, and @eq-grid-share has no negative terms, so a $u_i$ of $10^(-40)$ is
@@ -940,30 +988,43 @@ as exact, in relative terms, as one of $0.4$. Two things keep it so.
 
 With two candidates and normal voters $u_i$ is known: $Phi$ of the distance to the
 bisector over $sigma$. The grid follows it within 6% down to $10^(-36)$
-(`tests/test_approval.py`). At $D = 0.05$ and $G = 320$ such a tail falls by a factor of
+(`tests/test_score.py`). At $D = 0.05$ and $G = 320$ such a tail falls by a factor of
 about $1.5$ from one traced point to the next, so 6% moves a border by a small part of
 that step.
 
 *Winner.* The candidate with the largest $q_i$ wins, that is the smallest $u_i$, and the
 margin (@sec-zero-sets) is its lead over the second: the second smallest $u_i$ minus the
-smallest. The tally of an approval ballot in `yeelab.build` is $-u_i = q_i - 1$, the
-share counted down from $1$. The shares $q_i$ do not sum to $1$: their sum is the mean
-number of approved candidates.
+smallest. The tally of a score ballot in `yeelab.build` is $-u_i = q_i - 1$, the mean
+score counted down from $1$. With two levels the $q_i$ do not sum to $1$: their sum is
+the mean number of approved candidates.
 
 #figure(
   image("figures/approval.png", width: 100%),
-  caption: [Left: the voters who approve D with `GapApproval()` and with `AvgApproval()`;
-    the borders are curves. Right: the two diagrams (candidates A–E, Beta voters, `rms`,
-    $D = 0.2$).],
+  caption: [Two levels. Left: the voters who approve D with `ScoreDH` (above the largest
+    gap) and with `ScoreAvg` (closer than the mean distance); the borders are curves.
+    Right: the two diagrams (candidates A–E, Beta voters, `rms`, $D = 0.2$).],
 ) <fig-approval>
 
-*The diagrams.* In @fig-approval `GapApproval()` gives D 22% of the square and C
-nothing. C and B are close together, so a voter near them often has both above the
-largest gap: at the pixel of C itself 64% of the voters approve C and 69% approve B.
-`AvgApproval()` gives D, in the middle of A–E, 41% of the square, more than FPTP (14%),
-Schulze (25%) or Borda (31%), and A only 13%. A voter near A has B, C and E far away,
-which pulls the mean distance above that of D, so D is approved as well. A voter
-approves 2.4 candidates on average with `AvgApproval()` and 2.2 with `GapApproval()`.
+*Two levels.* In @fig-approval `ScoreDH` gives D 22% of the square and C nothing. C and
+B are close together, so a voter near them often has both above the largest gap: at the
+pixel of C itself 64% of the voters approve C and 69% approve B. `ScoreAvg` gives D, in
+the middle of A–E, 41% of the square, more than FPTP (14%), Schulze (25%) or Borda (31%),
+and A only 13%. A voter near A has B, C and E far away, which pulls the mean distance
+above that of D, so D is approved as well. A voter approves 2.4 candidates on average
+with `ScoreAvg` and 2.2 with `ScoreDH`.
+
+#figure(
+  image("figures/score.png", width: 100%),
+  caption: [The three rules at the default of six levels, `ScoreDH` with $delta = 0.8$
+    (candidates A–E, Beta voters, `rms`, $D = 0.2$).],
+) <fig-score>
+
+*Six levels.* With six levels the three rules are close (@fig-score): D wins 29%, 30%
+and 28% of the square with `Score`, `ScoreAvg` and `ScoreDH`, and A 24%, 23% and 24%. The
+mean scores of the voters of the whole square are close as well, D $3.15$, $3.20$ and
+$3.12$ of $5$. With two levels the rules are far apart (D 22% with `ScoreDH` and 41%
+with `ScoreAvg`); with more levels each rule is nearer to its part of the way, and
+`Score` and `ScoreDH` to the same one.
 
 == Ties <sec-ties>
 
@@ -1848,14 +1909,17 @@ more, so computing sets lazily saves little, and IRV uses the full arrangement.
 All three are sums of edge terms: the Green integrals of @sec-edges for Beta voters and
 the signed triangles of @sec-normal for normal voters.
 
-*Approval shares.* The approval method uses the share of the voters who do not approve
+*Score shares.* The score methods use the part of the top score the voters do not give
 each candidate. The regions of these voters have curved borders, so their shares have no
 edge terms: they are summed over a grid of rectangles with the exact share of the voters
 in each, at the $G + 2$ points per axis where the borders are traced and not at the
-nodes (@sec-approval). The voters' shares of the rectangles depend only on the voter
+nodes (@sec-score). The voters' shares of the rectangles depend only on the voter
 model and $G$. They are kept; computing them takes up to 0.2 s for Beta voters. The
 rest is done again at every step of a drag: for five to eight candidates the whole grid
-takes about 20 to 40 ms at $G = 160$ and 30 to 55 ms at $G = 320$.
+takes about 100 to 170 ms with six levels and 30 to 90 ms with two, at $G = 160$ and
+$G = 320$ alike. Most of it is the ballots on the voter grid, which do not depend on $G$;
+with more levels more rectangles have a border inside and are averaged at $8 times 8$
+points.
 
 == Dragging: an edge cache <sec-edge-cache>
 
@@ -1979,7 +2043,7 @@ $psi_c$ below changes only with the winner:
   [IRV], [smallest gap between the two lowest tallies over all rounds],
   [Baldwin], [smallest gap between the two lowest Borda scores over all rounds],
   [Nanson], [smallest distance of a Borda score from the mean over all rounds],
-  [Approval], [lead of the top approval share over the second],
+  [Score], [lead of the top mean score over the second],
   table.hline(),
 ))
 
@@ -1988,7 +2052,7 @@ by hand: every block that decides computes the gap of its decision, and the marg
 smallest of them. `Highest` has the lead of the top score, `Eliminate` the gap of each
 round, `Unbeaten` the gaps below and `Fallback` those of the method that decides.
 Baldwin and Nanson are in @sec-baldwin-nanson, Minimax and Black in @sec-minimax-black,
-the approval method in @sec-approval.
+the score methods in @sec-score.
 
 *IRV.* On each side of a curve where some round's two lowest tallies tie, the gap of
 that round tends to $0$. So $mu$ is continuous, and it vanishes on every curve where an
@@ -2212,8 +2276,8 @@ bottom tip of C's island). A gap is left only in a grid cell where three winners
 there each of the three regions ends at a straight segment between two edge crossings,
 and the small triangle between the three segments belongs to none of them.
 
-The shares come from the interpolant of @sec-interpolation (those of the approval
-method are computed at the grid points themselves, @sec-approval), so the grid only has
+The shares come from the interpolant of @sec-interpolation (those of the score methods
+are computed at the grid points themselves, @sec-score), so the grid only has
 to be fine enough not to miss slivers; its borders do not have the steps of a pixel
 image. The
 UI uses $G = 160$ while dragging and $G = 320$ once the candidate is dropped. The margins
@@ -2529,7 +2593,7 @@ the voters keep the `rms` rule around the medians along the axes.
 == Computing $g$ (`margin/geometric.py`) <sec-g-compute>
 
 *The mean distance.* $d_m (p)$ is a sum over the rectangles of the voter grid of
-@sec-approval. The rectangle $[x_k, x_(k + 1)] times [x_l, x_(l + 1)]$ holds the exact
+@sec-score. The rectangle $[x_k, x_(k + 1)] times [x_l, x_(l + 1)]$ holds the exact
 share $mu_k nu_l$ of the voters, so the infinite density of a Beta with $a < 1$ at a wall
 does no harm. Its voters count at their exact mean $(overline(x)_k, overline(y)_l)$ (the
 first moment of $Beta(a, b)$ between two lines is $a slash (a + b)$ times the share of

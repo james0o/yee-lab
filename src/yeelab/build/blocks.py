@@ -7,7 +7,6 @@
 Every block has one type of output:
 
     Ballot           Plurality(), BordaCount(),         points one voter gives a candidate
-                     Approval(), GapApproval(), AvgApproval(),
                      Score(levels), ScoreAvg(levels), ScoreDH(levels, delta=...),
                      Mix(first, second, share=...)
     CandidateTotals  Tally(ballot), Weakest(diffs)      a total of each candidate at a point
@@ -21,18 +20,16 @@ Every block has one type of output:
                      Runoff(diffs, first, second)
 
 A ranked ballot gives weight(k, C) points to the candidate at position k (0 = closest)
-of C; both count only the remaining candidates, and a higher total is better. An
-approval ballot gives one point to each candidate the voter approves, the closest ones
-down to a cut that depends on how far the candidates are and not only on their order
-(yeelab.approval): Approval approves half of them, GapApproval those above the largest
-gap, AvgApproval those closer than the mean distance; its total is counted down from 1, a point lost per voter who does not approve.
-A score ballot gives a score from 0 to levels - 1 (yeelab.score): the top score to the
-closest candidate, 0 to the farthest, and to the others, for Score(levels), in proportion
-to where their distance is between the two; ScoreAvg(levels) likewise, with the mean
-distance in the middle of the scale; ScoreDH(levels, delta=...) shares the steps
-from the top score to 0 out among the gaps between neighbours in the order of distance,
-each to the gap with the largest gap / (its steps + delta), D'Hondt's rule at delta = 1.
-Its total is counted down from 1 likewise.
+of C; both count only the remaining candidates, and a higher total is better. A score
+ballot gives a score from 0 to levels - 1 (yeelab.score), which depends on how far the
+candidates are and not only on their order: the top score to the closest candidate, 0 to
+the farthest, and to the others, for Score(levels), in proportion to where their distance
+is between the two; ScoreAvg(levels) likewise, with the mean distance in the middle of
+the scale; ScoreDH(levels, delta=...) shares the steps from the top score to 0 out among
+the gaps between neighbours in the order of distance, each to the gap with the largest
+gap / (its steps + delta), D'Hondt's rule at delta = 1. With two levels each is an
+approval ballot. Its total is the mean score as a part of the top score, counted down
+from 1: a voter who does not give a candidate the top score takes off what is missing.
 Mix(first, second, share=s) is two kinds of voters: s of them mark `second`, the others
 `first`.
 Each ballot also knows the cheapest formula for its mean over the voters (Ballot.tally),
@@ -66,11 +63,9 @@ from typing import Literal
 
 import numpy as np
 
-from yeelab import score
-from yeelab.approval import AVG, GAP, HALF, Cut
 from yeelab.build.rounds import drop_below_mean, drop_lowest
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Approved, Scored, Share, Voters
-from yeelab.score import DELTA, DHONDT, RANGE
+from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Scored, Share, Voters
+from yeelab.score import AVG, DELTA, DHONDT, RANGE
 from yeelab.voting import CYCLE, irv_rounds
 
 Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) at every point
@@ -157,7 +152,7 @@ def _challenged(diffs: np.ndarray, king: np.ndarray, margin: np.ndarray, totals:
 
 class Ballot(Block):
     """Points one voter gives each candidate: by its position among the remaining ones
-    (a ranked ballot, which has a weight), or by whether the voter approves it."""
+    (a ranked ballot, which has a weight), or by its distance (a score ballot)."""
 
     kind = "a Ballot"
     needs: frozenset[Share]            # shares tally() reads for all candidates
@@ -172,8 +167,8 @@ class Ballot(Block):
         """Mean points of each candidate over the voters of every point, (..., C): for a
         ranked ballot the sum over rankings of their share times weight(position among
         the remaining, number remaining). alive (..., C) marks the remaining candidates
-        of every point, None all of them; the others get 0 (-1 on an approval ballot,
-        which counts down from 1: _approving)."""
+        of every point, None all of them; the others get 0 (-1 on a score ballot,
+        which counts down from 1: Score.tally)."""
         raise NotImplementedError
 
     def eliminate(self, voters: Voters, how: str) -> Result | None:
@@ -230,65 +225,15 @@ class BordaCount(Ballot):
         return np.einsum("...ce,...e->...c", d, weights) * weights
 
 
-def _approving(voters: Voters, cut: Cut, alive: np.ndarray | None) -> np.ndarray:
-    """Tally of an approval ballot: the share of the voters who approve each candidate
-    at `cut`, minus 1. That is minus the share who do not approve it (Voters.unapproved),
-    which keeps the lead between two candidates that nearly all voters approve; the
-    order and the leads are those of the shares themselves. A voter marks the ballot
-    once, among all candidates, so the remaining candidates of an elimination keep
-    their totals; the others get -1, approved by no one."""
-    totals = -voters.unapproved[cut]
-    return totals if alive is None else np.where(alive, totals, -1.0)
-
-
-@dataclass(frozen=True)
-class Approval(Ballot):
-    """One point for every candidate the voter approves: the closest half of them
-    (yeelab.approval). With an odd number of candidates the middle one is approved too
-    if it is closer, in distance, to the candidate before it than to the one after it,
-    so the voter approves C // 2 candidates or one more."""
-
-    needs = needs_remaining = frozenset({Approved(HALF)})
-
-    def tally(self, voters: Voters, alive: np.ndarray | None) -> np.ndarray:
-        return _approving(voters, HALF, alive)
-
-
-@dataclass(frozen=True)
-class GapApproval(Ballot):
-    """One point for every candidate the voter approves: those above the largest gap
-    between two neighbours when the candidates are in order of distance
-    (yeelab.approval), from the closest alone to all but the farthest. For three
-    candidates that is Approval()."""
-
-    needs = needs_remaining = frozenset({Approved(GAP)})
-
-    def tally(self, voters: Voters, alive: np.ndarray | None) -> np.ndarray:
-        return _approving(voters, GAP, alive)
-
-
-@dataclass(frozen=True)
-class AvgApproval(Ballot):
-    """One point for every candidate the voter approves: those closer than the mean
-    distance to all candidates (yeelab.approval), from the closest alone to all but the
-    farthest. That is the best ballot of a voter who knows nothing of how the others
-    vote (Weber). For three candidates that is Approval()."""
-
-    needs = needs_remaining = frozenset({Approved(AVG)})
-
-    def tally(self, voters: Voters, alive: np.ndarray | None) -> np.ndarray:
-        return _approving(voters, AVG, alive)
-
-
 @dataclass(frozen=True)
 class Score(Ballot):
     """A score from 0 to levels - 1 for every candidate (yeelab.score): the top score for
     the closest, 0 for the farthest, and for the others the score in proportion to where
     their distance is between those two, rounded to a whole score.
 
-    The total is the mean score as a part of the top score, counted down from 1 like
-    that of an approval ballot. Score(2) is one: the voter approves the candidates closer
-    than halfway between the closest and the farthest."""
+    The total is the mean score as a part of the top score, counted down from 1.
+    Score(2) is an approval ballot: the voter approves the candidates closer than halfway
+    between the closest and the farthest."""
 
     levels: int
     rule = RANGE  # of the ballot (yeelab.score); not a field
@@ -310,9 +255,12 @@ class Score(Ballot):
     needs_remaining = needs
 
     def tally(self, voters: Voters, alive: np.ndarray | None) -> np.ndarray:
-        """Minus the part of the top score the voters do not give each candidate
-        (Voters.unscored), as _approving: the remaining candidates of an elimination
-        keep their totals, the others get -1."""
+        """The mean part of the top score the voters give each candidate, minus 1:
+        minus the part they do not give it (Voters.unscored). That keeps the lead
+        between two candidates that nearly all voters give the top score; the order and
+        the leads are those of the mean scores themselves. A voter marks the ballot
+        once, among all candidates, so the remaining candidates of an elimination keep
+        their totals; the others get -1, as if no one gave them a point."""
         totals = -voters.unscored[self.scored]
         return totals if alive is None else np.where(alive, totals, -1.0)
 
@@ -328,10 +276,11 @@ class ScoreAvg(Score):
     distance is between those, rounded to a whole score. Score is this with the middle
     halfway between the closest and the farthest.
 
-    The total is that of Score. ScoreAvg(2) is AvgApproval(): the voter approves the
-    candidates closer than the mean distance."""
+    The total is that of Score. ScoreAvg(2) is an approval ballot: the voter approves
+    the candidates closer than the mean distance, the best ballot of a voter who knows
+    nothing of how the others vote (Weber)."""
 
-    rule = score.AVG  # not approval.AVG, imported here as AVG
+    rule = AVG
 
 
 @dataclass(frozen=True, repr=False)
@@ -345,8 +294,8 @@ class ScoreDH(Score):
     the same distance share a score at any number of levels: with more levels than
     candidates it is not Borda.
 
-    The total is that of Score. ScoreDH(2) is GapApproval() for any delta: the one step
-    goes to the largest gap."""
+    The total is that of Score. ScoreDH(2) is an approval ballot for any delta: the one
+    step goes to the largest gap, and the voter approves the candidates above it."""
 
     delta: float = field(default=DELTA, kw_only=True)
     rule = DHONDT
@@ -371,12 +320,12 @@ class Mix(Ballot):
     others `first`. The tally is that mix of the two tallies, which is linear in the
     voters; share=0 is `first` and share=1 is `second`, and a ballot no one marks is
     not tallied (nor are its shares needed). The points of the two ballots are added up,
-    so they must be on one scale, as those of two approval ballots are:
+    so they must be on one scale, as those of two score ballots are:
 
-        Mix(GapApproval(), Approval(), share=0.25)
+        Mix(ScoreDH(2), ScoreAvg(2), share=0.25)
 
-    is a quarter of the voters approving half of the candidates and three quarters
-    those above their largest gap."""
+    is a quarter of the voters approving the candidates closer than their mean distance
+    and three quarters those above their largest gap."""
 
     first: Ballot
     second: Ballot

@@ -7,16 +7,14 @@ pixels/.
     first       first-choice shares (..., C)
     pairwise    d[..., c, e] = share ranking c above e, d[..., c, c] = 0, (..., C, C)
     profile     the whole profile: rankings (R, C), best first, and their shares (..., R)
-    unapproved  {cut: share not approving each candidate (..., C)}, one entry per cut of
-                the approval ballots (approval.HALF, approval.GAP, approval.AVG); a method names each
-                as Approved(cut). The share approving is 1 minus this. It is not kept
-                itself: where nearly all voters approve two candidates, both shares are
-                1 to rounding, and only the shares not approving tell them apart
     unscored    {Scored(levels, rule, delta): mean part of the top score that the voters
                 do not give each candidate (..., C)}, from 0 to 1, one entry per score
-                ballot: its number of levels, its rule (score.RANGE, score.AVG, score.DHONDT) and the
-                divisor of DHONDT. The mean score is the top score, levels - 1, times 1
-                minus this. Kept this way for the same reason as `unapproved`
+                ballot: its number of levels, its rule (score.RANGE, score.AVG,
+                score.DHONDT) and the divisor of DHONDT. The mean score is the top
+                score, levels - 1, times 1 minus this. It is not kept itself: where
+                nearly all voters give two candidates the top score, both mean scores
+                are the top score to rounding, and only the parts not given tell them
+                apart
 """
 
 from dataclasses import dataclass
@@ -24,15 +22,7 @@ from typing import Literal
 
 import numpy as np
 
-from yeelab.approval import Cut
 from yeelab.score import DELTA, RANGE, Rule
-
-
-@dataclass(frozen=True)
-class Approved:
-    """The approval shares at one cut: approval.HALF, approval.GAP or approval.AVG."""
-
-    cut: Cut
 
 
 @dataclass(frozen=True)
@@ -46,7 +36,7 @@ class Scored:
     delta: float = DELTA
 
 
-Share = Literal["first", "pairwise", "profile"] | Approved | Scored
+Share = Literal["first", "pairwise", "profile"] | Scored
 FIRST: Share = "first"
 PAIRWISE: Share = "pairwise"
 PROFILE: Share = "profile"
@@ -60,14 +50,12 @@ class Voters:
     pairwise: np.ndarray | None = None
     rankings: np.ndarray | None = None
     probs: np.ndarray | None = None
-    unapproved: dict[Cut, np.ndarray] | None = None
     unscored: dict[Scored, np.ndarray] | None = None
 
     @property
     def _marked(self) -> np.ndarray:
-        """The shares of one of the approval or score ballots, (..., C)."""
-        shares = self.unapproved if self.unapproved is not None else self.unscored
-        return next(iter(shares.values()))
+        """The shares of one of the score ballots, (..., C)."""
+        return next(iter(self.unscored.values()))
 
     @property
     def shape(self) -> tuple[int, ...]:

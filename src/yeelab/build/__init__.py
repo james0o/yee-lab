@@ -1,8 +1,8 @@
 """Voting methods built from small blocks, like in Scratch but with Python constructors:
 
-    from yeelab.build import (Approval, AvgApproval, BordaCount, Eliminate, Fallback,
-                              GapApproval, Highest, Margins, Mix, Pairwise, Plurality, Runoff,
-                              Score, ScoreAvg, ScoreDH, StrongestPaths, Tally, Unbeaten, Weakest)
+    from yeelab.build import (BordaCount, Eliminate, Fallback, Highest, Margins, Mix,
+                              Pairwise, Plurality, Runoff, Score, ScoreAvg, ScoreDH,
+                              StrongestPaths, Tally, Unbeaten, Weakest)
 
     borda   = Highest(Tally(BordaCount()))
     fptp    = Highest(Tally(Plurality()))
@@ -35,16 +35,12 @@
     methods     the methods above by name (METHODS); margin/regions.py draws them
 """
 
-from yeelab.approval import AVG, GAP, HALF, Cut
 from yeelab.build.blocks import (
-    Approval,
-    AvgApproval,
     Ballot,
     BordaCount,
     CandidateTotals,
     Eliminate,
     Fallback,
-    GapApproval,
     Highest,
     Margins,
     Mix,
@@ -63,12 +59,11 @@ from yeelab.build.blocks import (
     Winner,
 )
 from yeelab.build.methods import METHODS
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Approved, Scored, Share, Voters
+from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Scored, Share, Voters
 
 __all__ = [
-    "Approval", "AvgApproval", "Ballot", "BordaCount", "CandidateTotals", "Eliminate", "Fallback",
-    "GapApproval", "Highest", "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise", "Plurality", "Runoff",
-    "Score", "ScoreAvg", "ScoreDH", "StrongestPaths", "Tally", "Unbeaten", "Weakest", "Winner", "METHODS",
-    "FIRST", "PAIRWISE", "PROFILE", "AVG", "GAP", "HALF", "Approved",
-    "Scored", "Cut", "Share", "Voters",
+    "Ballot", "BordaCount", "CandidateTotals", "Eliminate", "Fallback", "Highest", "Margins", "Mix",
+    "PairDiffs", "PairShares", "Pairwise", "Plurality", "Runoff", "Score", "ScoreAvg", "ScoreDH",
+    "StrongestPaths", "Tally", "Unbeaten", "Weakest", "Winner", "METHODS",
+    "FIRST", "PAIRWISE", "PROFILE", "Scored", "Share", "Voters",
 ]

@@ -538,7 +538,7 @@
     function describe(deviation, levels, delta, total, server) {
       const tail = ` · ${candidates.length} candidates · ${total} ms (${server} ms computing)`;
       let name = labels[method];
-      if (scoreMethods.includes(method)) name += `, ${levels} categories`;
+      if (scoreMethods.includes(method)) name += `, ${levels} categories${levels === 2 ? " (approval)" : ""}`;
       if (deltaMethods.includes(method)) name += `, δ = ${delta.toFixed(2)}`;
       if (method === "voronoi") {  // nearest candidate, no voters involved but for where it is drawn
         const where = geometric() ? " · only where voters have their geometric median" : "";
@@ -678,11 +678,11 @@
     scoreMethods = config.scores;
     function pickLevels() {
       levels = levelsSlider.valueAsNumber;
-      levelsValue.textContent = `${levels} (scores 0 to ${levels - 1})`;
+      levelsValue.textContent = levels === 2 ? "2 (approval)" : `${levels} (scores 0 to ${levels - 1})`;
     }
     Object.assign(levelsSlider, { max: config.max_levels, value: config.levels });
     levelsSlider.title = "Number of scores on a ballot: the top one for the closest candidate, 0 " +
-      "for the farthest. For the score methods only.";
+      "for the farthest. Two are an approval ballot. For the score methods only.";
     levelsSlider.addEventListener("input", () => { pickLevels(); compute(dragGrid); });
     levelsSlider.addEventListener("change", () => compute());
     // The δ slider is the divisor of Score (D'Hondt). It recomputes like the others.

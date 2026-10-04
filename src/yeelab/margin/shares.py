@@ -16,9 +16,7 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
     score_range, score_avg, score_dh  the part of the top score a candidate does not
                                       get: these voters have curved borders, so the
                                       shares come from a grid of voters, not from
-                                      polygons; so do the shares who do not approve a
-                                      candidate, for the approval ballots of
-                                      yeelab.build
+                                      polygons
 
 (Borda needs only pairwise shares: a ballot gives c one point per candidate ranked
 below c, so c's expected score is sum_e d[c, e].)
@@ -32,8 +30,8 @@ For normal voters a half-plane holds Phi(signed distance / sigma) of the voters,
 their pairwise shares need no edges at all.
 
 All of these are at the interpolation nodes, shape (N, N, ...); regions.py
-interpolates them to the points where the methods are evaluated. The approval and score
-shares are computed at those points themselves (unapproved_shares, unscored_shares).
+interpolates them to the points where the methods are evaluated. The score shares are
+computed at those points themselves (unscored_shares).
 """
 
 import os
@@ -46,7 +44,6 @@ import numpy as np
 from scipy.special import betainc, betaincc, logit, ndtr
 
 from yeelab import normal, ranking_cells, score, threads
-from yeelab.approval import Cut, coverage
 from yeelab.distributions import Distribution
 from yeelab.margin.beta_tables import TabulatedBeta
 from yeelab.ranking_cells import NODES, QUAD_NODES, Spread, _clip
@@ -54,11 +51,11 @@ from yeelab.ranking_cells import NODES, QUAD_NODES, Spread, _clip
 PIXELS = 300  # the outermost medians are 1/2 and 1 - 1/2 pixel from the walls
 CACHE_BYTES = 64 * 2**20  # edge integrals kept between requests
 SQUARE = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
-# The voter grid of the approval shares (_grid_lines): cells per axis across the unit
+# The voter grid of the score shares (_grid_lines): cells per axis across the unit
 # square, ballots per axis in a cell that a border crosses, the smallest cell at a wall
 # (Beta voters) and the growth of the cells beyond the square (normal voters).
-APPROVAL_CELLS = 256
-APPROVAL_SUB = 8
+GRID_CELLS = 256
+GRID_SUB = 8
 WALL_CELL = 1e-6
 OUTSIDE_GROWTH = 1.1
 
@@ -279,11 +276,11 @@ def ranking_shares(candidates, model: Model):
         polygons, rankings = normal.normal_cells(candidates, model.sigma)
     return rankings, _polygon_shares(model, polygons)
 
-# ---------------------------------------------------------------- Approval
+# ---------------------------------------------------------------- Score
 
 
 def _grid_lines(model: Model) -> np.ndarray:
-    """Lines of the voter grid along one axis, increasing: APPROVAL_CELLS equal cells
+    """Lines of the voter grid along one axis, increasing: GRID_CELLS equal cells
     across the unit square, and smaller or larger ones where the voters call for them.
 
     Beta voters: the cell at each wall is halved again and again down to WALL_CELL. The
@@ -291,8 +288,8 @@ def _grid_lines(model: Model) -> np.ndarray:
     to a wall sit within a small fraction of an equal cell.
     Normal voters: beyond the square the cells grow by OUTSIDE_GROWTH each, out to the
     box of normal.normal_cells, where the density is smooth and no candidate is near."""
-    step = 1.0 / APPROVAL_CELLS
-    inside = np.linspace(0.0, 1.0, APPROVAL_CELLS + 1)
+    step = 1.0 / GRID_CELLS
+    inside = np.linspace(0.0, 1.0, GRID_CELLS + 1)
     if model.distribution == "beta":
         halves = step / 2.0 ** np.arange(1, 1 + int(np.ceil(np.log2(step / WALL_CELL))))
         return np.concatenate([[0.0], halves[::-1], inside[1:-1], 1 - halves, [1.0]])
@@ -345,44 +342,31 @@ def _voter_grid(model: Model, medians):
     return _cached_voter_grid(model, np.ascontiguousarray(medians, dtype=np.float64).tobytes())
 
 
-def unapproved_shares(candidates, model: Model, cut: Cut, medians) -> np.ndarray:
-    """unapproved[i, j, c] = share of the voters with median (medians[i], medians[j])
-    who do not approve c at `cut` (approval.HALF, GAP or AVG), shape (M, M, C). The share
-    who approve c is 1 minus this; over the candidates neither sums to 1, as a voter
-    approves between one candidate and all but one.
-
-    Why the share who do not approve: far from the candidates, narrow voters all
-    approve the same candidates, and the shares of those are 1 to rounding. Which of
-    them leads is decided by the few voters who do not approve each, 1e-20 of them or
-    fewer. Those shares are sums of small terms here, exact in relative terms.
-
-    The voters who approve a candidate have curved borders (yeelab.approval), so their
-    share is not a sum of edge terms like the others. The plane is cut into the
-    rectangles of the voter grid instead: approval.coverage gives the part of each
-    rectangle that approves c, and the rest of each rectangle is added up with the
-    exact share of the voters it holds. Only the border within a rectangle is
-    approximate: the share who approve is within about 1e-3 of the exact one
-    (tests/test_approval.py). Normal voters beyond the grid, less than 1e-19 of them,
-    count as approving.
-
-    The shares are not interpolated from the nodes: a tail of 1e-20 is far below the
-    error of the interpolant, and one more median costs only a row of each product."""
-    lines, mass = _voter_grid(model, medians)
-    rest = np.subtract(1.0, coverage(lines, lines, candidates, cut, APPROVAL_SUB), dtype=np.float64)
-    return np.moveaxis(mass @ rest @ mass.T, 0, -1)
-
-
 def unscored_shares(candidates, model: Model, levels: int, medians,
                     rule: score.Rule = score.RANGE, delta: float = score.DELTA) -> np.ndarray:
     """unscored[i, j, c] = mean part of the top score that the voters with median
     (medians[i], medians[j]) do not give c on a score ballot with `levels` scores by
     `rule` and `delta` (yeelab.score), from 0 to 1, shape (M, M, C). The mean score of c
-    is the top score, levels - 1, times 1 minus this.
+    is the top score, levels - 1, times 1 minus this. With two levels it is the share of
+    the voters who do not approve c.
 
-    The same sum over the voter grid as unapproved_shares, of the points below the top
-    score in place of the voters who do not approve, and for the same reason: it has no
-    negative terms, so it stays exact where nearly all voters give two candidates the
-    top score."""
+    Why the part not given: far from the candidates, narrow voters all give the same
+    candidates the top score, and the mean scores of those are the top score to
+    rounding. Which of them leads is decided by the few voters who give each less,
+    1e-20 of them or fewer. The parts not given are sums of small terms here, with no
+    negative ones, so they are exact in relative terms.
+
+    The voters who give a candidate a score have curved borders (yeelab.score), so
+    their share is not a sum of edge terms like the others. The plane is cut into the
+    rectangles of the voter grid instead: score.unscored gives the mean points below
+    the top score in each rectangle, which are added up with the exact share of the
+    voters it holds. Only the borders within a rectangle are approximate: the share who
+    approve, with two levels, is within about 1e-3 of the exact one (tests/test_score.py).
+    Normal voters beyond the grid, less than 1e-19 of them, count as giving the top
+    score.
+
+    The shares are not interpolated from the nodes: a tail of 1e-20 is far below the
+    error of the interpolant, and one more median costs only a row of each product."""
     lines, mass = _voter_grid(model, medians)
-    short = score.unscored(lines, lines, candidates, levels, APPROVAL_SUB, rule, delta).astype(np.float64)
+    short = score.unscored(lines, lines, candidates, levels, GRID_SUB, rule, delta).astype(np.float64)
     return np.moveaxis(mass @ short @ mass.T, 0, -1) / (levels - 1)
