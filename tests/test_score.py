@@ -3,31 +3,36 @@
 The ballot of one voter is checked from its definition: by every rule the closest
 candidate gets the top score and the farthest 0. RANGE gives the others the score in
 proportion to where their distance is between the two, rounded like np.round; with two
-levels it approves the candidates closer than halfway, which for three candidates is the
-approval ballot. AVG puts the mean distance in the middle of that scale; with two levels
-it is the approval ballot of the mean, for any number of candidates. DHONDT shares the steps out among the gaps by the divisor method of its
-delta (D'Hondt at 1), which is checked by the condition every apportionment of that
-method meets and no other does; with two levels it is the approval ballot of the largest
-gap, for any number of candidates and any delta, and it does not become Borda with more
+levels it approves the candidates closer than halfway. AVG puts the mean distance in the
+middle of that scale; with two levels it approves the candidates closer than the mean,
+which adds to the expected utility. DHONDT shares the steps out among the gaps by the
+divisor method of its delta (D'Hondt at 1), which is checked by the condition every
+apportionment of that method meets and no other does; with two levels it approves the
+candidates above the largest gap, for any delta, and it does not become Borda with more
 levels than candidates. A lower delta moves steps from the large gaps to the small ones.
-The compiled ballot of the grid must be that of the definition.
+With two levels AVG and DHONDT are checked against approval ballots defined on their own
+(_approval); for three candidates every rule gives the same ballot. The compiled ballot
+of the grid must be that of the definition.
 
-The shares come from the voter grid of the approval shares (test_approval.py). They are
-compared with exact shares where there are some (two candidates get the top score from
-their first choices and 0 from the others; three candidates and two levels are the
-approval shares, and so are any candidates and two levels of AVG and DHONDT) and with
-sampled voters elsewhere.
+The shares come from a grid of voters, so they are approximate. They are compared with
+exact shares where there are some (two candidates get the top score from their first
+choices and 0 from the others, and with two levels the closest candidate is approved
+and the farthest is not) and with sampled voters elsewhere. They are computed as the
+part of the top score not given, which must stay exact where it is tiny: the lead
+between two candidates nearly all voters give the top score.
 """
 
-from itertools import product
+from itertools import combinations, product
 
 import numpy as np
 import pytest
+from scipy.special import ndtr
 
 from yeelab import ranking_cells
-from yeelab.approval import AVG as MEAN_CUT, CUTS, GAP, approved, distances
-from yeelab.margin.shares import Model, first_choice_shares, unapproved_shares, unscored_shares
-from yeelab.score import AVG, DELTA, DHONDT, MAX_CANDIDATES, MAX_LEVELS, RANGE, RULES, scored, unscored
+from yeelab.margin.shares import (GRID_CELLS, Model, _voter_grid, first_choice_shares, ranking_shares,
+                                  unscored_shares)
+from yeelab.score import (AVG, DELTA, DHONDT, MAX_CANDIDATES, MAX_LEVELS, RANGE, RULES, distances, scored,
+                          unscored)
 
 FIVE = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
 CANDIDATES = {2: np.random.default_rng(5).random((2, 2)), 3: np.random.default_rng(3).random((3, 2)),
@@ -39,7 +44,8 @@ MODELS = [Model("beta", 0.2, "rms"), Model("beta", 0.05, "rms"), Model("beta", 0
           Model("normal", 0.2), Model("normal", 0.05)]
 NODES = [(5, -9), (24, 24), (-5, 10), (0, 0)]  # of the nodes per axis, where the shares are sampled
 SAMPLES = 400_000
-TOLERANCE = 2e-3  # the grid shares against exact ones, as in test_approval.py
+# The grid shares against exact ones: 5e-4 seen for the narrowest voters, 2e-4 otherwise.
+TOLERANCE = 2e-3
 
 
 def _ids(value):
@@ -56,6 +62,29 @@ def _at(distances_):
 
 def _ballot(distances_, levels, rule=RANGE, delta=DELTA):
     return scored(np.zeros(2), _at(distances_), levels, rule, delta).tolist()
+
+
+def _approval(points, candidates, cut):
+    """Who a voter at each of the points approves, bool (..., C), by the approval ballot's
+    own definition, apart from score.py: the closest candidates down to the largest gap
+    between neighbours in the order of distance (cut "gap", ties: the first gap) or
+    those closer than the mean distance ("avg", ties: not approved)."""
+    r = distances(points, candidates)
+    order = np.argsort(r, axis=-1, kind="stable")  # closest first; ties: the lowest index
+    if cut == "gap":
+        count = np.diff(np.take_along_axis(r, order, axis=-1), axis=-1).argmax(axis=-1) + 1
+    else:
+        count = np.maximum((r < r.mean(axis=-1, keepdims=True)).sum(axis=-1), 1)
+    return np.argsort(order, axis=-1, kind="stable") < count[..., None]
+
+
+def _top_shares(candidates, model, count):
+    """Share of the voters with each candidate among their `count` closest: exact, from
+    the cells of the ranking."""
+    rankings, shares = ranking_shares(candidates, model)
+    top = np.zeros((len(rankings), len(candidates)))
+    np.put_along_axis(top, rankings[:, :count].astype(np.int64), 1.0, axis=1)
+    return shares @ top
 
 # ---------------------------------------------------------------- One voter
 
@@ -109,13 +138,24 @@ def test_avg_puts_the_mean_distance_in_the_middle_of_the_scale():
 
 
 def test_avg_with_two_levels_is_approval_of_the_mean():
-    """For any number of candidates; at the mean itself the half is rounded to 0, as
-    approval.AVG does not approve a tie."""
+    """For any number of candidates; at the mean itself the half is rounded to 0, as the
+    approval ballot does not approve a tie."""
     rng = np.random.default_rng(12)
     for n in range(2, 9):
         candidates, points = rng.random((n, 2)), rng.random((5000, 2))
-        np.testing.assert_array_equal(scored(points, candidates, 2, AVG), approved(points, candidates, MEAN_CUT))
+        np.testing.assert_array_equal(scored(points, candidates, 2, AVG), _approval(points, candidates, "avg"))
     assert _ballot([0, 1, 2], 2, AVG) == [1, 0, 0]
+
+
+def test_avg_with_two_levels_approves_what_adds_to_the_expected_utility():
+    """With utility -r and every pair of candidates equally likely to tie, approving c
+    is worth sum_e (r_e - r_c): AVG approves exactly the candidates where it is > 0."""
+    rng = np.random.default_rng(7)
+    for n in range(2, 9):
+        candidates, points = rng.random((n, 2)), rng.random((2000, 2))
+        r = distances(points, candidates)
+        worth = r.sum(axis=-1, keepdims=True) - n * r
+        np.testing.assert_array_equal(scored(points, candidates, 2, AVG), worth > 0)
 
 
 @pytest.mark.parametrize("rule", RULES)
@@ -154,17 +194,19 @@ def test_two_levels_approve_the_candidates_closer_than_halfway():
         np.testing.assert_array_equal(scored(points, candidates, 2)[clear], (r < halfway)[clear])
 
 
-@pytest.mark.parametrize("cut", CUTS)
-def test_two_levels_are_the_approval_ballot_of_three_candidates_only(cut):
-    """The middle one of three is closer than halfway where it is closer to the closest
-    than to the farthest: the approval ballot at either cut. Four have other ballots."""
+def test_two_levels_are_one_approval_ballot_for_three_candidates_only():
+    """The middle one of three is approved where it is closer to the closest than to
+    the farthest, by every rule: closer than halfway, closer than the mean, above the
+    largest gap. Four have three ballots."""
     rng = np.random.default_rng(4)
     points = rng.random((5000, 2))
     for n in (2, 3):
         candidates = rng.random((n, 2))
-        np.testing.assert_array_equal(scored(points, candidates, 2), approved(points, candidates, cut))
+        for rule in (AVG, DHONDT):
+            np.testing.assert_array_equal(scored(points, candidates, 2, rule), scored(points, candidates, 2))
     candidates = rng.random((4, 2))
-    assert (scored(points, candidates, 2) != approved(points, candidates, cut)).any()
+    ballots = [scored(points, candidates, 2, rule) for rule in RULES]
+    assert all((one != other).any() for one, other in combinations(ballots, 2))
 
 
 @pytest.mark.parametrize("rule", RULES)
@@ -222,7 +264,7 @@ def test_dhondt_with_two_levels_is_approval_of_the_largest_gap(delta):
     for n in range(2, 9):
         candidates, points = rng.random((n, 2)), rng.random((5000, 2))
         np.testing.assert_array_equal(scored(points, candidates, 2, DHONDT, delta),
-                                      approved(points, candidates, GAP))
+                                      _approval(points, candidates, "gap"))
     assert _ballot([1, 2, 3], 2, DHONDT, delta) == [1, 0, 0]
     assert _ballot([3, 3, 3], 6, DHONDT, delta) == [5, 0, 0]  # all gaps tie: every step to the first
 
@@ -351,6 +393,36 @@ def test_the_most_candidates_and_levels_fit_a_ballot(rule):
     np.testing.assert_array_equal(short, MAX_LEVELS - 1 - scored(points, candidates, MAX_LEVELS, rule))
     assert short.max() == MAX_LEVELS - 1
 
+@pytest.mark.parametrize("model", MODELS, ids=_ids)
+def test_the_voter_grid_holds_all_voters(model):
+    """Equal cells across the square, each node's voters summing to 1 over the cells,
+    and the cells of both models reaching where their voters are."""
+    lines, mass = _voter_grid(model, model.medians)
+    assert (np.diff(lines) > 0).all() and mass.shape == (model.nodes, len(lines) - 1)
+    inside = lines[(lines > 0.01) & (lines < 0.99)]
+    np.testing.assert_allclose(np.diff(inside), 1 / GRID_CELLS, atol=1e-12)
+    np.testing.assert_allclose(mass.sum(axis=1), 1.0, atol=1e-12)
+    assert (mass >= 0).all()
+    if model.distribution == "beta":
+        assert lines[0] == 0 and lines[-1] == 1 and lines[1] <= 1e-6
+    else:
+        assert lines[0] < -9 * model.sigma and lines[-1] > 1 + 9 * model.sigma
+
+
+@pytest.mark.parametrize("model", MODELS, ids=_ids)
+def test_the_voter_grid_is_exact_in_both_tails(model):
+    """The voters of the median 1 - m are those of m mirrored, so the cells above a
+    median hold what the mirrored cells below the mirrored median do, down to the
+    smallest shares. (Differences of a CDF near 1 would be 0 there.)"""
+    medians = np.array([0.03, 0.4, 0.6, 0.97])
+    lines, mass = _voter_grid(model, medians)
+    np.testing.assert_allclose(lines, 1 - lines[::-1], rtol=0, atol=1e-15)
+    assert (mass > 0).all()
+    np.testing.assert_allclose(mass[::-1, ::-1], mass, rtol=1e-6, atol=0)
+    if model.deviation == 0.05:
+        assert mass.min() < 1e-30
+    assert not _voter_grid(model, medians)[1].flags.writeable  # kept, so read-only
+
 # ---------------------------------------------------------------- Shares
 
 
@@ -379,39 +451,55 @@ def test_shares_match_sampled_voters(model, rule):
 
 @pytest.mark.parametrize("model", MODELS, ids=_ids)
 def test_two_candidates_are_scored_by_their_first_choices(model):
-    """The closer one gets the top score and the other 0, at any number of levels: the
-    part of the top score not given is the share of the voters closer to the other, and
-    that of the approval ballots."""
+    """The closer one gets the top score and the other 0, at any number of levels and by
+    every rule: the part of the top score not given is the share of the voters closer to
+    the other, and the same share for all of them."""
     not_first = 1 - first_choice_shares(CANDIDATES[2], model)
-    unapproved = unapproved_shares(CANDIDATES[2], model, "half", model.medians)
+    approval = unscored_shares(CANDIDATES[2], model, 2, model.medians)
     for levels, rule in product((2, 6, 16), RULES):
         unscored_ = unscored_shares(CANDIDATES[2], model, levels, model.medians, rule)
         np.testing.assert_allclose(unscored_, not_first, rtol=0, atol=TOLERANCE)
-        np.testing.assert_allclose(unscored_, unapproved, rtol=1e-12, atol=0)  # the tiny ones too
+        np.testing.assert_allclose(unscored_, approval, rtol=1e-12, atol=0)  # the tiny ones too
 
 
-@pytest.mark.parametrize("cut", CUTS)
+@pytest.mark.parametrize("sigma_model", [Model("normal", 0.05), Model("normal", 0.2)], ids=_ids)
+def test_the_part_not_given_is_exact_where_it_is_tiny(sigma_model):
+    """Two candidates: a voter gives the farther one 0, and for normal voters the share
+    closer to the other is Phi of the distance to their bisector. The grid share must
+    follow it in relative terms, far below the rounding of 1 - share (6% seen at 1e-36:
+    the border within a rectangle is only a share of the rectangle)."""
+    medians = np.linspace(0.01, 0.99, 50)
+    unscored_ = unscored_shares(CANDIDATES[2], sigma_model, 2, medians)
+    diff = CANDIDATES[2][1] - CANDIDATES[2][0]
+    threshold = (CANDIDATES[2][1] @ CANDIDATES[2][1] - CANDIDATES[2][0] @ CANDIDATES[2][0]) / 2
+    mean = diff[0] * medians[:, None] + diff[1] * medians[None, :]
+    z = (threshold - mean) / (sigma_model.sigma * np.linalg.norm(diff))  # to the bisector
+    np.testing.assert_allclose(unscored_[..., 1], ndtr(z), rtol=0.1, atol=0)  # closer to 0
+    np.testing.assert_allclose(unscored_[..., 0], ndtr(-z), rtol=0.1, atol=0)
+    if sigma_model.deviation == 0.05:
+        assert unscored_.min() < 1e-30
+
+
 @pytest.mark.parametrize("model", MODELS, ids=_ids)
-def test_three_candidates_and_two_levels_have_the_approval_shares(model, cut):
-    np.testing.assert_allclose(unscored_shares(CANDIDATES[3], model, 2, model.medians),
-                               unapproved_shares(CANDIDATES[3], model, cut, model.medians),
-                               rtol=1e-9, atol=0)
-
-
-@pytest.mark.parametrize("model", MODELS, ids=_ids)
-def test_two_levels_of_avg_have_the_shares_of_the_mean(model):
-    for n in (3, 5, 7):
-        np.testing.assert_allclose(unscored_shares(CANDIDATES[n], model, 2, model.medians, AVG),
-                                   unapproved_shares(CANDIDATES[n], model, MEAN_CUT, model.medians),
+def test_three_candidates_and_two_levels_have_one_share_for_every_rule(model):
+    for rule in (AVG, DHONDT):
+        np.testing.assert_allclose(unscored_shares(CANDIDATES[3], model, 2, model.medians, rule),
+                                   unscored_shares(CANDIDATES[3], model, 2, model.medians),
                                    rtol=1e-9, atol=0)
 
 
+@pytest.mark.parametrize("rule", RULES)
 @pytest.mark.parametrize("model", MODELS, ids=_ids)
-def test_two_levels_of_dhondt_have_the_shares_of_the_largest_gap(model):
-    for n in (3, 5, 7):
-        np.testing.assert_allclose(unscored_shares(CANDIDATES[n], model, 2, model.medians, DHONDT),
-                                   unapproved_shares(CANDIDATES[n], model, GAP, model.medians),
-                                   rtol=1e-9, atol=0)
+def test_two_levels_approve_from_the_closest_alone_to_all_but_the_farthest(model, rule):
+    """With two levels a voter approves the closest candidate and not the farthest, so
+    the share approving each is between the exact shares with it first and with it
+    among the n - 1 closest."""
+    for n in (5, 7):
+        candidates = CANDIDATES[n]
+        shares = 1 - unscored_shares(candidates, model, 2, model.medians, rule)
+        assert (shares >= _top_shares(candidates, model, 1) - TOLERANCE).all()
+        assert (shares <= _top_shares(candidates, model, n - 1) + TOLERANCE).all()
+        assert (shares >= -1e-12).all() and (shares <= 1 + 1e-12).all()
 
 
 @pytest.mark.parametrize("model", MODELS, ids=_ids)

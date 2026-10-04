@@ -110,7 +110,7 @@ def test_agrees_with_the_measured_medians():
 def finer_voter_grid(monkeypatch):
     """The voter grid with cells a quarter as wide, for this test only."""
     shares._cached_voter_grid.cache_clear()
-    monkeypatch.setattr(shares, "APPROVAL_CELLS", 4 * shares.APPROVAL_CELLS)
+    monkeypatch.setattr(shares, "GRID_CELLS", 4 * shares.GRID_CELLS)
     yield
     shares._cached_voter_grid.cache_clear()
 
