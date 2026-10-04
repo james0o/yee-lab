@@ -7,7 +7,7 @@
 Every block has one type of output:
 
     Ballot           Plurality(), BordaCount(),         points one voter gives a candidate
-                     Approval(), GapApproval(),
+                     Approval(), GapApproval(), AvgApproval(),
                      Score(levels),
                      Mix(first, second, share=...)
     CandidateTotals  Tally(ballot), Weakest(diffs)      a total of each candidate at a point
@@ -25,7 +25,7 @@ of C; both count only the remaining candidates, and a higher total is better. An
 approval ballot gives one point to each candidate the voter approves, the closest ones
 down to a cut that depends on how far the candidates are and not only on their order
 (yeelab.approval): Approval approves half of them, GapApproval those above the largest
-gap; its total is counted down from 1, a point lost per voter who does not approve.
+gap, AvgApproval those closer than the mean distance; its total is counted down from 1, a point lost per voter who does not approve.
 A score ballot, Score(levels), gives a score from 0 to levels - 1 (yeelab.score): the
 top score to the closest candidate, 0 to the farthest, and to the others in proportion
 to where their distance is between the two; its total is counted down from 1 likewise.
@@ -62,7 +62,7 @@ from typing import Literal
 
 import numpy as np
 
-from yeelab.approval import GAP, HALF, Cut
+from yeelab.approval import AVG, GAP, HALF, Cut
 from yeelab.build.rounds import drop_below_mean, drop_lowest
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Approved, Scored, Share, Voters
 from yeelab.voting import CYCLE, irv_rounds
@@ -259,6 +259,19 @@ class GapApproval(Ballot):
 
     def tally(self, voters: Voters, alive: np.ndarray | None) -> np.ndarray:
         return _approving(voters, GAP, alive)
+
+
+@dataclass(frozen=True)
+class AvgApproval(Ballot):
+    """One point for every candidate the voter approves: those closer than the mean
+    distance to all candidates (yeelab.approval), from the closest alone to all but the
+    farthest. That is the best ballot of a voter who knows nothing of how the others
+    vote (Weber). For three candidates that is Approval()."""
+
+    needs = needs_remaining = frozenset({Approved(AVG)})
+
+    def tally(self, voters: Voters, alive: np.ndarray | None) -> np.ndarray:
+        return _approving(voters, AVG, alive)
 
 
 @dataclass(frozen=True)

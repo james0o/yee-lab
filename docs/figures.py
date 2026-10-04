@@ -25,7 +25,7 @@ from scipy.special import betainc, ndtr, ndtri
 from scipy.stats import beta as beta_dist
 
 from yeelab import normal, ranking_cells
-from yeelab.approval import GAP, HALF, coverage
+from yeelab.approval import AVG, GAP, coverage
 from yeelab.build import Voters
 from yeelab.margin.geometric import geometric_median_at, geometric_medians
 from yeelab.margin.regions import MARGINS, regions, winners
@@ -868,11 +868,11 @@ def geometric_median():
 # ---------------------------------------------------------------- approval voting
 
 # the approval methods of the web UI: name, label and cut of the ballot
-APPROVALS = [("approval", "half of the candidates", HALF), ("approval_gap", "largest gap", GAP)]
+APPROVALS = [("approval_gap", "largest gap", GAP), ("approval_avg", "mean distance", AVG)]
 
 
 def approval():
-    """The voters who approve D, and the diagrams, for both approval ballots."""
+    """The voters who approve D, and the diagrams, for the approval methods of the web UI."""
     fig, axes = plt.subplots(1, 4, figsize=(13, 3.6), layout="constrained")
     lines = np.linspace(0, 1, 401)
     shade = LinearSegmentedColormap.from_list("approves", ["white", PALETTE[D]])
@@ -889,7 +889,7 @@ def approval():
         ax.set_title(f"voters who approve D: {label}", fontsize=10)
         winner = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
         show(axes[2 + k], winner, f"{method}: {label}")
-    for method in ("fptp", "borda", "schulze", "approval", "approval_gap"):
+    for method in ("fptp", "borda", "schulze", "approval_gap", "approval_avg", "score"):
         winner = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
         print(f"{method}: share of the square won " + "  ".join(
             f"{name} {(winner == c).mean():.3f}" for c, name in enumerate(NAMES)))

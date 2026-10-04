@@ -16,7 +16,7 @@ from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import AfterValidator, BaseModel, Field, field_validator
 
-from yeelab.build import Highest, Score, Tally, Winner, mixed_approval
+from yeelab.build import Highest, Score, Tally, Winner
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
 from yeelab.margin.regions import MARGINS, regions
@@ -38,22 +38,15 @@ DIAGRAMS = [*MARGINS, *IDEALS]
 # is the default.
 DEVIATIONS = [round(0.05 * k, 2) for k in range(1, 9)]
 assert DEVIATION in DEVIATIONS
-# The mix slider of "approval_mix": the share of its voters who approve half of the
-# candidates, from 0 (all approve down to their largest gap, "approval_gap") to 1 (all
-# approve half, "approval"). HALF_SHARE is its default. The categories slider of "score":
-# the number of scores on its ballot, from 2 to MAX_LEVELS (scores 0 to 10). SCORE_LEVELS
-# is its default. SLIDERS builds the two methods from a request's sliders; they are
-# listed with the defaults.
-APPROVAL_MIX = "approval_mix"
-HALF_SHARE = 0.5
+# The categories slider of "score": the number of scores on its ballot, from 2 to
+# MAX_LEVELS (scores 0 to 10). SCORE_LEVELS is its default. SLIDERS builds the method
+# from a request's slider; it is listed with the default.
 SCORE = "score"
 SCORE_LEVELS = 6
 MAX_LEVELS = 11
 SLIDERS = {
-    APPROVAL_MIX: lambda request: mixed_approval(request.half),
     SCORE: lambda request: Highest(Tally(Score(request.levels))),
 }
-assert MARGINS[APPROVAL_MIX] == mixed_approval(HALF_SHARE)
 assert MARGINS[SCORE] == Highest(Tally(Score(SCORE_LEVELS)))
 # Win regions are traced on a grid of this many points per axis: coarser while a
 # candidate is dragged, finer once it is dropped (see margin/regions.py).
@@ -87,18 +80,13 @@ METHOD_INFO = {
     "king_runoff": {"label": "King runoff", "description": "King runoff: the King of the hill "
                     "winner against the IRV winner, head to head; the one more voters rank above "
                     "the other wins."},
-    "approval": {"label": "Approval", "description": "Approval: a voter approves the closest "
-                 "half of the candidates; with an odd number the middle one too, if it is closer "
-                 "to the candidate before it than to the one after it. The candidate approved by "
-                 "the most voters wins."},
     "approval_gap": {"label": "Approval (gap)", "description": "Approval (gap): a voter puts "
                      "the candidates in order of distance and approves those above the largest "
                      "gap. The candidate approved by the most voters wins."},
-    "approval_mix": {"label": "Approval (mix)", "description": "Approval (mix): both kinds of "
-                     "voters. The mix slider below sets the share who approve half of the "
-                     "candidates, as in Approval; the others approve those above their largest "
-                     "gap, as in Approval (gap). The candidate approved by the most voters wins. "
-                     "The expression is the slider's default."},
+    "approval_avg": {"label": "Approval (avg)", "description": "Approval (avg): a voter "
+                     "approves the candidates closer than their mean distance to all "
+                     "candidates, the best ballot of a voter who knows nothing of how the "
+                     "others vote. The candidate approved by the most voters wins."},
     "score": {"label": "Score", "description": "Score: a voter gives the closest candidate the "
               "top score, the farthest 0, and every other one the score in proportion to where "
               "its distance is between those two, rounded to a whole score. The highest mean "
@@ -168,7 +156,6 @@ class DiagramRequest(BaseModel):
     # towards their geometric median. The UI moves the diagram between the two in steps.
     shift: float = Field(1.0, ge=0, le=1)
     deviation: float = DEVIATION
-    half: float = Field(HALF_SHARE, ge=0, le=1)  # approval_mix only
     levels: int = Field(SCORE_LEVELS, ge=2, le=MAX_LEVELS)  # score only
     grid: int = Field(FINAL_GRID, ge=32, le=512)
 
@@ -234,9 +221,7 @@ def config():
         "final_grid": FINAL_GRID,
         "deviations": DEVIATIONS,
         "deviation": DEVIATION,
-        # the methods of the mix slider and of the categories slider, and their defaults
-        "approval_mix": APPROVAL_MIX,
-        "half": HALF_SHARE,
+        # the method of the categories slider, and its default
         "score": SCORE,
         "levels": SCORE_LEVELS,
         "max_levels": MAX_LEVELS,
@@ -254,7 +239,7 @@ def diagram_regions(request: DiagramRequest):
     start = time.perf_counter()
     spread = SPREAD if request.distribution == "beta" else None
     model = Model(request.distribution, request.deviation, spread)
-    build = SLIDERS.get(request.method)  # built from the sliders
+    build = SLIDERS.get(request.method)  # built from the slider
     method = build(request) if build else request.method
     shapes = regions(method, request.candidates, model, request.grid, request.pixel_median, request.shift)
     payload = {"regions": shapes, "ms": round(1000 * (time.perf_counter() - start), 1)}

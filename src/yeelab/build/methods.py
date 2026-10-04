@@ -2,14 +2,13 @@
 lists them (margin/regions.py MARGINS)."""
 
 from yeelab.build.blocks import (
-    Approval,
+    AvgApproval,
     BordaCount,
     Eliminate,
     Fallback,
     GapApproval,
     Highest,
     Margins,
-    Mix,
     Pairwise,
     Plurality,
     Runoff,
@@ -37,20 +36,10 @@ black = Fallback(condorcet, borda)                   # the Condorcet winner, els
 koth = Unbeaten(M, against=fptp, order=Tally(Plurality()))
 king_runoff = Runoff(M, koth, irv)                   # the king of the hill against the irv winner
 
-approval = Highest(Tally(Approval()))                # approved by the most voters, each approving half
-approval_gap = Highest(Tally(GapApproval()))         # ... each approving down to their largest gap
-
-
-def mixed_approval(half: float) -> Winner:
-    """Approval by both kinds of voters: the share `half` of them approve half of the
-    candidates, the others down to their largest gap. It is approval_gap at 0 and
-    approval at 1."""
-    return Highest(Tally(Mix(GapApproval(), Approval(), share=half)))
-
-
-approval_mix = mixed_approval(0.5)                   # ... half of them each way
-
-
+# approved by the most voters, each approving down to their largest gap
+approval_gap = Highest(Tally(GapApproval()))
+# ... each approving those closer than the mean distance
+approval_avg = Highest(Tally(AvgApproval()))
 score = Highest(Tally(Score(6)))                     # the highest mean score, of 0 to 5
 
 METHODS: dict[str, Winner] = {
@@ -65,8 +54,7 @@ METHODS: dict[str, Winner] = {
     "black": black,
     "koth": koth,
     "king_runoff": king_runoff,
-    "approval": approval,
     "approval_gap": approval_gap,
-    "approval_mix": approval_mix,
+    "approval_avg": approval_avg,
     "score": score,
 }

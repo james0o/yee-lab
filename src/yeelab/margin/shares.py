@@ -13,11 +13,10 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
                                       remaining set)
     king_runoff                       all three: koth against irv, the duel by pairwise
                                       shares
-    approval, approval_gap            the shares who do not approve a candidate at
+    approval_gap, approval_avg        the shares who do not approve a candidate at
                                       their cut: these voters have curved borders, so
                                       the shares come from a grid of voters, not from
                                       polygons
-    approval_mix                      those of both cuts, which it mixes
     score                             the part of the top score a candidate does not get:
                                       from the same grid of voters
 
@@ -348,7 +347,7 @@ def _voter_grid(model: Model, medians):
 
 def unapproved_shares(candidates, model: Model, cut: Cut, medians) -> np.ndarray:
     """unapproved[i, j, c] = share of the voters with median (medians[i], medians[j])
-    who do not approve c at `cut` (approval.HALF or GAP), shape (M, M, C). The share
+    who do not approve c at `cut` (approval.HALF, GAP or AVG), shape (M, M, C). The share
     who approve c is 1 minus this; over the candidates neither sums to 1, as a voter
     approves between one candidate and all but one.
 

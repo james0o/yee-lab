@@ -2,8 +2,9 @@
 
 The ballot of one voter is checked from its definition: the closest candidate is
 approved and the farthest is not, HALF approves half of the candidates (the middle one
-of an odd number by its two gaps), GAP those above the largest gap of the distances, and
-for three candidates the two are the same ballot. The compiled ballot of the grid must
+of an odd number by its two gaps), GAP those above the largest gap of the distances, AVG
+those closer than the mean distance, and for three candidates the three are the same
+ballot. The compiled ballot of the grid must
 be that of the definition.
 
 The shares come from a grid of voters, so they are approximate. They are compared with
@@ -18,7 +19,7 @@ import pytest
 from scipy.special import ndtr
 
 from yeelab import ranking_cells
-from yeelab.approval import CUTS, GAP, HALF, approved, coverage, distances
+from yeelab.approval import AVG, CUTS, GAP, HALF, approved, coverage, distances
 from yeelab.margin.shares import (
     APPROVAL_CELLS,
     Model,
@@ -99,6 +100,26 @@ def test_the_middle_candidate_goes_with_the_closer_neighbour():
     assert _ballot([1, 2, 3, 4, 5], HALF) == [True, True, False, False, False]  # a tie: it is not approved
     assert _ballot([1, 2, 3], HALF) == [True, False, False]  # a tie: it is not approved
     assert _ballot([1, 2, 3], GAP) == [True, False, False]  # a tie: the first gap
+    assert _ballot([1, 2, 3], AVG) == [True, False, False]  # a tie: it is not approved
+
+
+def test_avg_approves_those_closer_than_the_mean_distance():
+    """The largest gap (0.4) is after the closest, but the mean distance, 4.05 / 6 =
+    0.675, is above the third."""
+    r = [0.1, 0.5, 0.65, 0.8, 0.9, 1.1]
+    assert _ballot(r, GAP) == [True, False, False, False, False, False]
+    assert _ballot(r, AVG) == [True, True, True, False, False, False]
+
+
+def test_avg_approves_what_adds_to_the_expected_utility():
+    """With utility -r and every pair of candidates equally likely to tie, approving c
+    is worth sum_e (r_e - r_c): AVG approves exactly the candidates where it is > 0."""
+    rng = np.random.default_rng(7)
+    for n in range(2, 9):
+        candidates, points = rng.random((n, 2)), rng.random((2000, 2))
+        r = distances(points, candidates)
+        worth = r.sum(axis=-1, keepdims=True) - n * r
+        np.testing.assert_array_equal(approved(points, candidates, AVG), worth > 0)
 
 
 @pytest.mark.parametrize("cut", CUTS)
@@ -124,17 +145,19 @@ def test_half_approves_half_of_the_candidates():
             assert set(count.tolist()) == {n // 2, n // 2 + 1}
 
 
-def test_gap_approves_from_one_candidate_to_all_but_one():
+@pytest.mark.parametrize("cut", [GAP, AVG])
+def test_gap_and_avg_approve_from_one_candidate_to_all_but_one(cut):
     rng = np.random.default_rng(2)
-    count = approved(rng.random((20000, 2)), rng.random((5, 2)), GAP).sum(axis=-1)
+    count = approved(rng.random((20000, 2)), rng.random((5, 2)), cut).sum(axis=-1)
     assert set(count.tolist()) == {1, 2, 3, 4}
 
 
-def test_for_two_and_three_candidates_both_cuts_are_the_same_ballot():
+def test_for_two_and_three_candidates_all_cuts_are_the_same_ballot():
     rng = np.random.default_rng(3)
     for n in (2, 3):
         candidates, points = rng.random((n, 2)), rng.random((5000, 2))
-        np.testing.assert_array_equal(approved(points, candidates, GAP), approved(points, candidates, HALF))
+        for cut in (GAP, AVG):
+            np.testing.assert_array_equal(approved(points, candidates, cut), approved(points, candidates, HALF))
 
 
 @pytest.mark.parametrize("cut", CUTS)
@@ -185,7 +208,7 @@ def test_coverage_is_the_share_of_each_rectangle(cut):
 
 def test_coverage_rejects_what_it_cannot_do():
     lines = np.linspace(0, 1, 5)
-    with pytest.raises(ValueError, match="unknown cut 0.5; choose from half, gap"):
+    with pytest.raises(ValueError, match="unknown cut 0.5; choose from half, gap, avg"):
         coverage(lines, lines, FIVE, 0.5, 4)
     with pytest.raises(ValueError, match="approval ballots need 2 to 62 candidates, got 1"):
         coverage(lines, lines, FIVE[:1], HALF, 4)

@@ -8,7 +8,7 @@ pixels/.
     pairwise    d[..., c, e] = share ranking c above e, d[..., c, c] = 0, (..., C, C)
     profile     the whole profile: rankings (R, C), best first, and their shares (..., R)
     unapproved  {cut: share not approving each candidate (..., C)}, one entry per cut of
-                the approval ballots (approval.HALF, approval.GAP); a method names each
+                the approval ballots (approval.HALF, approval.GAP, approval.AVG); a method names each
                 as Approved(cut). The share approving is 1 minus this. It is not kept
                 itself: where nearly all voters approve two candidates, both shares are
                 1 to rounding, and only the shares not approving tell them apart
@@ -29,7 +29,7 @@ from yeelab.approval import Cut
 
 @dataclass(frozen=True)
 class Approved:
-    """The approval shares at one cut: approval.HALF or approval.GAP."""
+    """The approval shares at one cut: approval.HALF, approval.GAP or approval.AVG."""
 
     cut: Cut
 

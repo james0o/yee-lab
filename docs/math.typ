@@ -826,11 +826,10 @@ looks at a single defeat and not at paths of defeats.
 has a winner, never a cycle, and like Schulze, Baldwin and Nanson, Black differs from
 the Condorcet winner diagram only where there is a cycle.
 
-== Approval voting (`approval`, `approval_gap`, `approval_mix`) <sec-approval>
+== Approval voting (`approval_gap`, `approval_avg`) <sec-approval>
 
 These are only in the web UI as well, built from blocks as
-`Highest(Tally(Approval()))` and `Highest(Tally(GapApproval()))`; `approval_mix` has
-voters of both kinds (below). An approval ballot is
+`Highest(Tally(GapApproval()))` and `Highest(Tally(AvgApproval()))`. An approval ballot is
 not a ranking: the voter approves some of the candidates, and the candidate approved by
 the most voters wins. Whom a voter approves depends on how far the candidates are and
 not only on their order, so the model needs one more assumption than the ranked methods
@@ -841,7 +840,8 @@ not only on their order, so the model needs one more assumption than the ranked 
 $ r_((1)) <= r_((2)) <= dots <= r_((C)), quad r_i = |p - c_i|, $ <eq-distances>
 
 and approves the closest ones, down to a cut. The cut depends on the gaps between
-neighbours in that order, $g_k = r_((k + 1)) - r_((k))$, in one of two ways.
+neighbours in that order, $g_k = r_((k + 1)) - r_((k))$, or on their mean. Three ballots
+are blocks of `yeelab.build`; the web UI draws the last two.
 
 - `Approval()` approves the closest half of the candidates, $h = floor(C slash 2)$ of
   them. With an odd number the middle candidate, the $(h + 1)$-th, goes with the
@@ -850,10 +850,25 @@ neighbours in that order, $g_k = r_((k + 1)) - r_((k))$, in one of two ways.
   $h + 1$ candidates.
 - `GapApproval()` approves the candidates above the largest gap of all, the first $k$
   for the $k$ with the largest $g_k$: between one candidate and all but one.
+- `AvgApproval()` approves the candidates closer than the mean distance,
+  $ r_i < overline(r) = 1/C sum_j r_j , $ <eq-avg-cut>
+  also between one candidate and all but one.
 
-Either way the closest candidate is approved and the farthest is not, and the ballot does
+*Why the mean.* `AvgApproval()` is the ballot that a voter with the utility $u_i = -r_i$
+would choose if they knew nothing about how the others vote (Weber). Adding $c_i$ to the
+ballot changes the outcome only where $c_i$ ties with some $c_j$, with probability
+$p_(i j)$, and there it gains $u_i - u_j$. The expected gain is
+$sum_(j != i) p_(i j) (u_i - u_j)$. If every pair is equally likely to tie,
+$p_(i j) = p$, this is
+$ p sum_j (u_i - u_j) = p thin C (overline(r) - r_i), $
+which is positive exactly for the candidates of @eq-avg-cut. The ballot is sincere: it
+never approves a candidate without approving every closer one.
+
+Every way the closest candidate is approved and the farthest is not, and the ballot does
 not change when all distances are scaled, so no unit of distance has to be chosen. For
-two and for three candidates the two are the same ballot. For an even number `Approval()`
+two and for three candidates the three are the same ballot: for three, the middle
+candidate is approved by @eq-avg-cut when $3 r_((2)) < r_((1)) + r_((2)) + r_((3))$, that
+is $r_((2)) - r_((1)) < r_((3)) - r_((2))$, as for the other two. For an even number `Approval()`
 does not use the distances at all: it approves the top half of the ranking.
 
 *Distances, not their squares.* Take a voter who stands on a candidate, with the others
@@ -870,7 +885,7 @@ $ r_a - r_b = r_c - r_d $ <eq-gap-border>
 
 for the neighbours $a, b$ of one gap and $c, d$ of the other. For `Approval()` with an
 odd number of candidates that is $2 r_m = r_a + r_b$, with the middle candidate $m$ and
-its two neighbours. Unlike the bisector of @eq-bisector this is a curve: there the
+its two neighbours. For `AvgApproval()` the border of $c_i$ is $C r_i = sum_j r_j$. Unlike the bisector of @eq-bisector this is a curve: there the
 squares $|p|^2$ cancel, here the distances are not squared. The voters who approve a
 candidate are therefore not a union of polygons (@fig-approval, left), and their share is
 not a sum of the edge terms of @sec-green.
@@ -935,36 +950,20 @@ smallest. The tally of an approval ballot in `yeelab.build` is $-u_i = q_i - 1$,
 share counted down from $1$. The shares $q_i$ do not sum to $1$: their sum is the mean
 number of approved candidates.
 
-*A mix of both ballots.* `approval_mix` is
-`Highest(Tally(Mix(GapApproval(), Approval(), share=s)))`: the share $s$ of the voters of
-every pixel approve half of the candidates and the others those above their largest gap.
-A tally is a mean over the voters, so it is linear in them, and the share who do not
-approve $c_i$ is
-
-$ u_i = (1 - s) thin u_i^"gap" + s thin u_i^"half" $ <eq-approval-mix>
-
-with the two shares of @eq-grid-share. Nothing new is integrated: both are computed as
-before and mixed at every traced point. The sum has no negative terms, so a small $u_i$
-stays as exact as its two parts, and the margin stays continuous in the median. At $s = 0$
-and $s = 1$ only one ballot is marked, and the method is `approval_gap` or `approval`
-itself, from the shares of that ballot alone. The slider of the web UI sets $s$, from $0$
-at its left end to $1$ at its right; the method is listed with $s = 0.5$. A candidate who
-wins a pixel at both ends wins it for every $s$, and the winner at $s = 0$, once it has
-lost a pixel, does not win it back as $s$ grows: its lead over each other candidate is
-linear in $s$.
-
 #figure(
   image("figures/approval.png", width: 100%),
-  caption: [Left: the voters who approve D, for both ballots; the borders are curves.
-    Right: the two diagrams (candidates A–E, Beta voters, `rms`, $D = 0.2$).],
+  caption: [Left: the voters who approve D with `GapApproval()` and with `AvgApproval()`;
+    the borders are curves. Right: the two diagrams (candidates A–E, Beta voters, `rms`,
+    $D = 0.2$).],
 ) <fig-approval>
 
-*The diagrams.* Half of five candidates is two or three, and D, in the middle of A–E, is
-among the closest two or three of most voters. In @fig-approval `Approval()` gives D 40%
-of the square, more than FPTP (14%), Schulze (25%) or Borda (31%). `GapApproval()` gives
-D 22% and C nothing. C and B are close together, so a voter near them often has both
-above the largest gap: at the pixel of C itself 64% of the voters approve C and 69%
-approve B.
+*The diagrams.* In @fig-approval `GapApproval()` gives D 22% of the square and C
+nothing. C and B are close together, so a voter near them often has both above the
+largest gap: at the pixel of C itself 64% of the voters approve C and 69% approve B.
+`AvgApproval()` gives D, in the middle of A–E, 41% of the square, more than FPTP (14%),
+Schulze (25%) or Borda (31%), and A only 13%. A voter near A has B, C and E far away,
+which pulls the mean distance above that of D, so D is approved as well. A voter
+approves 2.4 candidates on average with `AvgApproval()` and 2.2 with `GapApproval()`.
 
 == Ties <sec-ties>
 
@@ -1849,7 +1848,7 @@ more, so computing sets lazily saves little, and IRV uses the full arrangement.
 All three are sums of edge terms: the Green integrals of @sec-edges for Beta voters and
 the signed triangles of @sec-normal for normal voters.
 
-*Approval shares.* The approval methods use the share of the voters who do not approve
+*Approval shares.* The approval method uses the share of the voters who do not approve
 each candidate. The regions of these voters have curved borders, so their shares have no
 edge terms: they are summed over a grid of rectangles with the exact share of the voters
 in each, at the $G + 2$ points per axis where the borders are traced and not at the
@@ -1989,7 +1988,7 @@ by hand: every block that decides computes the gap of its decision, and the marg
 smallest of them. `Highest` has the lead of the top score, `Eliminate` the gap of each
 round, `Unbeaten` the gaps below and `Fallback` those of the method that decides.
 Baldwin and Nanson are in @sec-baldwin-nanson, Minimax and Black in @sec-minimax-black,
-the approval methods in @sec-approval.
+the approval method in @sec-approval.
 
 *IRV.* On each side of a curve where some round's two lowest tallies tie, the gap of
 that round tends to $0$. So $mu$ is continuous, and it vanishes on every curve where an
@@ -2214,7 +2213,7 @@ there each of the three regions ends at a straight segment between two edge cros
 and the small triangle between the three segments belongs to none of them.
 
 The shares come from the interpolant of @sec-interpolation (those of the approval
-methods are computed at the grid points themselves, @sec-approval), so the grid only has
+method are computed at the grid points themselves, @sec-approval), so the grid only has
 to be fine enough not to miss slivers; its borders do not have the steps of a pixel
 image. The
 UI uses $G = 160$ while dragging and $G = 320$ once the candidate is dropped. The margins

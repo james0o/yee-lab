@@ -1,8 +1,8 @@
 """Voting methods built from small blocks, like in Scratch but with Python constructors:
 
-    from yeelab.build import (Approval, BordaCount, Eliminate, Fallback, GapApproval, Highest,
-                              Margins, Mix, Pairwise, Plurality, Runoff, Score, StrongestPaths,
-                              Tally, Unbeaten, Weakest)
+    from yeelab.build import (Approval, AvgApproval, BordaCount, Eliminate, Fallback,
+                              GapApproval, Highest, Margins, Mix, Pairwise, Plurality, Runoff,
+                              Score, StrongestPaths, Tally, Unbeaten, Weakest)
 
     borda   = Highest(Tally(BordaCount()))
     fptp    = Highest(Tally(Plurality()))
@@ -18,10 +18,10 @@
     koth    = Unbeaten(M, against=fptp, order=Tally(Plurality()))  # king of the hill
     king_runoff = Runoff(M, koth, irv)  # their winners, one on one
 
-    approval     = Highest(Tally(Approval()))     # approved by the most voters, each approving half
-    approval_gap = Highest(Tally(GapApproval()))  # ... each approving down to their largest gap
-    # ... half of the voters each way; mixed_approval(half) for any other share
-    approval_mix = Highest(Tally(Mix(GapApproval(), Approval(), share=0.5)))
+    # approved by the most voters, each approving down to their largest gap
+    approval_gap = Highest(Tally(GapApproval()))
+    # ... each approving those closer than the mean distance
+    approval_avg = Highest(Tally(AvgApproval()))
     # the highest mean score of 0 to 5, each voter's in proportion to the distances
     score = Highest(Tally(Score(6)))
 
@@ -34,9 +34,10 @@
     methods     the methods above by name (METHODS); margin/regions.py draws them
 """
 
-from yeelab.approval import GAP, HALF, Cut
+from yeelab.approval import AVG, GAP, HALF, Cut
 from yeelab.build.blocks import (
     Approval,
+    AvgApproval,
     Ballot,
     BordaCount,
     CandidateTotals,
@@ -58,13 +59,13 @@ from yeelab.build.blocks import (
     Weakest,
     Winner,
 )
-from yeelab.build.methods import METHODS, mixed_approval
+from yeelab.build.methods import METHODS
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Approved, Scored, Share, Voters
 
 __all__ = [
-    "Approval", "Ballot", "BordaCount", "CandidateTotals", "Eliminate", "Fallback", "GapApproval",
-    "Highest", "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise", "Plurality", "Runoff",
+    "Approval", "AvgApproval", "Ballot", "BordaCount", "CandidateTotals", "Eliminate", "Fallback",
+    "GapApproval", "Highest", "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise", "Plurality", "Runoff",
     "Score", "StrongestPaths", "Tally", "Unbeaten", "Weakest", "Winner", "METHODS",
-    "mixed_approval", "FIRST", "PAIRWISE", "PROFILE", "GAP", "HALF", "Approved",
+    "FIRST", "PAIRWISE", "PROFILE", "AVG", "GAP", "HALF", "Approved",
     "Scored", "Cut", "Share", "Voters",
 ]

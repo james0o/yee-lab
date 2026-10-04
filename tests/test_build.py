@@ -32,6 +32,7 @@ import numpy as np
 import pytest
 
 from yeelab.build import (
+    AVG,
     FIRST,
     GAP,
     HALF,
@@ -40,6 +41,7 @@ from yeelab.build import (
     PROFILE,
     Approval,
     Approved,
+    AvgApproval,
     BordaCount,
     Eliminate,
     Fallback,
@@ -57,7 +59,6 @@ from yeelab.build import (
     Unbeaten,
     Voters,
     Weakest,
-    mixed_approval,
 )
 from yeelab.pixels import beta as pixel_beta, methods as pixel_methods, normal as pixel_normal
 from yeelab.voting import CYCLE
@@ -504,16 +505,16 @@ def test_tally_is_the_sum_of_weights(profile, ballot):
 
 
 def _approving_voters(n=5, seed=0):
-    """Random shares not approving (4, 6, n) at both cuts; every tenth point on a grid
+    """Random shares not approving (4, 6, n) at every cut; every fifth point on a grid
     of quarters, where they tie."""
     rng = np.random.default_rng(seed)
-    unapproved = {cut: rng.random((4, 6, n)) for cut in (HALF, GAP)}
+    unapproved = {cut: rng.random((4, 6, n)) for cut in (HALF, GAP, AVG)}
     for shares in unapproved.values():
-        shares.reshape(-1, n)[::10] = np.round(4 * shares.reshape(-1, n)[::10]) / 4
+        shares.reshape(-1, n)[::5] = np.round(4 * shares.reshape(-1, n)[::5]) / 4
     return Voters(unapproved=unapproved)
 
 
-@pytest.mark.parametrize("ballot, cut", [(Approval(), HALF), (GapApproval(), GAP)],
+@pytest.mark.parametrize("ballot, cut", [(Approval(), HALF), (GapApproval(), GAP), (AvgApproval(), AVG)],
                          ids=lambda value: repr(value))
 def test_the_most_approved_candidate_wins(ballot, cut):
     """Highest(Tally(ballot)) on the shares of the ballot's own cut: the candidate the
@@ -535,7 +536,7 @@ def test_a_lead_among_candidates_nearly_all_approve_is_kept():
     approving are 1 in floating point, and the first still wins by 2e-30."""
     unapproved = np.array([[3e-30, 1e-30, 0.4], [1e-40, 2e-40, 1.0]])
     assert ((1 - unapproved[:, 0]) == (1 - unapproved[:, 1])).all()
-    for ballot, cut in ((Approval(), HALF), (GapApproval(), GAP)):
+    for ballot, cut in ((Approval(), HALF), (GapApproval(), GAP), (AvgApproval(), AVG)):
         winner, margin = Highest(Tally(ballot)).evaluate(Voters(unapproved={cut: unapproved}))
         np.testing.assert_array_equal(winner, [1, 0])
         np.testing.assert_allclose(margin, [2e-30, 1e-40], rtol=1e-12, atol=0)
@@ -585,7 +586,7 @@ def test_a_mix_all_voters_mark_one_ballot_of_is_that_ballot():
         only = Voters(unapproved={cut: voters.unapproved[cut]})  # the other cut is not read
         for remaining in (None, alive):
             np.testing.assert_array_equal(mix.tally(only, remaining), ballot.tally(voters, remaining))
-        for result, expected in zip(mixed_approval(share).evaluate(only),
+        for result, expected in zip(Highest(Tally(mix)).evaluate(only),
                                     Highest(Tally(ballot)).evaluate(voters)):
             np.testing.assert_array_equal(result, expected)
 
@@ -594,7 +595,8 @@ def test_a_mix_keeps_a_lead_among_candidates_nearly_all_approve():
     """All but 3e-30 and 1e-30 of the one kind of voters and all but 1e-30 and 5e-30 of
     the other approve two candidates: of half of each, 2e-30 and 3e-30 do not."""
     unapproved = {GAP: np.array([[3e-30, 1e-30, 0.4]]), HALF: np.array([[1e-30, 5e-30, 0.4]])}
-    winner, margin = mixed_approval(0.5).evaluate(Voters(unapproved=unapproved))
+    winner, margin = Highest(Tally(Mix(GapApproval(), Approval(), share=0.5))).evaluate(
+        Voters(unapproved=unapproved))
     np.testing.assert_array_equal(winner, [0])
     np.testing.assert_allclose(margin, [1e-30], rtol=1e-12, atol=0)
 
@@ -725,15 +727,13 @@ def test_methods_are_the_fifteen_expressions():
             margins,
             Unbeaten(margins, against=Highest(Tally(Plurality())), order=Tally(Plurality())),
             Eliminate(Tally(Plurality()), how="min")),
-        "approval": Highest(Tally(Approval())),
         "approval_gap": Highest(Tally(GapApproval())),
-        "approval_mix": Highest(Tally(Mix(GapApproval(), Approval(), share=0.5))),
+        "approval_avg": Highest(Tally(AvgApproval())),
         "score": Highest(Tally(Score(6))),
     }
     assert list(METHODS) == ["fptp", "irv", "borda", "baldwin", "nanson", "schulze",
                              "condorcet", "minimax", "black", "koth", "king_runoff",
-                             "approval", "approval_gap", "approval_mix", "score"]
-    assert mixed_approval(0.5) == METHODS["approval_mix"] != mixed_approval(0.25)
+                             "approval_gap", "approval_avg", "score"]
 
 
 def test_repr_is_the_expression():
@@ -750,9 +750,8 @@ def test_repr_is_the_expression():
         "Runoff(Margins(Pairwise()), "
         "Unbeaten(Margins(Pairwise()), against=Highest(Tally(Plurality())), order=Tally(Plurality())), "
         'Eliminate(Tally(Plurality()), how="min"))')
-    assert repr(METHODS["approval"]) == "Highest(Tally(Approval()))"
     assert repr(METHODS["approval_gap"]) == "Highest(Tally(GapApproval()))"
-    assert repr(METHODS["approval_mix"]) == "Highest(Tally(Mix(GapApproval(), Approval(), share=0.5)))"
+    assert repr(METHODS["approval_avg"]) == "Highest(Tally(AvgApproval()))"
     assert repr(METHODS["score"]) == "Highest(Tally(Score(6)))"
     challenged =Unbeaten(StrongestPaths(Margins(Pairwise())), against=METHODS["black"],
                           order=Weakest(Margins(Pairwise())))
@@ -787,12 +786,13 @@ def test_needs():
     assert Runoff(Margins(Pairwise()), METHODS["borda"], METHODS["minimax"]).needs == {PAIRWISE}
     assert Eliminate(Tally(Plurality()), how="mean").needs == {PROFILE}
     assert all(block.needs == {PAIRWISE} for block in PAIR_BLOCKS)
-    assert METHODS["approval"].needs == {Approved(HALF)}
+    assert Highest(Tally(Approval())).needs == {Approved(HALF)}
     assert METHODS["approval_gap"].needs == {Approved(GAP)}
-    assert METHODS["approval_mix"].needs == {Approved(GAP), Approved(HALF)}
+    assert METHODS["approval_avg"].needs == {Approved(AVG)}
+    assert Highest(Tally(Mix(GapApproval(), Approval(), share=0.5))).needs == {Approved(GAP), Approved(HALF)}
     assert METHODS["score"].needs == {Scored(6)}
     assert Eliminate(Tally(GapApproval()), how="min").needs == {Approved(GAP)}
-    assert Fallback(METHODS["condorcet"], METHODS["approval"]).needs == {PAIRWISE, Approved(HALF)}
+    assert Fallback(METHODS["condorcet"], Highest(Tally(Approval()))).needs == {PAIRWISE, Approved(HALF)}
 
 
 def test_fallback_needs_the_shares_of_both():

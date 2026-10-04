@@ -2,17 +2,21 @@
 
 A voter at v puts the candidates in order of distance, r_(1) <= ... <= r_(C) with
 r_i = |v - c_i|, and approves the closest ones, down to a cut. Where the cut is depends
-on the gaps between neighbours in that order, g_k = r_(k + 1) - r_(k), in one of two
-ways (`cut`):
+on the distances, in one of three ways (`cut`); HALF and GAP look at the gaps between
+neighbours in that order, g_k = r_(k + 1) - r_(k):
 
     HALF   the closest half of the candidates, C // 2 of them. With an odd number the
            middle candidate goes with the neighbour it is closer to: it is approved
            too if the gap above it is smaller than the gap below it (ties: it is not).
            So the cut is the larger of the two gaps next to the middle candidate
     GAP    the candidates above the largest gap of all (ties: the first such gap)
+    AVG    the candidates closer than the mean distance, r_i < (r_1 + ... + r_C) / C
+           (ties: not approved). It is what a voter with the utility -r_i does when
+           every pair of candidates is as likely to tie as any other (Weber): adding c
+           to the ballot is worth sum_e (r_e - r_c), which is positive for these.
 
-Either way the closest candidate is approved and the farthest is not, and nothing
-changes when all distances are scaled. For three candidates the two are the same
+Every way the closest candidate is approved and the farthest is not, and nothing
+changes when all distances are scaled. For three candidates the three are the same
 ballot, and for an even number HALF does not look at the distances at all: it is the
 top half of the ranking.
 
@@ -21,8 +25,8 @@ The gaps are those of the distances, not of their squares. A voter at squared di
 voter stands on is far ahead of the others, and GAP approves only that one. (The squares
 have the gaps 0.35, 0.1, 0.1 and 0.45, which would approve all but the last.)
 
-Borders. Two ballots meet where two gaps are equal, r_a - r_b = r_c - r_d. That is a
-curve, not a line like the bisectors, so the voters who approve a candidate are not a
+Borders. Two ballots meet where two gaps are equal, r_a - r_b = r_c - r_d, or for AVG
+where C r_c = r_1 + ... + r_C. That is a curve, not a line like the bisectors, so the voters who approve a candidate are not a
 union of polygons, and their share has no edge integrals. `coverage` gives, for a grid
 of rectangles, the part of each rectangle that approves each candidate; margin/shares.py
 weighs it with the voters of each rectangle.
@@ -38,8 +42,9 @@ from yeelab import threads
 
 HALF = "half"
 GAP = "gap"
-Cut = Literal["half", "gap"]
-CUTS: tuple[Cut, ...] = (HALF, GAP)
+AVG = "avg"
+Cut = Literal["half", "gap", "avg"]
+CUTS: tuple[Cut, ...] = (HALF, GAP, AVG)
 MAX_CANDIDATES = 62  # a ballot is a bit mask in an int64
 ROWS = 8  # grid rows per task of the compiled loop (threads.py)
 
@@ -60,6 +65,8 @@ def approved(points, candidates, cut: Cut) -> np.ndarray:
     gaps = np.diff(np.take_along_axis(r, order, axis=-1), axis=-1)
     if cut == GAP:
         count = gaps.argmax(axis=-1) + 1
+    elif cut == AVG:  # those closer than the mean come first; at least the closest
+        count = np.maximum((r < r.mean(axis=-1, keepdims=True)).sum(axis=-1), 1)
     else:
         count = np.full(r.shape[:-1], n // 2)
         if n % 2:  # the middle candidate: the gap below it against the gap above it
@@ -71,9 +78,9 @@ def approved(points, candidates, cut: Cut) -> np.ndarray:
 
 
 @njit(inline="always", error_model="numpy")
-def _ballot(x, y, candidates, gap, r, order):
+def _ballot(x, y, candidates, cut, r, order):
     """approved() of the voter at (x, y) as a bit mask: bit c is set if candidate c is
-    approved. `gap` is whether the cut is GAP; r and order (C,) are scratch."""
+    approved. `cut` is the index of the cut in CUTS; r and order (C,) are scratch."""
     n = candidates.shape[0]
     for c in range(n):  # insertion sort by distance; ties keep the lowest index first
         r[c] = math.hypot(x - candidates[c, 0], y - candidates[c, 1])
@@ -82,13 +89,21 @@ def _ballot(x, y, candidates, gap, r, order):
             order[k] = order[k - 1]
             k -= 1
         order[k] = c
-    if gap:
+    if cut == 1:  # GAP
         count, widest = 1, -1.0
         for k in range(n - 1):
             step = r[order[k + 1]] - r[order[k]]
             if step > widest:
                 widest, count = step, k + 1
-    else:
+    elif cut == 2:  # AVG
+        mean = 0.0
+        for c in range(n):
+            mean += r[c]
+        mean /= n
+        count = 1
+        while count < n and r[order[count]] < mean:
+            count += 1
+    else:  # HALF
         count = n // 2
         if n % 2 == 1 and r[order[count + 1]] - r[order[count]] > r[order[count]] - r[order[count - 1]]:
             count += 1
@@ -99,7 +114,7 @@ def _ballot(x, y, candidates, gap, r, order):
 
 
 @njit(cache=True, nogil=True, error_model="numpy")
-def _coverage(xs, ys, candidates, gap, sub, start, stop, out):
+def _coverage(xs, ys, candidates, cut, sub, start, stop, out):
     """coverage() of the cells [xs[i], xs[i + 1]] with start <= i < stop, into
     out (C, X, Y)."""
     n = candidates.shape[0]
@@ -107,10 +122,10 @@ def _coverage(xs, ys, candidates, gap, sub, start, stop, out):
     counts = np.empty(n, dtype=np.int64)
     left, right = np.empty(ys.size, dtype=np.int64), np.empty(ys.size, dtype=np.int64)
     for j in range(ys.size):
-        left[j] = _ballot(xs[start], ys[j], candidates, gap, r, order)
+        left[j] = _ballot(xs[start], ys[j], candidates, cut, r, order)
     for i in range(start, stop):
         for j in range(ys.size):
-            right[j] = _ballot(xs[i + 1], ys[j], candidates, gap, r, order)
+            right[j] = _ballot(xs[i + 1], ys[j], candidates, cut, r, order)
         for j in range(ys.size - 1):
             mask = left[j]
             if mask == left[j + 1] and mask == right[j] and mask == right[j + 1]:
@@ -122,7 +137,7 @@ def _coverage(xs, ys, candidates, gap, sub, start, stop, out):
                 x = xs[i] + (a + 0.5) / sub * (xs[i + 1] - xs[i])
                 for b in range(sub):
                     y = ys[j] + (b + 0.5) / sub * (ys[j + 1] - ys[j])
-                    mask = _ballot(x, y, candidates, gap, r, order)
+                    mask = _ballot(x, y, candidates, cut, r, order)
                     for c in range(n):
                         counts[c] += (mask >> c) & 1
             for c in range(n):
@@ -144,6 +159,6 @@ def coverage(xs, ys, candidates, cut: Cut, sub: int) -> np.ndarray:
     if cut not in CUTS:
         raise ValueError(f"unknown cut {cut!r}; choose from {', '.join(CUTS)}")
     out = np.empty((len(candidates), len(xs) - 1, len(ys) - 1), dtype=np.float32)
-    threads.in_chunks(lambda a, b: _coverage(xs, ys, candidates, cut == GAP, sub, a, b, out),
+    threads.in_chunks(lambda a, b: _coverage(xs, ys, candidates, CUTS.index(cut), sub, a, b, out),
                       len(xs) - 1, ROWS)
     return out
