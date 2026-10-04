@@ -2,7 +2,7 @@
 
     from yeelab.build import (Approval, AvgApproval, BordaCount, Eliminate, Fallback,
                               GapApproval, Highest, Margins, Mix, Pairwise, Plurality, Runoff,
-                              Score, StrongestPaths, Tally, Unbeaten, Weakest)
+                              Score, ScoreAvg, ScoreDH, StrongestPaths, Tally, Unbeaten, Weakest)
 
     borda   = Highest(Tally(BordaCount()))
     fptp    = Highest(Tally(Plurality()))
@@ -18,12 +18,13 @@
     koth    = Unbeaten(M, against=fptp, order=Tally(Plurality()))  # king of the hill
     king_runoff = Runoff(M, koth, irv)  # their winners, one on one
 
-    # approved by the most voters, each approving down to their largest gap
-    approval_gap = Highest(Tally(GapApproval()))
-    # ... each approving those closer than the mean distance
-    approval_avg = Highest(Tally(AvgApproval()))
     # the highest mean score of 0 to 5, each voter's in proportion to the distances
-    score = Highest(Tally(Score(6)))
+    score_range = Highest(Tally(Score(6)))
+    # ... with the mean distance in the middle of the scale
+    score_avg = Highest(Tally(ScoreAvg(6)))
+    # ... the steps from 5 to 0 shared out among the gaps between neighbours, each to the
+    # largest gap / (its steps + delta): D'Hondt's rule at delta = 1, the default 0.8
+    score_dh = Highest(Tally(ScoreDH(6)))
 
     winner, margin = nanson.evaluate(voters)  # Voters with the shares in nanson.needs
 
@@ -53,6 +54,8 @@ from yeelab.build.blocks import (
     Plurality,
     Runoff,
     Score,
+    ScoreAvg,
+    ScoreDH,
     StrongestPaths,
     Tally,
     Unbeaten,
@@ -65,7 +68,7 @@ from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Approved, Scored, Shar
 __all__ = [
     "Approval", "AvgApproval", "Ballot", "BordaCount", "CandidateTotals", "Eliminate", "Fallback",
     "GapApproval", "Highest", "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise", "Plurality", "Runoff",
-    "Score", "StrongestPaths", "Tally", "Unbeaten", "Weakest", "Winner", "METHODS",
+    "Score", "ScoreAvg", "ScoreDH", "StrongestPaths", "Tally", "Unbeaten", "Weakest", "Winner", "METHODS",
     "FIRST", "PAIRWISE", "PROFILE", "AVG", "GAP", "HALF", "Approved",
     "Scored", "Cut", "Share", "Voters",
 ]

@@ -17,7 +17,7 @@ king_runoff on the profiles, other finalists (with cycles and ties) on random sh
 The approval ballots tally the shares not approving they are given, which
 test_approval.py checks; here the most approved candidate must win, with its lead as the
 margin. A Mix of two ballots must tally the mix of their voters, and be the one ballot
-itself where all voters mark it. The score ballot tallies the parts of the top score not
+itself where all voters mark it. The score ballots tally the parts of the top score not
 given, which test_score.py checks, the same way as the approval ballots.
 
 Wrong blocks must fail when built, and every method must print as the expression
@@ -53,6 +53,8 @@ from yeelab.build import (
     Plurality,
     Runoff,
     Score,
+    ScoreAvg,
+    ScoreDH,
     Scored,
     StrongestPaths,
     Tally,
@@ -628,16 +630,18 @@ def test_a_mix_share_is_a_share(share):
 
 
 def test_the_highest_mean_score_wins():
-    """Highest(Tally(Score(levels))) on the shares of its own number of levels: the
-    candidate the voters give the largest part of the top score wins, and the margin is
-    its lead over the second. Like an approval ballot's, the tally is counted down from
-    1, the remaining candidates of an elimination keep theirs, and the others get -1."""
+    """Highest(Tally(Score(levels))) on the shares of its own number of levels and rule:
+    the candidate the voters give the largest part of the top score wins, and the margin
+    is its lead over the second. Like an approval ballot's, the tally is counted down
+    from 1, the remaining candidates of an elimination keep theirs, and the others get
+    -1. ScoreAvg and ScoreDH read the shares of their own rules, not those of Score."""
     rng = np.random.default_rng(0)
-    voters = Voters(unscored={levels: rng.random((4, 6, 5)) for levels in (4, 6)})
+    voters = Voters(unscored={Scored(levels, rule): rng.random((4, 6, 5))
+                              for levels in (4, 6) for rule in ("range", "avg", "dhondt")})
     assert voters.shape == (4, 6) and voters.n_candidates == 5
-    for levels in (4, 6):
-        ballot, shares = Score(levels), voters.unscored[levels]
-        assert ballot.needs == ballot.needs_remaining == {Scored(levels)}
+    for levels, (score, rule) in product((4, 6), ((Score, "range"), (ScoreAvg, "avg"), (ScoreDH, "dhondt"))):
+        ballot, shares = score(levels), voters.unscored[Scored(levels, rule)]
+        assert ballot.needs == ballot.needs_remaining == {Scored(levels, rule)}
         np.testing.assert_array_equal(ballot.tally(voters, None), -shares)
         alive = np.random.default_rng(1).random(shares.shape) < 0.5
         np.testing.assert_array_equal(ballot.tally(voters, alive), np.where(alive, -shares, -1))
@@ -651,20 +655,36 @@ def test_a_lead_among_candidates_nearly_all_give_the_top_score_is_kept():
     """Two candidates short of the top score by 3e-30 and 1e-30 of it: both mean scores
     are the top score in floating point, and the second still wins by 2e-30."""
     unscored = np.array([[3e-30, 1e-30, 0.4], [1e-40, 2e-40, 1.0]])
-    winner, margin = Highest(Tally(Score(6))).evaluate(Voters(unscored={6: unscored}))
+    winner, margin = Highest(Tally(Score(6))).evaluate(Voters(unscored={Scored(6): unscored}))
     np.testing.assert_array_equal(winner, [1, 0])
     np.testing.assert_allclose(margin, [2e-30, 1e-40], rtol=1e-12, atol=0)
 
 
 def test_score_takes_the_number_of_levels():
     assert Score(3) == Score(levels=3) != Score(4)
-    assert repr(Score(3)) == "Score(3)"
-    for levels in (1, 0, -3, 2.5, "3", True):
+    assert ScoreAvg(3) == ScoreAvg(levels=3) != ScoreAvg(4)
+    assert ScoreDH(3) == ScoreDH(levels=3) != ScoreDH(4)
+    assert len({Score(3), ScoreAvg(3), ScoreDH(3)}) == len({Score(3).needs, ScoreAvg(3).needs, ScoreDH(3).needs}) == 3
+    assert ([repr(score) for score in (Score(3), ScoreAvg(3), ScoreDH(3))]
+            == ["Score(3)", "ScoreAvg(3)", "ScoreDH(3, delta=0.8)"])
+    for score, levels in product((Score, ScoreAvg, ScoreDH), (1, 0, -3, 2.5, "3", True)):
         with pytest.raises(ValueError, match=re.escape(
-                f"Score levels must be a whole number of at least 2, got {levels!r}")):
-            Score(levels)
-    with pytest.raises(TypeError):  # no cut to choose, unlike the two approval ballots
-        Score(3, "gap")
+                f"{score.__name__} levels must be a whole number of at least 2, got {levels!r}")):
+            score(levels)
+    for score in (Score, ScoreAvg, ScoreDH):
+        with pytest.raises(TypeError):  # no cut or rule to choose: each block has its own
+            score(3, "gap")
+    # ScoreDH's divisor: each step to the largest gap / (its steps + delta), by keyword
+    assert ScoreDH(3) == ScoreDH(3, delta=0.8) != ScoreDH(3, delta=0.5)
+    assert ScoreDH(3, delta=1) == ScoreDH(3, delta=1.0)
+    assert ScoreDH(3, delta=0.5).needs == {Scored(3, "dhondt", 0.5)} != ScoreDH(3).needs
+    assert eval(repr(ScoreDH(3, delta=0.55))) == ScoreDH(3, delta=0.55)
+    for delta in (0, -1, np.inf, np.nan, True, "1"):
+        with pytest.raises(ValueError, match=re.escape(f"ScoreDH delta must be a number above 0, got {delta!r}")):
+            ScoreDH(3, delta=delta)
+    for score in (Score, ScoreAvg):
+        with pytest.raises(TypeError):
+            score(3, delta=0.5)  # only DHONDT has a divisor
     # as a ballot like any other: mixed with another, and eliminated round by round
     mixed = Mix(Approval(), Score(4), share=0.5)
     assert mixed.needs == {Approved(HALF), Scored(4)}
@@ -727,13 +747,13 @@ def test_methods_are_the_fifteen_expressions():
             margins,
             Unbeaten(margins, against=Highest(Tally(Plurality())), order=Tally(Plurality())),
             Eliminate(Tally(Plurality()), how="min")),
-        "approval_gap": Highest(Tally(GapApproval())),
-        "approval_avg": Highest(Tally(AvgApproval())),
-        "score": Highest(Tally(Score(6))),
+        "score_range": Highest(Tally(Score(6))),
+        "score_avg": Highest(Tally(ScoreAvg(6))),
+        "score_dh": Highest(Tally(ScoreDH(6))),
     }
     assert list(METHODS) == ["fptp", "irv", "borda", "baldwin", "nanson", "schulze",
                              "condorcet", "minimax", "black", "koth", "king_runoff",
-                             "approval_gap", "approval_avg", "score"]
+                             "score_range", "score_avg", "score_dh"]
 
 
 def test_repr_is_the_expression():
@@ -750,9 +770,9 @@ def test_repr_is_the_expression():
         "Runoff(Margins(Pairwise()), "
         "Unbeaten(Margins(Pairwise()), against=Highest(Tally(Plurality())), order=Tally(Plurality())), "
         'Eliminate(Tally(Plurality()), how="min"))')
-    assert repr(METHODS["approval_gap"]) == "Highest(Tally(GapApproval()))"
-    assert repr(METHODS["approval_avg"]) == "Highest(Tally(AvgApproval()))"
-    assert repr(METHODS["score"]) == "Highest(Tally(Score(6)))"
+    assert repr(METHODS["score_range"]) == "Highest(Tally(Score(6)))"
+    assert repr(METHODS["score_avg"]) == "Highest(Tally(ScoreAvg(6)))"
+    assert repr(METHODS["score_dh"]) == "Highest(Tally(ScoreDH(6, delta=0.8)))"
     challenged =Unbeaten(StrongestPaths(Margins(Pairwise())), against=METHODS["black"],
                           order=Weakest(Margins(Pairwise())))
     for method in [*METHODS.values(), *ELIMINATIONS, *BALLOTS, *PAIR_BLOCKS, challenged, *RUNOFFS]:
@@ -787,10 +807,12 @@ def test_needs():
     assert Eliminate(Tally(Plurality()), how="mean").needs == {PROFILE}
     assert all(block.needs == {PAIRWISE} for block in PAIR_BLOCKS)
     assert Highest(Tally(Approval())).needs == {Approved(HALF)}
-    assert METHODS["approval_gap"].needs == {Approved(GAP)}
-    assert METHODS["approval_avg"].needs == {Approved(AVG)}
+    assert Highest(Tally(GapApproval())).needs == {Approved(GAP)}
+    assert Highest(Tally(AvgApproval())).needs == {Approved(AVG)}
     assert Highest(Tally(Mix(GapApproval(), Approval(), share=0.5))).needs == {Approved(GAP), Approved(HALF)}
-    assert METHODS["score"].needs == {Scored(6)}
+    assert METHODS["score_range"].needs == {Scored(6)} == {Scored(6, "range")}
+    assert METHODS["score_avg"].needs == {Scored(6, "avg")}
+    assert METHODS["score_dh"].needs == {Scored(6, "dhondt")}
     assert Eliminate(Tally(GapApproval()), how="min").needs == {Approved(GAP)}
     assert Fallback(METHODS["condorcet"], Highest(Tally(Approval()))).needs == {PAIRWISE, Approved(HALF)}
 

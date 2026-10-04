@@ -8,7 +8,7 @@ Every block has one type of output:
 
     Ballot           Plurality(), BordaCount(),         points one voter gives a candidate
                      Approval(), GapApproval(), AvgApproval(),
-                     Score(levels),
+                     Score(levels), ScoreAvg(levels), ScoreDH(levels, delta=...),
                      Mix(first, second, share=...)
     CandidateTotals  Tally(ballot), Weakest(diffs)      a total of each candidate at a point
     PairShares       Pairwise()                         share of the voters ranking c above e
@@ -26,9 +26,13 @@ approval ballot gives one point to each candidate the voter approves, the closes
 down to a cut that depends on how far the candidates are and not only on their order
 (yeelab.approval): Approval approves half of them, GapApproval those above the largest
 gap, AvgApproval those closer than the mean distance; its total is counted down from 1, a point lost per voter who does not approve.
-A score ballot, Score(levels), gives a score from 0 to levels - 1 (yeelab.score): the
-top score to the closest candidate, 0 to the farthest, and to the others in proportion
-to where their distance is between the two; its total is counted down from 1 likewise.
+A score ballot gives a score from 0 to levels - 1 (yeelab.score): the top score to the
+closest candidate, 0 to the farthest, and to the others, for Score(levels), in proportion
+to where their distance is between the two; ScoreAvg(levels) likewise, with the mean
+distance in the middle of the scale; ScoreDH(levels, delta=...) shares the steps
+from the top score to 0 out among the gaps between neighbours in the order of distance,
+each to the gap with the largest gap / (its steps + delta), D'Hondt's rule at delta = 1.
+Its total is counted down from 1 likewise.
 Mix(first, second, share=s) is two kinds of voters: s of them mark `second`, the others
 `first`.
 Each ballot also knows the cheapest formula for its mean over the voters (Ballot.tally),
@@ -57,14 +61,16 @@ Blocks are frozen dataclasses, so equal blocks are equal methods and hash alike,
 repr(block) is the expression that builds it: eval(repr(block)) == block.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 import numpy as np
 
+from yeelab import score
 from yeelab.approval import AVG, GAP, HALF, Cut
 from yeelab.build.rounds import drop_below_mean, drop_lowest
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Approved, Scored, Share, Voters
+from yeelab.score import DELTA, DHONDT, RANGE
 from yeelab.voting import CYCLE, irv_rounds
 
 Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) at every point
@@ -285,14 +291,21 @@ class Score(Ballot):
     than halfway between the closest and the farthest."""
 
     levels: int
+    rule = RANGE  # of the ballot (yeelab.score); not a field
 
     def __post_init__(self):
         if isinstance(self.levels, bool) or not isinstance(self.levels, int) or self.levels < 2:
-            raise ValueError(f"Score levels must be a whole number of at least 2, got {self.levels!r}")
+            raise ValueError(f"{type(self).__name__} levels must be a whole number of at least 2, "
+                             f"got {self.levels!r}")
+
+    @property
+    def scored(self) -> Scored:
+        """Its shares in Voters.unscored."""
+        return Scored(self.levels, self.rule)
 
     @property
     def needs(self) -> frozenset[Share]:
-        return frozenset({Scored(self.levels)})
+        return frozenset({self.scored})
 
     needs_remaining = needs
 
@@ -300,11 +313,56 @@ class Score(Ballot):
         """Minus the part of the top score the voters do not give each candidate
         (Voters.unscored), as _approving: the remaining candidates of an elimination
         keep their totals, the others get -1."""
-        totals = -voters.unscored[self.levels]
+        totals = -voters.unscored[self.scored]
         return totals if alive is None else np.where(alive, totals, -1.0)
 
     def __repr__(self):
-        return f"Score({self.levels})"
+        return f"{type(self).__name__}({self.levels})"
+
+
+@dataclass(frozen=True, repr=False)  # the repr of Score, with this name
+class ScoreAvg(Score):
+    """A score from 0 to levels - 1 for every candidate (yeelab.score): the top score for
+    the closest, 0 for the farthest, and the middle of the scale for a candidate at the
+    mean distance to all candidates; in between, the score in proportion to where the
+    distance is between those, rounded to a whole score. Score is this with the middle
+    halfway between the closest and the farthest.
+
+    The total is that of Score. ScoreAvg(2) is AvgApproval(): the voter approves the
+    candidates closer than the mean distance."""
+
+    rule = score.AVG  # not approval.AVG, imported here as AVG
+
+
+@dataclass(frozen=True, repr=False)
+class ScoreDH(Score):
+    """A score from 0 to levels - 1 for every candidate (yeelab.score): the top score for
+    the closest, 0 for the farthest, and the levels - 1 steps between them shared out
+    among the gaps between neighbours in the order of distance, each step to the gap
+    with the largest gap / (its steps + delta). delta = 1 is D'Hondt, which favours the
+    large gaps, and 1/2 Sainte-Laguë, which favours neither; the default, score.DELTA, is
+    between them. A candidate gets the steps of the gaps below it, so candidates at nearly
+    the same distance share a score at any number of levels: with more levels than
+    candidates it is not Borda.
+
+    The total is that of Score. ScoreDH(2) is GapApproval() for any delta: the one step
+    goes to the largest gap."""
+
+    delta: float = field(default=DELTA, kw_only=True)
+    rule = DHONDT
+
+    def __post_init__(self):
+        super().__post_init__()
+        delta = self.delta
+        if isinstance(delta, bool) or not isinstance(delta, int | float) or not 0 < delta < np.inf:
+            raise ValueError(f"ScoreDH delta must be a number above 0, got {delta!r}")
+
+    @property
+    def scored(self) -> Scored:
+        return Scored(self.levels, self.rule, self.delta)
+
+    def __repr__(self):
+        return f"ScoreDH({self.levels}, delta={self.delta!r})"
 
 
 @dataclass(frozen=True)

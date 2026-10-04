@@ -2,17 +2,17 @@
 lists them (margin/regions.py MARGINS)."""
 
 from yeelab.build.blocks import (
-    AvgApproval,
     BordaCount,
     Eliminate,
     Fallback,
-    GapApproval,
     Highest,
     Margins,
     Pairwise,
     Plurality,
     Runoff,
     Score,
+    ScoreAvg,
+    ScoreDH,
     StrongestPaths,
     Tally,
     Unbeaten,
@@ -36,11 +36,10 @@ black = Fallback(condorcet, borda)                   # the Condorcet winner, els
 koth = Unbeaten(M, against=fptp, order=Tally(Plurality()))
 king_runoff = Runoff(M, koth, irv)                   # the king of the hill against the irv winner
 
-# approved by the most voters, each approving down to their largest gap
-approval_gap = Highest(Tally(GapApproval()))
-# ... each approving those closer than the mean distance
-approval_avg = Highest(Tally(AvgApproval()))
-score = Highest(Tally(Score(6)))                     # the highest mean score, of 0 to 5
+# the highest mean score, of 0 to 5, each voter's in proportion to the distances
+score_range = Highest(Tally(Score(6)))
+score_avg = Highest(Tally(ScoreAvg(6)))              # ... with the mean distance in the middle
+score_dh = Highest(Tally(ScoreDH(6)))                # ... the steps shared out among the gaps
 
 METHODS: dict[str, Winner] = {
     "fptp": fptp,
@@ -54,7 +53,7 @@ METHODS: dict[str, Winner] = {
     "black": black,
     "koth": koth,
     "king_runoff": king_runoff,
-    "approval_gap": approval_gap,
-    "approval_avg": approval_avg,
-    "score": score,
+    "score_range": score_range,
+    "score_avg": score_avg,
+    "score_dh": score_dh,
 }

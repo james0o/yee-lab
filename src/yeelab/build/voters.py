@@ -12,11 +12,11 @@ pixels/.
                 as Approved(cut). The share approving is 1 minus this. It is not kept
                 itself: where nearly all voters approve two candidates, both shares are
                 1 to rounding, and only the shares not approving tell them apart
-    unscored    {levels: mean part of the top score that the voters do not give each
-                candidate (..., C)}, from 0 to 1, one entry per number of levels of the
-                score ballots (yeelab.score); a method names each as Scored(levels). The
-                mean score is the top score, levels - 1, times 1 minus this. Kept this way
-                for the same reason as `unapproved`
+    unscored    {Scored(levels, rule, delta): mean part of the top score that the voters
+                do not give each candidate (..., C)}, from 0 to 1, one entry per score
+                ballot: its number of levels, its rule (score.RANGE, score.AVG, score.DHONDT) and the
+                divisor of DHONDT. The mean score is the top score, levels - 1, times 1
+                minus this. Kept this way for the same reason as `unapproved`
 """
 
 from dataclasses import dataclass
@@ -25,6 +25,7 @@ from typing import Literal
 import numpy as np
 
 from yeelab.approval import Cut
+from yeelab.score import DELTA, RANGE, Rule
 
 
 @dataclass(frozen=True)
@@ -36,9 +37,13 @@ class Approved:
 
 @dataclass(frozen=True)
 class Scored:
-    """The scores on a ballot with `levels` scores."""
+    """The scores on a ballot with `levels` scores, given by `rule` (score.RANGE,
+    score.AVG or score.DHONDT) and, for DHONDT, the divisor `delta`; the others do not
+    use it."""
 
     levels: int
+    rule: Rule = RANGE
+    delta: float = DELTA
 
 
 Share = Literal["first", "pairwise", "profile"] | Approved | Scored
@@ -56,7 +61,7 @@ class Voters:
     rankings: np.ndarray | None = None
     probs: np.ndarray | None = None
     unapproved: dict[Cut, np.ndarray] | None = None
-    unscored: dict[int, np.ndarray] | None = None
+    unscored: dict[Scored, np.ndarray] | None = None
 
     @property
     def _marked(self) -> np.ndarray:

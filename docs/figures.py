@@ -26,7 +26,7 @@ from scipy.stats import beta as beta_dist
 
 from yeelab import normal, ranking_cells
 from yeelab.approval import AVG, GAP, coverage
-from yeelab.build import Voters
+from yeelab.build import AvgApproval, GapApproval, Highest, Tally, Voters
 from yeelab.margin.geometric import geometric_median_at, geometric_medians
 from yeelab.margin.regions import MARGINS, regions, winners
 from yeelab.margin.shares import Model, pairwise_shares
@@ -867,18 +867,20 @@ def geometric_median():
 
 # ---------------------------------------------------------------- approval voting
 
-# the approval methods of the web UI: name, label and cut of the ballot
-APPROVALS = [("approval_gap", "largest gap", GAP), ("approval_avg", "mean distance", AVG)]
+# the approval ballots: name, label, cut and the method that tallies them; with two levels
+# they are the ballots of the web UI's score_dh and score_avg
+APPROVALS = [("approval_gap", "largest gap", GAP, Highest(Tally(GapApproval()))),
+             ("approval_avg", "mean distance", AVG, Highest(Tally(AvgApproval())))]
 
 
 def approval():
-    """The voters who approve D, and the diagrams, for the approval methods of the web UI."""
+    """The voters who approve D, and the diagrams, for the approval ballots."""
     fig, axes = plt.subplots(1, 4, figsize=(13, 3.6), layout="constrained")
     lines = np.linspace(0, 1, 401)
     shade = LinearSegmentedColormap.from_list("approves", ["white", PALETTE[D]])
-    for k, (method, label, cut) in enumerate(APPROVALS):
+    for k, (name, label, cut, method) in enumerate(APPROVALS):
         cover = coverage(lines, lines, CANDIDATES, cut, 4)
-        print(f"{method}: approved by the voters of this part of the square " + "  ".join(
+        print(f"{name}: approved by the voters of this part of the square " + "  ".join(
             f"{name} {cover[c].mean():.3f}" for c, name in enumerate(NAMES))
             + f"; approved candidates per voter {cover.sum(axis=0).mean():.3f}")
         ax = axes[k]
@@ -888,10 +890,12 @@ def approval():
             ax.annotate(name, (x + 0.015, y + 0.015), weight="bold", fontsize=9)
         ax.set_title(f"voters who approve D: {label}", fontsize=10)
         winner = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
-        show(axes[2 + k], winner, f"{method}: {label}")
-    for method in ("fptp", "borda", "schulze", "approval_gap", "approval_avg", "score"):
+        show(axes[2 + k], winner, f"{name}: {label}")
+    compared = [("fptp", "fptp"), ("borda", "borda"), ("schulze", "schulze"),
+                *[(name, method) for name, _, _, method in APPROVALS], ("score_range", "score_range")]
+    for name, method in compared:
         winner = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
-        print(f"{method}: share of the square won " + "  ".join(
+        print(f"{name}: share of the square won " + "  ".join(
             f"{name} {(winner == c).mean():.3f}" for c, name in enumerate(NAMES)))
     fig.savefig(FIGURES / "approval.png", dpi=150)
     plt.close(fig)

@@ -16,13 +16,14 @@ from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import AfterValidator, BaseModel, Field, field_validator
 
-from yeelab.build import Highest, Score, Tally, Winner
+from yeelab.build import Highest, Score, ScoreAvg, ScoreDH, Tally, Winner
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
 from yeelab.margin.regions import MARGINS, regions
 from yeelab.margin.shares import PIXELS, Model
 from yeelab.normal import sigma_from_deviation
 from yeelab.ranking_cells import SPREAD, beta_params
+from yeelab.score import DELTA
 
 # Methods follow a drag within ~5-30 ms; IRV needs every ranking cell and takes up to
 # ~0.1 s for 8 candidates (see docs/math.typ).
@@ -38,16 +39,23 @@ DIAGRAMS = [*MARGINS, *IDEALS]
 # is the default.
 DEVIATIONS = [round(0.05 * k, 2) for k in range(1, 9)]
 assert DEVIATION in DEVIATIONS
-# The categories slider of "score": the number of scores on its ballot, from 2 to
-# MAX_LEVELS (scores 0 to 10). SCORE_LEVELS is its default. SLIDERS builds the method
-# from a request's slider; it is listed with the default.
-SCORE = "score"
+# The categories slider of the score methods: the number of scores on their ballot,
+# from 2 to MAX_LEVELS (scores 0 to 10). SCORE_LEVELS is its default. The δ slider of
+# DELTAS alone: each step of the ballot goes to the largest gap / (its steps + δ)
+# (yeelab.score), from MIN_DELTA (Sainte-Laguë) to MAX_DELTA (D'Hondt) by DELTA_STEP, with
+# score.DELTA the default. SLIDERS builds the methods from the sliders; they are listed
+# with the defaults.
 SCORE_LEVELS = 6
 MAX_LEVELS = 11
+MIN_DELTA, MAX_DELTA, DELTA_STEP = 0.5, 1.0, 0.01
+DELTAS = ["score_dh"]
 SLIDERS = {
-    SCORE: lambda request: Highest(Tally(Score(request.levels))),
+    "score_range": lambda levels, delta: Highest(Tally(Score(levels))),
+    "score_avg": lambda levels, delta: Highest(Tally(ScoreAvg(levels))),
+    "score_dh": lambda levels, delta: Highest(Tally(ScoreDH(levels, delta=delta))),
 }
-assert MARGINS[SCORE] == Highest(Tally(Score(SCORE_LEVELS)))
+assert all(MARGINS[name] == build(SCORE_LEVELS, DELTA) for name, build in SLIDERS.items())
+assert MIN_DELTA <= DELTA <= MAX_DELTA and set(DELTAS) <= set(SLIDERS)
 # Win regions are traced on a grid of this many points per axis: coarser while a
 # candidate is dragged, finer once it is dropped (see margin/regions.py).
 DRAG_GRID = 160
@@ -80,19 +88,32 @@ METHOD_INFO = {
     "king_runoff": {"label": "King runoff", "description": "King runoff: the King of the hill "
                     "winner against the IRV winner, head to head; the one more voters rank above "
                     "the other wins."},
-    "approval_gap": {"label": "Approval (gap)", "description": "Approval (gap): a voter puts "
-                     "the candidates in order of distance and approves those above the largest "
-                     "gap. The candidate approved by the most voters wins."},
-    "approval_avg": {"label": "Approval (avg)", "description": "Approval (avg): a voter "
-                     "approves the candidates closer than their mean distance to all "
-                     "candidates, the best ballot of a voter who knows nothing of how the "
-                     "others vote. The candidate approved by the most voters wins."},
-    "score": {"label": "Score", "description": "Score: a voter gives the closest candidate the "
-              "top score, the farthest 0, and every other one the score in proportion to where "
-              "its distance is between those two, rounded to a whole score. The highest mean "
-              "score wins. The slider below sets the number of categories (scores); with two, a "
-              "voter approves the candidates closer than halfway between the closest and the "
-              "farthest. The expression is the slider's default."},
+    "score_range": {"label": "Score (range)", "description": "Score (range): a voter gives the "
+                    "closest candidate the top score, the farthest 0, and every other one the "
+                    "score in proportion to where its distance is between those two, rounded to "
+                    "a whole score. The highest mean score wins. The slider below sets the "
+                    "number of categories (scores); with two, a voter approves the candidates "
+                    "closer than halfway between the closest and the farthest. The expression "
+                    "is the slider's default."},
+    "score_avg": {"label": "Score (avg)", "description": "Score (avg): a voter gives the closest "
+                  "candidate the top score, the farthest 0, and a candidate at their mean "
+                  "distance to all candidates the middle of the scale; in between, the score in "
+                  "proportion to where the distance is between those, rounded to a whole score. "
+                  "The highest mean score wins. The slider below sets the number of categories "
+                  "(scores); with two, a voter approves the candidates closer than their mean "
+                  "distance, the best ballot of a voter who knows nothing of how the others "
+                  "vote. The expression is the slider's default."},
+    "score_dh": {"label": "Score (D'Hondt)", "description": "Score (D'Hondt): a voter puts the "
+                 "candidates in order of distance and gives the closest the top score, the "
+                 "farthest 0. The steps between them are shared out among the gaps between "
+                 "neighbours: each step in turn goes to the gap with the largest "
+                 "gap / (its steps + δ), so candidates at nearly the same distance share a score. "
+                 "δ = 1 is D'Hondt, which favours the large gaps; a lower δ favours them less, "
+                 "down to Sainte-Laguë at 0.5. The highest mean score wins. The sliders below set "
+                 "the number of categories (scores) and δ; with two categories, for any δ, a "
+                 "voter approves the candidates above the largest gap, and with more categories "
+                 "than candidates it is still not Borda. The expression is the sliders' "
+                 "defaults."},
     "voronoi": {"label": "Voronoi", "description": "The nearest candidate to the pixel, without "
                 "voters: what the ranked methods draw when all voters are at their pixel. With "
                 "pixels at geometric medians it is drawn only where the voters above have one, "
@@ -156,7 +177,8 @@ class DiagramRequest(BaseModel):
     # towards their geometric median. The UI moves the diagram between the two in steps.
     shift: float = Field(1.0, ge=0, le=1)
     deviation: float = DEVIATION
-    levels: int = Field(SCORE_LEVELS, ge=2, le=MAX_LEVELS)  # score only
+    levels: int = Field(SCORE_LEVELS, ge=2, le=MAX_LEVELS)  # score and score_dh only
+    delta: float = Field(DELTA, ge=MIN_DELTA, le=MAX_DELTA)  # DELTAS only
     grid: int = Field(FINAL_GRID, ge=32, le=512)
 
     @field_validator("deviation")
@@ -221,10 +243,16 @@ def config():
         "final_grid": FINAL_GRID,
         "deviations": DEVIATIONS,
         "deviation": DEVIATION,
-        # the method of the categories slider, and its default
-        "score": SCORE,
+        # the methods of the categories slider, and its default
+        "scores": list(SLIDERS),
         "levels": SCORE_LEVELS,
         "max_levels": MAX_LEVELS,
+        # the methods of the δ slider, its default and its range
+        "deltas": DELTAS,
+        "delta": DELTA,
+        "min_delta": MIN_DELTA,
+        "max_delta": MAX_DELTA,
+        "delta_step": DELTA_STEP,
         # for the voter distribution plots of the hovered pixel
         "voters": _voters(),
     }
@@ -239,8 +267,8 @@ def diagram_regions(request: DiagramRequest):
     start = time.perf_counter()
     spread = SPREAD if request.distribution == "beta" else None
     model = Model(request.distribution, request.deviation, spread)
-    build = SLIDERS.get(request.method)  # built from the slider
-    method = build(request) if build else request.method
+    build = SLIDERS.get(request.method)  # built from the sliders
+    method = build(request.levels, request.delta) if build else request.method
     shapes = regions(method, request.candidates, model, request.grid, request.pixel_median, request.shift)
     payload = {"regions": shapes, "ms": round(1000 * (time.perf_counter() - start), 1)}
     # json.dumps directly: FastAPI's encoder is slow on thousands of vertices

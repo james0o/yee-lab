@@ -92,9 +92,11 @@ def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Vote
     if cuts:
         shares["unapproved"] = {cut: unapproved_shares(candidates, model, cut, medians)
                                 for cut in cuts}
-    levels = [share.levels for share in needs if isinstance(share, Scored)]
-    if levels:
-        shares["unscored"] = {n: unscored_shares(candidates, model, n, medians) for n in levels}
+    scores = [share for share in needs if isinstance(share, Scored)]
+    if scores:
+        shares["unscored"] = {share: unscored_shares(candidates, model, share.levels, medians, share.rule,
+                                                     share.delta)
+                              for share in scores}
     return Voters(**shares)
 
 

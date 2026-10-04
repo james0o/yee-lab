@@ -78,17 +78,25 @@ def approved(points, candidates, cut: Cut) -> np.ndarray:
 
 
 @njit(inline="always", error_model="numpy")
-def _ballot(x, y, candidates, cut, r, order):
-    """approved() of the voter at (x, y) as a bit mask: bit c is set if candidate c is
-    approved. `cut` is the index of the cut in CUTS; r and order (C,) are scratch."""
-    n = candidates.shape[0]
-    for c in range(n):  # insertion sort by distance; ties keep the lowest index first
+def by_distance(x, y, candidates, r, order):
+    """The distances r[c] = |(x, y) - c| and the candidates in order of distance,
+    closest first, into r and order (C,); ties keep the lowest index first, like a
+    stable argsort."""
+    for c in range(candidates.shape[0]):  # insertion sort
         r[c] = math.hypot(x - candidates[c, 0], y - candidates[c, 1])
         k = c
         while k > 0 and r[order[k - 1]] > r[c]:
             order[k] = order[k - 1]
             k -= 1
         order[k] = c
+
+
+@njit(inline="always", error_model="numpy")
+def _ballot(x, y, candidates, cut, r, order):
+    """approved() of the voter at (x, y) as a bit mask: bit c is set if candidate c is
+    approved. `cut` is the index of the cut in CUTS; r and order (C,) are scratch."""
+    n = candidates.shape[0]
+    by_distance(x, y, candidates, r, order)
     if cut == 1:  # GAP
         count, widest = 1, -1.0
         for k in range(n - 1):
