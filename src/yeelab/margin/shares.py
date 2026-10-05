@@ -13,8 +13,8 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
                                       remaining set)
     king_runoff                       all three: koth against irv, the duel by pairwise
                                       shares
-    score_range, score_avg, score_dh  the part of the top score a candidate does not
-                                      get: these voters have curved borders, so the
+    score_range, score_avg, score_dh, the part of the top score a candidate does not
+    score_hybrid                      get: these voters have curved borders, so the
                                       shares come from a grid of voters, not from
                                       polygons
 

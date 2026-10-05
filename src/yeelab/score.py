@@ -2,7 +2,7 @@
 
 A score ballot has `levels` scores, 0 to levels - 1. A voter at v gives the closest
 candidate the top score and the farthest 0. Which score the others get depends on the
-distances r_i = |v - c_i|, in one of three ways (`rule`):
+distances r_i = |v - c_i|, in one of four ways (`rule`):
 
     RANGE   the score in proportion to where r_i is between the closest and the
             farthest, rounded to a whole score:
@@ -39,33 +39,57 @@ distances r_i = |v - c_i|, in one of three ways (`rule`):
             A gap may get several steps or none, so candidates at nearly the same
             distance share a score however many levels there are; that is what keeps
             it from Borda, which it would be if every gap got one step
+    HYBRID  DHONDT for the candidates closer than the midrange m = (r_min + r_max) / 2
+            and RANGE for the others, each on its own part of the scale. Of the
+            T = levels - 1 steps, the upper ceil(T / 2) are shared out by DHONDT's
+            divisor method among the gaps between the closer candidates and the gap
+            from the last of them to m; the farther candidates get the lower
+            floor(T / 2) in proportion to where they are between m and the farthest:
+
+                score_(i) = floor(T / 2) + d_i + ... + d_k                    if r_(i) < m
+                score_i = round((r_max - r_i) / (r_max - m) * floor(T / 2))  otherwise
+
+            with d_k the steps of the gap m - r_(k) from the last closer candidate.
+            Every closer candidate gets floor(T / 2) or more and every other one that
+            or less, so a closer candidate never gets a lower score. The voter tells the
+            near candidates apart by their gaps, the far ones by distance alone, and
+            the far ones do not move the cut among the near ones. A voter as far from
+            every candidate gives them all the top score
 
 Nothing changes when all distances are scaled. With two levels every rule is an
 approval ballot: the voter approves the candidates with the top score, from the closest
 alone to all but the farthest. RANGE approves those closer than halfway between the
 closest and the farthest, AVG those closer than the mean distance (at it, the half is
-rounded to 0: not approved) and DHONDT, whatever delta, those above the largest gap
+rounded to 0: not approved), DHONDT, whatever delta, those above the largest gap
+(ties: the first) and HYBRID, whatever delta, those above the largest gap among the
+candidates closer than halfway, the gap from the last of them to halfway included
 (ties: the first). AVG's is the best ballot of a voter with the utility -r_i who takes
 every pair of candidates to be as likely to tie (Weber): approving c is worth
-sum_e (r_e - r_c), which is positive for these. For three candidates the three are the
-same ballot; for more they differ. The gaps are those of the distances, not of their
-squares: a voter at the squared distances 0, 0.35, 0.45, 0.55 and 1 has the gaps 0.59,
-0.08, 0.07 and 0.26, so DHONDT approves only the candidate the voter stands on.
+sum_e (r_e - r_c), which is positive for these. For three candidates RANGE, AVG and
+DHONDT are the same ballot, and HYBRID approves the middle one only closer than a
+quarter of the way, r_(2) < (3 r_(1) + r_(3)) / 4; for more candidates all four differ.
+The gaps are those of the distances, not of their squares: a voter at the squared
+distances 0, 0.35, 0.45, 0.55 and 1 has the gaps 0.59, 0.08, 0.07 and 0.26, so DHONDT
+approves only the candidate the voter stands on.
 
-As the number of levels grows, AVG comes closer to its part of the way, and RANGE and
-DHONDT to that of RANGE, (r_max - r_i) / (r_max - r_min): for delta up to 1, DHONDT
-keeps every gap within C - 1 steps of its share of them, (levels - 1) g_k /
+As the number of levels grows, AVG comes closer to its part of the way, and RANGE,
+DHONDT and HYBRID to that of RANGE, (r_max - r_i) / (r_max - r_min): for delta up to 1,
+DHONDT keeps every gap within C - 1 steps of its share of them, (levels - 1) g_k /
 (r_max - r_min), with delta = 1 never below the share rounded down, and one more level
 adds a step to one gap and takes none away. The large gaps gain about as many steps at
-any number of levels, so as a part of the top score their advantage fades.
+any number of levels, so as a part of the top score their advantage fades. HYBRID's two
+halves are the two halves of that part of the way.
 
 Borders. A RANGE score changes where its part of the way is half a score,
 r_max - r_i = (k + 1/2) / (levels - 1) * (r_max - r_min), an AVG score likewise with
 rbar for one end of its part of the way; a DHONDT step moves where two gaps tie,
-(l + delta) (r_a - r_b) = (k + delta) (r_c - r_d). Unlike the bisectors these are
-curves, so the mean score is not a sum over polygons. `unscored` gives, for a grid of
-rectangles, the mean points below the top score of each candidate in each rectangle;
-margin/shares.py weighs it with the voters of each rectangle.
+(l + delta) (r_a - r_b) = (k + delta) (r_c - r_d). A HYBRID score changes where one of
+its DHONDT steps moves, with m for r_a or r_c at the gap to the midrange, where a
+candidate crosses m, 2 r_i = r_min + r_max, and where a RANGE score of its lower half is
+half a score. Unlike the bisectors these are curves, so the mean score is not a sum
+over polygons. `unscored` gives, for a grid of rectangles, the mean points below the
+top score of each candidate in each rectangle; margin/shares.py weighs it with the
+voters of each rectangle.
 """
 
 import math
@@ -79,13 +103,14 @@ from yeelab import threads
 RANGE = "range"
 DHONDT = "dhondt"
 AVG = "avg"
-Rule = Literal["range", "dhondt", "avg"]
-RULES: tuple[Rule, ...] = (RANGE, DHONDT, AVG)
+HYBRID = "hybrid"
+Rule = Literal["range", "dhondt", "avg", "hybrid"]
+RULES: tuple[Rule, ...] = (RANGE, DHONDT, AVG, HYBRID)
 BITS = 4  # of each candidate in the code of a ballot: its points below the top score
 MASK = (1 << BITS) - 1
 MAX_CANDIDATES = 63 // BITS  # a ballot is a code in an int64
 MAX_LEVELS = MASK + 1  # the points below the top score fit the bits of a candidate
-DELTA = 0.8  # of DHONDT: each step to the largest g_k / (d_k + DELTA)
+DELTA = 0.8  # of DHONDT and HYBRID: each step to the largest g_k / (d_k + DELTA)
 ROWS = 8  # grid rows per task of the compiled loop (threads.py)
 
 
@@ -106,11 +131,20 @@ def _check(rule, delta):
 def scored(points, candidates, levels: int, rule: Rule = RANGE, delta: float = DELTA) -> np.ndarray:
     """The score a voter at each of the points (..., 2) gives each candidate, int
     (..., C) from 0 to levels - 1: the ballot from its definition, one voter at a time.
-    delta is the divisor of DHONDT; the other rules do not use it."""
+    delta is the divisor of DHONDT and HYBRID; the other rules do not use it."""
+    return from_distances(distances(points, candidates), levels, rule, delta)
+
+
+def from_distances(r, levels: int, rule: Rule = RANGE, delta: float = DELTA) -> np.ndarray:
+    """scored() of voters at the distances r (..., C) from the candidates, wherever they
+    are: the ballot depends on nothing else. docs/ballots.py gives it the distances of
+    real voters."""
     _check(rule, delta)
-    r = distances(points, candidates)
+    r = np.asarray(r, dtype=np.float64)
     if rule == DHONDT:
         return levels - 1 - _dhondt_below(r, levels - 1, delta)
+    if rule == HYBRID:
+        return levels - 1 - _hybrid_below(r, levels - 1, delta)
     if rule == AVG:
         return np.rint(_avg_part(r) * (levels - 1)).astype(np.int64)
     far = r.max(axis=-1, keepdims=True)
@@ -140,6 +174,29 @@ def _dhondt_below(r, top, delta):
     below = np.concatenate([np.zeros_like(steps[..., :1]), np.cumsum(steps, axis=-1)], axis=-1)
     return np.take_along_axis(below, np.argsort(order, axis=-1, kind="stable"), axis=-1)
 
+
+def _hybrid_below(r, top, delta):
+    """Points below the top score `top` of each candidate on a HYBRID ballot with the
+    divisor delta, int (..., C), for the distances r (..., C): for a candidate closer than
+    the midrange, the steps of the gaps above it of the upper ceil(top / 2); for the
+    others, those the lower floor(top / 2) do not give."""
+    order = np.argsort(r, axis=-1, kind="stable")  # closest first; ties: the lowest index
+    s = np.take_along_axis(r, order, axis=-1)
+    near, far = s[..., :1], s[..., -1:]
+    mid = (near + far) / 2
+    closer = s < mid  # the closest ones, a start of the order
+    # the gaps between closer candidates, and from the last of them to the midrange
+    gaps = np.where(closer[..., 1:], np.diff(s, axis=-1),
+                    np.where(closer[..., :-1], mid - s[..., :-1], -np.inf))
+    steps = np.zeros(gaps.shape, dtype=np.int64)
+    for _ in range((top + 1) // 2):  # as DHONDT, among those gaps alone
+        steps += (gaps / (steps + delta)).argmax(axis=-1)[..., None] == np.arange(gaps.shape[-1])
+    below = np.concatenate([np.zeros_like(steps[..., :1]), np.cumsum(steps, axis=-1)], axis=-1)
+    part = np.divide(far - s, far - mid, out=np.ones_like(s), where=far > mid)
+    below = np.where(closer, below, top - np.rint(part * (top // 2)).astype(np.int64))
+    below = np.where(far > near, below, 0)
+    return np.take_along_axis(below, np.argsort(order, axis=-1, kind="stable"), axis=-1)
+
 # ---------------------------------------------------------------- Compiled
 
 
@@ -161,9 +218,35 @@ def by_distance(x, y, candidates, r, order):
 def _ballot(x, y, candidates, top, rule, delta, r, order, steps):
     """scored() of the voter at (x, y) as a code: BITS bits per candidate, holding the
     points it is below the top score `top`. `rule` is the index of the rule in RULES,
-    delta the divisor of DHONDT; r, order and steps (C,) are scratch."""
+    delta the divisor of DHONDT and HYBRID; r, order and steps (C,) are scratch."""
     n = candidates.shape[0]
     code = 0
+    if rule == 3:  # HYBRID
+        by_distance(x, y, candidates, r, order)
+        near, far = r[order[0]], r[order[n - 1]]
+        if far == near:
+            return code
+        mid = (near + far) / 2
+        closer = 1  # the closer candidates are the first `closer` of the order
+        while r[order[closer]] < mid:
+            closer += 1
+        steps[:] = 0
+        for _ in range((top + 1) // 2):
+            gap, widest = 0, -1.0
+            for k in range(closer):
+                end = r[order[k + 1]] if k < closer - 1 else mid
+                share = (end - r[order[k]]) / (steps[k] + delta)
+                if share > widest:
+                    widest, gap = share, k
+            steps[gap] += 1
+        below = 0  # the steps of the gaps above the candidate
+        for k in range(closer):
+            code |= below << (BITS * order[k])
+            below += steps[k]
+        for k in range(closer, n):
+            c = order[k]
+            code |= (top - np.int64(np.rint((far - r[c]) / (far - mid) * (top // 2)))) << (BITS * c)
+        return code
     if rule == 1:  # DHONDT
         by_distance(x, y, candidates, r, order)
         steps[:] = 0

@@ -10,9 +10,12 @@ divisor method of its delta (D'Hondt at 1), which is checked by the condition ev
 apportionment of that method meets and no other does; with two levels it approves the
 candidates above the largest gap, for any delta, and it does not become Borda with more
 levels than candidates. A lower delta moves steps from the large gaps to the small ones.
-With two levels AVG and DHONDT are checked against approval ballots defined on their own
-(_approval); for three candidates every rule gives the same ballot. The compiled ballot
-of the grid must be that of the definition.
+HYBRID is DHONDT for the candidates closer than halfway, on the upper half of the
+scale, and RANGE from halfway for the others, on the lower half; the two halves meet in
+one score and never cross. With two levels AVG, DHONDT and HYBRID are checked against
+approval ballots defined on their own (_approval); for three candidates RANGE, AVG and
+DHONDT give the same ballot, and HYBRID approves the middle one only within a quarter of
+the way. The compiled ballot of the grid must be that of the definition.
 
 The shares come from a grid of voters, so they are approximate. They are compared with
 exact shares where there are some (two candidates get the top score from their first
@@ -31,8 +34,8 @@ from scipy.special import ndtr
 from yeelab import ranking_cells
 from yeelab.margin.shares import (GRID_CELLS, Model, _voter_grid, first_choice_shares, ranking_shares,
                                   unscored_shares)
-from yeelab.score import (AVG, DELTA, DHONDT, MAX_CANDIDATES, MAX_LEVELS, RANGE, RULES, distances, scored,
-                          unscored)
+from yeelab.score import (AVG, DELTA, DHONDT, HYBRID, MAX_CANDIDATES, MAX_LEVELS, RANGE, RULES, distances,
+                          scored, unscored)
 
 FIVE = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
 CANDIDATES = {2: np.random.default_rng(5).random((2, 2)), 3: np.random.default_rng(3).random((3, 2)),
@@ -67,12 +70,21 @@ def _ballot(distances_, levels, rule=RANGE, delta=DELTA):
 def _approval(points, candidates, cut):
     """Who a voter at each of the points approves, bool (..., C), by the approval ballot's
     own definition, apart from score.py: the closest candidates down to the largest gap
-    between neighbours in the order of distance (cut "gap", ties: the first gap) or
-    those closer than the mean distance ("avg", ties: not approved)."""
+    between neighbours in the order of distance (cut "gap", ties: the first gap), down to
+    the largest gap among the candidates closer than halfway, halfway itself counted as
+    the next candidate ("hybrid", ties: the first gap) or those closer than the mean
+    distance ("avg", ties: not approved)."""
     r = distances(points, candidates)
     order = np.argsort(r, axis=-1, kind="stable")  # closest first; ties: the lowest index
     if cut == "gap":
         count = np.diff(np.take_along_axis(r, order, axis=-1), axis=-1).argmax(axis=-1) + 1
+    elif cut == "hybrid":
+        s = np.take_along_axis(r, order, axis=-1)
+        halfway = (s[..., :1] + s[..., -1:]) / 2
+        closer = (s < halfway).sum(axis=-1, keepdims=True)
+        # the closer ones, then halfway in place of every other: gaps of 0 past it
+        ends = np.where(np.arange(s.shape[-1]) < closer, s, halfway)
+        count = np.diff(ends, axis=-1).argmax(axis=-1) + 1
     else:
         count = np.maximum((r < r.mean(axis=-1, keepdims=True)).sum(axis=-1), 1)
     return np.argsort(order, axis=-1, kind="stable") < count[..., None]
@@ -196,8 +208,8 @@ def test_two_levels_approve_the_candidates_closer_than_halfway():
 
 def test_two_levels_are_one_approval_ballot_for_three_candidates_only():
     """The middle one of three is approved where it is closer to the closest than to
-    the farthest, by every rule: closer than halfway, closer than the mean, above the
-    largest gap. Four have three ballots."""
+    the farthest, by RANGE, AVG and DHONDT: closer than halfway, closer than the mean,
+    above the largest gap (HYBRID asks for less, see below). Four have four ballots."""
     rng = np.random.default_rng(4)
     points = rng.random((5000, 2))
     for n in (2, 3):
@@ -311,11 +323,85 @@ def test_dhondt_more_levels_add_steps_and_take_none(delta):
         assert ((more - steps).sum(axis=-1) == 1).all() and (more >= steps).all()
 
 
+def test_hybrid_is_dhondt_for_the_closer_half_and_range_for_the_farther():
+    """The distances 0.1, 0.5, 0.65, 0.8, 0.9 and 1 have the midrange 0.55: 0.1 and 0.5
+    are closer, with the gap 0.4 between them and 0.05 from 0.5 to the midrange. With six
+    levels the upper three steps all go to the gap 0.4, which leaves 0.5 with the lower
+    two; the farther ones get 2 of the part of the way from 0.55 to 1, 0.78, 0.44 and
+    0.22: 2, 1 and 0. RANGE gives 5, 3, 2, 1, 1, 0, DHONDT 5, 2, 1, 0, 0, 0."""
+    r = [0.1, 0.5, 0.65, 0.8, 0.9, 1]
+    assert _ballot(r, 6, HYBRID) == [5, 2, 2, 1, 0, 0]
+    assert _ballot(r, 2, HYBRID) == [1, 0, 0, 0, 0, 0]
+    assert _ballot(r, 3, HYBRID) == [2, 1, 1, 0, 0, 0]
+    assert _ballot(r, 11, HYBRID) == [10, 5, 4, 2, 1, 0]
+    assert _ballot(r[::-1], 6, HYBRID) == [0, 0, 1, 2, 2, 5]  # in any order of the candidates
+    assert _ballot([3, 3, 3], 6, HYBRID) == [5, 5, 5]
+
+
+def test_hybrid_shares_its_upper_steps_among_the_gaps_of_the_closer_half():
+    """The distances 0, 6, 8, 9 and 20 have the midrange 10 and the gaps 6, 2 and 1 among
+    the closer four, and 1 from 9 to 10. Of the three upper steps D'Hondt gives the gap 6
+    all (6 / 3 ties 2 / 1: the first gap), Sainte-Laguë and the default two and one to
+    the gap 2. With DHONDT the far gap 11 takes three of the five steps, at any of these
+    delta, and 6, 8 and 9 all get 3."""
+    r = [0, 6, 8, 9, 20]
+    assert _ballot(r, 6, HYBRID, 1) == [5, 2, 2, 2, 0]
+    assert _ballot(r, 6, HYBRID, 0.5) == _ballot(r, 6, HYBRID) == [5, 3, 2, 2, 0]
+    for delta in DELTAS:
+        assert _ballot(r, 6, DHONDT, delta) == [5, 3, 3, 3, 0]
+
+
+@pytest.mark.parametrize("delta", [*DELTAS, 3.0])
+def test_hybrid_with_two_levels_is_approval_of_the_largest_gap_of_the_closer_half(delta):
+    """For any number of candidates and any delta, ties included: the first of equal gaps,
+    so 0, 1 and 4 approve only the first (the gap to the midrange 2 ties the gap 1)."""
+    rng = np.random.default_rng(13)
+    for n in range(2, 9):
+        candidates, points = rng.random((n, 2)), rng.random((5000, 2))
+        np.testing.assert_array_equal(scored(points, candidates, 2, HYBRID, delta),
+                                      _approval(points, candidates, "hybrid"))
+    assert _ballot([0, 1, 4], 2, HYBRID, delta) == [1, 0, 0]
+    assert _ballot([0, 1, 4], 2) == [1, 1, 0]
+
+
+def test_hybrid_approves_the_middle_of_three_within_a_quarter_of_the_way():
+    """Its gap from the closest is below its gap to halfway: r_2 < (3 r_1 + r_3) / 4."""
+    rng = np.random.default_rng(14)
+    candidates, points = rng.random((3, 2)), rng.random((5000, 2))
+    r = np.sort(distances(points, candidates), axis=-1)
+    quarter = (3 * r[:, 0] + r[:, 2]) / 4
+    clear = np.abs(r[:, 1] - quarter) > 1e-12
+    middle = np.take_along_axis(scored(points, candidates, 2, HYBRID),
+                                distances(points, candidates).argsort(axis=-1), axis=-1)[:, 1]
+    np.testing.assert_array_equal(middle[clear], (r[:, 1] < quarter)[clear])
+    assert 0.1 < middle.mean() < 0.9
+
+
+@pytest.mark.parametrize("levels", LEVELS)
+def test_hybrid_gives_each_half_its_own_part_of_the_scale(levels):
+    """The closer candidates get floor(T / 2) or more of T = levels - 1, the others that or
+    less, which is the part of the way from the midrange to the farthest, rounded: for an
+    even T the score of RANGE itself."""
+    rng = np.random.default_rng(15)
+    lower = (levels - 1) // 2
+    for n in range(2, 9):
+        candidates, points = rng.random((n, 2)), rng.random((2000, 2))
+        r = distances(points, candidates)
+        far, mid = r.max(axis=-1, keepdims=True), (r.min(axis=-1, keepdims=True) + r.max(axis=-1, keepdims=True)) / 2
+        ballot, closer = scored(points, candidates, levels, HYBRID), r < mid
+        assert (ballot[closer] >= lower).all() and (ballot[~closer] <= lower).all()
+        part = (far - r) / (far - mid) * lower
+        clear = ~closer & (np.abs(part % 1 - 0.5) > 1e-9)  # not within rounding of a half
+        np.testing.assert_array_equal(ballot[clear], np.round(part[clear]))
+        if (levels - 1) % 2 == 0:
+            np.testing.assert_array_equal(ballot[clear], scored(points, candidates, levels)[clear])
+
+
 def test_unknown_rules_are_rejected():
     for rule in ("gap", "dh", None):
-        with pytest.raises(ValueError, match=f"unknown rule {rule!r}; choose from range, dhondt, avg"):
+        with pytest.raises(ValueError, match=f"unknown rule {rule!r}; choose from range, dhondt, avg, hybrid"):
             scored(np.zeros(2), FIVE, 3, rule)
-        with pytest.raises(ValueError, match=f"unknown rule {rule!r}; choose from range, dhondt, avg"):
+        with pytest.raises(ValueError, match=f"unknown rule {rule!r}; choose from range, dhondt, avg, hybrid"):
             unscored(np.linspace(0, 1, 5), np.linspace(0, 1, 5), FIVE, 3, 4, rule)
 
 
@@ -329,7 +415,8 @@ def test_delta_must_be_above_zero():
 # ---------------------------------------------------------------- Grid
 
 
-@pytest.mark.parametrize(("rule", "delta"), [(RANGE, DELTA), (AVG, DELTA)] + [(DHONDT, delta) for delta in DELTAS])
+@pytest.mark.parametrize(("rule", "delta"), [(RANGE, DELTA), (AVG, DELTA)]
+                         + [(rule, delta) for rule in (DHONDT, HYBRID) for delta in DELTAS])
 @pytest.mark.parametrize("n", CANDIDATES)
 def test_the_compiled_ballot_is_the_definition(n, rule, delta):
     """A rectangle too small for a border to cross holds the ballot of the voter at it,
@@ -481,7 +568,7 @@ def test_the_part_not_given_is_exact_where_it_is_tiny(sigma_model):
 
 
 @pytest.mark.parametrize("model", MODELS, ids=_ids)
-def test_three_candidates_and_two_levels_have_one_share_for_every_rule(model):
+def test_three_candidates_and_two_levels_have_one_share_by_range_avg_and_dhondt(model):
     for rule in (AVG, DHONDT):
         np.testing.assert_allclose(unscored_shares(CANDIDATES[3], model, 2, model.medians, rule),
                                    unscored_shares(CANDIDATES[3], model, 2, model.medians),

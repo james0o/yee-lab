@@ -25,13 +25,13 @@ from scipy.special import betainc, ndtr, ndtri
 from scipy.stats import beta as beta_dist
 
 from yeelab import normal, ranking_cells
-from yeelab.build import Highest, ScoreAvg, ScoreDH, Tally, Voters
+from yeelab.build import Highest, ScoreAvg, ScoreDH, ScoreHybrid, Tally, Voters
 from yeelab.margin.geometric import geometric_median_at, geometric_medians
 from yeelab.margin.regions import MARGINS, regions, winners
 from yeelab.margin.shares import Model, pairwise_shares
 from yeelab.pixels import beta as pixel_beta, normal as pixel_normal
 from yeelab.pixels.methods import _pairwise_preferences, borda, condorcet, fptp, irv, schulze, voronoi
-from yeelab.score import AVG, DHONDT, unscored
+from yeelab.score import AVG, DHONDT, HYBRID, unscored
 from yeelab.voting import CYCLE
 from yeelab.web.app import DEVIATION as UI_DEVIATION, DRAG_GRID, FINAL_GRID
 
@@ -870,13 +870,14 @@ def geometric_median():
 # approval: the score methods of the web UI with two levels, name, label, rule and the
 # method itself
 APPROVALS = [("score_dh, 2 levels", "largest gap", DHONDT, Highest(Tally(ScoreDH(2)))),
+             ("score_hybrid, 2 levels", "largest gap, closer half", HYBRID, Highest(Tally(ScoreHybrid(2)))),
              ("score_avg, 2 levels", "mean distance", AVG, Highest(Tally(ScoreAvg(2))))]
 
 
 def approval():
-    """The voters who approve D, and the diagrams, for the score methods with two
-    levels."""
-    fig, axes = plt.subplots(1, 4, figsize=(13, 3.6), layout="constrained")
+    """The voters who approve D (top row), and the diagrams (bottom row), for the score
+    methods with two levels."""
+    fig, axes = plt.subplots(2, len(APPROVALS), figsize=(10, 7), layout="constrained")
     lines = np.linspace(0, 1, 401)
     shade = LinearSegmentedColormap.from_list("approves", ["white", PALETTE[D]])
     for k, (title, label, rule, method) in enumerate(APPROVALS):
@@ -884,14 +885,14 @@ def approval():
         print(f"{title}: approved by the voters of this part of the square " + "  ".join(
             f"{name} {cover[c].mean():.3f}" for c, name in enumerate(NAMES))
             + f"; approved candidates per voter {cover.sum(axis=0).mean():.3f}")
-        ax = axes[k]
+        ax = axes[0, k]
         ax.imshow(cover[D].T, cmap=shade, vmin=0, vmax=1, origin="lower", extent=(0, 1, 0, 1), alpha=0.6)
         ax.scatter(*CANDIDATES.T, c=PALETTE[:5], s=45, edgecolors="k", linewidths=1, zorder=3)
         for name, (x, y) in zip(NAMES, CANDIDATES):
             ax.annotate(name, (x + 0.015, y + 0.015), weight="bold", fontsize=9)
         ax.set_title(f"voters who approve D: {label}", fontsize=10)
         winner = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
-        show(axes[2 + k], winner, f"{title}: {label}")
+        show(axes[1, k], winner, f"{title}: {label}")
     compared = [("fptp", "fptp"), ("borda", "borda"), ("schulze", "schulze"),
                 *[(name, method) for name, _, _, method in APPROVALS]]
     for name, method in compared:
@@ -903,17 +904,19 @@ def approval():
 
 
 def score_voting():
-    """The three score methods of the web UI at their default of six levels, with the
+    """The four score methods of the web UI at their default of six levels, with the
     mean score of each candidate."""
-    fig, axes = plt.subplots(1, 3, figsize=(10, 3.6), layout="constrained")
+    fig, axes = plt.subplots(1, 4, figsize=(13, 3.6), layout="constrained")
     for ax, (method, label) in zip(axes, [("score_range", "Score (range)"), ("score_avg", "Score (avg)"),
-                                          ("score_dh", "Score (D'Hondt), δ = 0.8")]):
+                                          ("score_dh", "Score (D'Hondt), δ = 0.8"),
+                                          ("score_hybrid", "Score (hybrid), δ = 0.8")]):
         winner = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
         print(f"{method}: share of the square won " + "  ".join(
             f"{name} {(winner == c).mean():.3f}" for c, name in enumerate(NAMES)))
         show(ax, winner, label)
     lines = np.linspace(0, 1, 401)
-    for method, rule in (("score_range", "range"), ("score_avg", AVG), ("score_dh", DHONDT)):
+    for method, rule in (("score_range", "range"), ("score_avg", AVG), ("score_dh", DHONDT),
+                         ("score_hybrid", HYBRID)):
         short = unscored(lines, lines, CANDIDATES, 6, 4, rule)
         print(f"{method}: mean score of the voters of the square " + "  ".join(
             f"{name} {5 - short[c].mean():.2f}" for c, name in enumerate(NAMES)))

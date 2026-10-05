@@ -2,7 +2,7 @@
 
     from yeelab.build import (BordaCount, Eliminate, Fallback, Highest, Margins, Mix,
                               Pairwise, Plurality, Runoff, Score, ScoreAvg, ScoreDH,
-                              StrongestPaths, Tally, Unbeaten, Weakest)
+                              ScoreHybrid, StrongestPaths, Tally, Unbeaten, Weakest)
 
     borda   = Highest(Tally(BordaCount()))
     fptp    = Highest(Tally(Plurality()))
@@ -25,6 +25,9 @@
     # ... the steps from 5 to 0 shared out among the gaps between neighbours, each to the
     # largest gap / (its steps + delta): D'Hondt's rule at delta = 1, the default 0.8
     score_dh = Highest(Tally(ScoreDH(6)))
+    # ... so for the candidates closer than halfway, on 5 to 2; the farther ones on 2 to
+    # 0 in proportion to where their distance is between halfway and the farthest
+    score_hybrid = Highest(Tally(ScoreHybrid(6)))
 
     winner, margin = nanson.evaluate(voters)  # Voters with the shares in nanson.needs
 
@@ -52,6 +55,7 @@ from yeelab.build.blocks import (
     Score,
     ScoreAvg,
     ScoreDH,
+    ScoreHybrid,
     StrongestPaths,
     Tally,
     Unbeaten,
@@ -64,6 +68,6 @@ from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Scored, Share, Voters
 __all__ = [
     "Ballot", "BordaCount", "CandidateTotals", "Eliminate", "Fallback", "Highest", "Margins", "Mix",
     "PairDiffs", "PairShares", "Pairwise", "Plurality", "Runoff", "Score", "ScoreAvg", "ScoreDH",
-    "StrongestPaths", "Tally", "Unbeaten", "Weakest", "Winner", "METHODS",
+    "ScoreHybrid", "StrongestPaths", "Tally", "Unbeaten", "Weakest", "Winner", "METHODS",
     "FIRST", "PAIRWISE", "PROFILE", "Scored", "Share", "Voters",
 ]

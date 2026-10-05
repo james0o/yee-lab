@@ -54,7 +54,7 @@ package `src/yeelab/`):
   [interpolation nodes per axis], [$N$], [`--nodes` (`NODES`)], [49],
   [Gauss–Legendre points per edge], [$Q$], [`QUAD_NODES`], [24],
   [score levels (UI)], [$L$], [_Score categories_, `SCORE_LEVELS` (`web/app.py`)], [6],
-  [divisor of `ScoreDH` (UI)], [$delta$], [_D'Hondt δ_, `DELTA` (`score.py`)], [0.8],
+  [divisor of `ScoreDH`, `ScoreHybrid` (UI)], [$delta$], [_D'Hondt δ_, `DELTA` (`score.py`)], [0.8],
   [voter grid of the score shares], [$K$], [`GRID_CELLS`, `GRID_SUB` (`margin/shares.py`)], [256, 8],
   [contour grid per axis (UI)], [$G$], [`DRAG_GRID` / `FINAL_GRID` (`web/app.py`)], [160 / 320],
   table.hline(),
@@ -828,10 +828,11 @@ looks at a single defeat and not at paths of defeats.
 has a winner, never a cycle, and like Schulze, Baldwin and Nanson, Black differs from
 the Condorcet winner diagram only where there is a cycle.
 
-== Score voting (`score_range`, `score_avg`, `score_dh`) <sec-score>
+== Score voting (`score_range`, `score_avg`, `score_dh`, `score_hybrid`) <sec-score>
 
 These are only in the web UI as well, built from blocks as `Highest(Tally(Score(6)))`,
-`Highest(Tally(ScoreAvg(6)))` and `Highest(Tally(ScoreDH(6)))`. A score ballot is not a
+`Highest(Tally(ScoreAvg(6)))`, `Highest(Tally(ScoreDH(6)))` and
+`Highest(Tally(ScoreHybrid(6)))`. A score ballot is not a
 ranking: the voter gives every candidate a score from $0$ to $L - 1$, and the candidate
 with the highest mean score wins. The scores depend on how far the candidates are and not
 only on their order, so the model needs one more assumption than the ranked methods
@@ -844,7 +845,7 @@ score voting with two levels.
 $ r_((1)) <= r_((2)) <= dots <= r_((C)), quad r_i = |p - c_i|, $ <eq-distances>
 
 and gives the closest the top score $L - 1$ and the farthest $0$. The scores of the others
-come from one of three rules.
+come from one of four rules.
 
 - `Score` (range) gives a candidate the score in proportion to where its distance is
   between the closest and the farthest,
@@ -866,6 +867,19 @@ come from one of three rules.
   it, $"score"_((m)) = d_m + dots + d_(C - 1)$. A gap may get several steps or none, so
   candidates at nearly the same distance share a score however many levels there are;
   with one step for every gap it would be Borda.
+- `ScoreHybrid` is `ScoreDH` for the candidates closer than the midrange
+  $m = (r_((1)) + r_((C))) slash 2$ and `Score` for the others, each on its own part of
+  the scale. With $T = L - 1$, the closer candidates $r_((1)), dots, r_((k)) < m$ share
+  the upper $ceil(T slash 2)$ steps out by the divisor method of `ScoreDH`, among the gaps
+  between them and the gap $g_k = m - r_((k))$ from the last of them to $m$; the others get
+  the lower $floor(T slash 2)$ in proportion to where they are between $m$ and the
+  farthest,
+  $ "score"_((i)) = floor(T / 2) + d_i + dots + d_k quad (i <= k), quad
+    "score"_j = "round"((r_((C)) - r_j) / (r_((C)) - m) floor(T / 2)) quad (r_j >= m). $ <eq-hybrid>
+  Every closer candidate gets $floor(T slash 2)$ or more and every other one that or less,
+  so the two halves never cross. The voter tells the near candidates apart by their gaps
+  and the far ones by distance alone, and the far ones do not move the cut among the near
+  ones.
 
 A voter as far from every candidate gives them all the top score. By every rule the
 closest candidate gets the top score and the farthest $0$, a closer candidate never gets
@@ -874,34 +888,57 @@ of distance has to be chosen.
 
 *The divisor $delta$.* $delta = 1$ is D'Hondt's method, which favours the large gaps;
 $delta = 1/2$ is Sainte-Laguë's, which on average favours neither. The _D'Hondt δ_
-slider of the web UI goes from $0.5$ to $1$ in steps of $0.01$, by default $0.8$
-(`DELTA` in `score.py`). A lower $delta$ gives the small gaps more steps. The distances
-$0.1$, $0.5$, $0.65$, $0.8$, $0.9$ and $1$ have one large gap, $0.4$, and small ones of
-$0.15$ and $0.1$; with $L = 6$, $delta = 0.5$ gives the scores $5, 3, 2, 1, 0, 0$ and
-$delta = 0.8$ or $1$ gives $5, 2, 1, 0, 0, 0$ (`Score` gives $5, 3, 2, 1, 1, 0$). Towards
-$delta = 0$ every gap gets a step first, which is Borda when there are enough of them; a
-large $delta$ gives every step to the largest gap.
+slider of the web UI sets it for `ScoreDH` and `ScoreHybrid`, from $0.5$ to $1$ in steps
+of $0.01$, by default $0.8$ (`DELTA` in `score.py`). A lower $delta$ gives the small gaps
+more steps. The distances $0.1$, $0.5$, $0.65$, $0.8$, $0.9$ and $1$ have one large gap,
+$0.4$, and small ones of $0.15$ and $0.1$; with $L = 6$, $delta = 0.5$ gives the scores
+$5, 3, 2, 1, 0, 0$ and $delta = 0.8$ or $1$ gives $5, 2, 1, 0, 0, 0$ (`Score` gives
+$5, 3, 2, 1, 1, 0$). Towards $delta = 0$ every gap gets a step first, which is Borda
+when there are enough of them; a large $delta$ gives every step to the largest gap.
+`ScoreHybrid` gives these distances $5, 2, 2, 1, 0, 0$ at any of these $delta$: the
+midrange is $0.55$, the closer candidates $0.1$ and $0.5$ have the gap $0.4$ between them
+and $0.05$ to the midrange, and all three upper steps go to $0.4$; the farther ones get
+$2$ times their parts $0.78$, $0.44$ and $0.22$ of the way from $0.55$ to $1$, rounded.
 
 For $delta <= 1$ every gap stays within $C - 1$ steps of its share
 $(L - 1) g_k slash (r_((C)) - r_((1)))$, and with $delta = 1$ it never gets less than the
 share rounded down. One more level adds a step to one gap and takes none away. The large
 gaps gain about the same number of steps at any $L$ (about $0.6$ for $delta = 1$), so as
 a part of the top score their advantage fades: as $L$ grows, `ScoreDH` comes closer to
-`Score`, and `ScoreAvg` to its $t_i$.
+`Score`, and `ScoreAvg` to its $t_i$. So does `ScoreHybrid`: since
+$r_((C)) - m = (r_((C)) - r_((1))) slash 2$, its two halves are the two halves of the
+part of the way of @eq-range.
 
 *Two levels: approval.* With $L = 2$ the voter approves the candidates with the top
 score, from the closest alone to all but the farthest, and the mean score is the share of
 the voters who approve. `Score` approves the candidates closer than halfway between the
 closest and the farthest, `ScoreDH`, whatever $delta$, those above the largest gap
+(ties: the first), `ScoreHybrid`, whatever $delta$, those above the largest gap among
+the candidates closer than halfway, the gap from the last of them to halfway included
 (ties: the first), and `ScoreAvg` those closer than the mean distance,
 
 $ r_i < overline(r) $ <eq-avg-cut>
 
-(at $overline(r)$ the half is rounded to $0$: not approved). For two and for three
-candidates the three are the same ballot: for three, the middle candidate is approved by
-@eq-avg-cut when $3 r_((2)) < r_((1)) + r_((2)) + r_((3))$, that is
-$r_((2)) - r_((1)) < r_((3)) - r_((2))$, as by the other two. For more candidates they
+(at $overline(r)$ the half is rounded to $0$: not approved). For two candidates the four
+are the same ballot, and for three `Score`, `ScoreAvg` and `ScoreDH` are: the middle
+candidate is approved by @eq-avg-cut when $3 r_((2)) < r_((1)) + r_((2)) + r_((3))$, that
+is $r_((2)) - r_((1)) < r_((3)) - r_((2))$, as by the other two. `ScoreHybrid` approves
+it only when its gap from the closest is below its gap to halfway, that is closer than a
+quarter of the way, $r_((2)) < (3 r_((1)) + r_((3))) slash 4$. For more candidates all four
 differ.
+
+*Why the closer half.* The largest gap of `ScoreDH` may lie among candidates the voter
+does not consider at all. The distances $0$, $6$, $8$, $9$ and $20$ have the gaps $6$,
+$2$, $1$ and $11$; `ScoreDH` with two levels cuts at $11$ and approves four, as `Score`
+does. Their midrange is $10$, and among the closer four the gaps are $6$, $2$, $1$ and
+$1$ to the midrange, so `ScoreHybrid` approves only the closest. With six levels
+`ScoreDH` gives three of its five steps to the gap $11$ and the scores
+$5, 3, 3, 3, 0$, which do not tell $6$, $8$ and $9$ apart; `ScoreHybrid` gives
+$5, 3, 2, 2, 0$. The far candidates only set the midrange and get the lower part of the
+scale, in proportion to their distance as by `Score`. On real approval ballots this is
+what decides between the two: where the largest gap is among the far candidates,
+`ScoreDH` gets 62% of the voters' decisions right and `ScoreHybrid` 87%
+(@sec-score-data).
 
 *Why the mean.* With two levels `ScoreAvg` is the ballot that a voter with the utility
 $u_i = -r_i$ would choose if they knew nothing about how the others vote (Weber). Adding
@@ -915,13 +952,16 @@ never approves a candidate without approving every closer one. With more levels 
 expected gain of a ballot, $p thin C sum_i "score"_i (overline(r) - r_i)$, is linear in
 the scores, so this voter would still give only $0$ and the top score: the scores in
 between are sincere, not strategic. `ScoreAvg` keeps the mean as the middle of its scale.
+Real voters cut much earlier than the mean, and of the four rules `ScoreAvg` gets the
+fewest of their approval ballots right (@sec-score-data).
 
 *Distances, not their squares.* Take a voter who stands on a candidate, with the others
 at the squared distances $0.35$, $0.45$, $0.55$ and $1$. The distances are $0$, $0.59$,
 $0.67$, $0.74$ and $1$, with the gaps $0.59$, $0.08$, $0.07$ and $0.26$: the candidate
 at the voter is far ahead of the rest, and `ScoreDH` with two levels approves it alone.
 The squares have the gaps $0.35$, $0.10$, $0.10$ and $0.45$, which would put the cut
-before the last candidate and approve four.
+before the last candidate and approve four. Real ratings agree: squared distances fit
+them worst (@sec-score-data).
 
 *Curved borders.* A score of `Score` changes where its part of the way is half a score,
 $r_((C)) - r_i = (k + 1/2) slash (L - 1) dot (r_((C)) - r_((1)))$, and one of `ScoreAvg`
@@ -931,10 +971,13 @@ $C r_i = sum_j r_j$. A step of `ScoreDH` moves where two gaps tie,
 $ (l + delta) (r_a - r_b) = (k + delta) (r_c - r_d), $ <eq-gap-border>
 
 for the neighbours $a, b$ of one gap, which has $l$ steps, and $c, d$ of the other, which
-has $k$; with two levels $r_a - r_b = r_c - r_d$. Unlike the bisector of @eq-bisector
-these are curves: there the squares $|p|^2$ cancel, here the distances are not squared.
-The voters who give a candidate a score are therefore not a union of polygons
-(@fig-approval, left), and the mean score is not a sum of the edge terms of @sec-green.
+has $k$; with two levels $r_a - r_b = r_c - r_d$. A score of `ScoreHybrid` changes where
+one of its steps moves, by @eq-gap-border with $m$ for $r_a$ or $r_c$ at the gap to the
+midrange, where a candidate crosses the midrange, $2 r_i = r_((1)) + r_((C))$, and where
+a score of its lower half is half a score. Unlike the bisector of @eq-bisector these are
+curves: there the squares $|p|^2$ cancel, here the distances are not squared. The voters
+who give a candidate a score are therefore not a union of polygons (@fig-approval, top),
+and the mean score is not a sum of the edge terms of @sec-green.
 
 *Shares from a grid.* Let $q_i$ be the mean score of $c_i$ as a part of the top score,
 and $u_i = 1 - q_i$ the part not given; with two levels $u_i$ is the share of the voters
@@ -1000,9 +1043,10 @@ the mean number of approved candidates.
 
 #figure(
   image("figures/approval.png", width: 100%),
-  caption: [Two levels. Left: the voters who approve D with `ScoreDH` (above the largest
-    gap) and with `ScoreAvg` (closer than the mean distance); the borders are curves.
-    Right: the two diagrams (candidates A–E, Beta voters, `rms`, $D = 0.2$).],
+  caption: [Two levels. Top: the voters who approve D with `ScoreDH` (above the largest
+    gap), with `ScoreHybrid` (above the largest gap of the closer half) and with
+    `ScoreAvg` (closer than the mean distance); the borders are curves. Bottom: the three
+    diagrams (candidates A–E, Beta voters, `rms`, $D = 0.2$).],
 ) <fig-approval>
 
 *Two levels.* In @fig-approval `ScoreDH` gives D 22% of the square and C nothing. C and
@@ -1010,21 +1054,170 @@ B are close together, so a voter near them often has both above the largest gap:
 pixel of C itself 64% of the voters approve C and 69% approve B. `ScoreAvg` gives D, in
 the middle of A–E, 41% of the square, more than FPTP (14%), Schulze (25%) or Borda (31%),
 and A only 13%. A voter near A has B, C and E far away, which pulls the mean distance
-above that of D, so D is approved as well. A voter approves 2.4 candidates on average
-with `ScoreAvg` and 2.2 with `ScoreDH`.
+above that of D, so D is approved as well. `ScoreHybrid` gives D 16% of the square, near
+FPTP, and A 32%: it approves D only where D is one of the near candidates and no larger
+gap among them comes before it. A voter approves 2.4 candidates on average with
+`ScoreAvg`, 2.2 with `ScoreDH` and 1.5 with `ScoreHybrid`.
 
 #figure(
   image("figures/score.png", width: 100%),
-  caption: [The three rules at the default of six levels, `ScoreDH` with $delta = 0.8$
-    (candidates A–E, Beta voters, `rms`, $D = 0.2$).],
+  caption: [The four rules at the default of six levels, `ScoreDH` and `ScoreHybrid` with
+    $delta = 0.8$ (candidates A–E, Beta voters, `rms`, $D = 0.2$).],
 ) <fig-score>
 
-*Six levels.* With six levels the three rules are close (@fig-score): D wins 29%, 30%
-and 28% of the square with `Score`, `ScoreAvg` and `ScoreDH`, and A 24%, 23% and 24%. The
-mean scores of the voters of the whole square are close as well, D $3.15$, $3.20$ and
-$3.12$ of $5$. With two levels the rules are far apart (D 22% with `ScoreDH` and 41%
-with `ScoreAvg`); with more levels each rule is nearer to its part of the way, and
-`Score` and `ScoreDH` to the same one.
+*Six levels.* With six levels the four rules are close (@fig-score): D wins 29%, 30%,
+28% and 27% of the square with `Score`, `ScoreAvg`, `ScoreDH` and `ScoreHybrid`, and A
+24%, 23%, 24% and 25%. The mean scores of the voters of the whole square are close as
+well, D $3.15$, $3.20$, $3.12$ and $2.95$ of $5$; those of `ScoreHybrid` are the lowest
+for every candidate, as its farther half has only two of the five steps. With two levels
+the rules are far apart (D 16% with `ScoreHybrid`, 22% with `ScoreDH` and 41% with
+`ScoreAvg`); with more levels each rule is nearer to its part of the way, and `Score`,
+`ScoreDH` and `ScoreHybrid` to the same one.
+
+== Score rules on real ballots <sec-score-data>
+
+Each rule of @sec-score is an assumption about how a voter turns distances into scores.
+It can be checked where the same people gave both something a distance follows from and
+a ballot or rating of the same candidates. Three public data sets do (@tab-ballot-data);
+`docs/ballots.py` downloads them and prints every number of this section
+(`uv run --with pandas --with rdata python docs/ballots.py`). Every rule depends on the
+distances only up to a common scale and shift, so any of these distances gives the same
+ballot as the distance in a plane would.
+
+#figure(
+  align(center, table(
+    columns: (auto, 1fr, 1fr, auto),
+    align: (left, left, left, left),
+    stroke: none,
+    table.hline(),
+    [data], [people and candidates], [distance], [ballot],
+    table.hline(stroke: 0.5pt),
+    [#link("https://zenodo.org/records/1199545")[Voter Autrement 2017], online], [10 108
+      participants, the 11 candidates of the French presidential election],
+      [100 minus their opinion, 0–100], [approval],
+    [`perfume_ideal`, #link("https://cran.r-project.org/package=SensoMineR")[SensoMineR]],
+      [103 consumers, 14 perfumes], [perceived to ideal profile, 21 attributes],
+      [liking 1–9],
+    [`cream_id`, SensoMineR], [86 consumers, 9 chocolate creams], [perceived to ideal
+      profile, 13 attributes], [liking 0–10],
+    [#link("https://cses.org")[CSES] Integrated Module], [235 030 respondents, 3 to 9
+      parties each, 1996–2021], [left–right, as the respondent placed self and party],
+      [like–dislike 0–10],
+    table.hline(),
+  )),
+  caption: [Data sets that pair a distance with a ballot or rating of the same candidates.],
+) <tab-ballot-data>
+
+*Approval.* In the Voter Autrement experiment every participant cast two ballots of
+different kinds, drawn at random, and then gave each candidate an opinion on a slider
+from 0 to 100. Of the 37 726 participants, 10 479 cast an approval ballot and gave every
+opinion; 3.4% of them approved no one and 0.1% everyone, which no rule does, and the
+other 10 108 approve 2.85 candidates on average (median 3). With their distances, the
+four rules with two levels approve:
+
+#figure(
+  align(center, table(
+    columns: 6,
+    align: (left, right, right, right, right, right),
+    stroke: none,
+    table.hline(),
+    [], [approved], [decisions right], [ballots right], [approved too], [not approved],
+    table.hline(stroke: 0.5pt),
+    [voters], [2.85], [], [], [], [],
+    [`Score`], [4.22], [85.0%], [23.5%], [1.51], [0.14],
+    [`ScoreAvg`], [4.99], [79.3%], [10.3%], [2.21], [0.07],
+    [`ScoreDH`], [4.13], [81.7%], [29.1%], [1.64], [0.37],
+    [`ScoreHybrid`], [2.21], [89.7%], [38.2%], [0.25], [0.88],
+    table.hline(),
+  )),
+  caption: [The approval ballots of the four rules against those of the 10 108 voters of
+    Voter Autrement 2017: candidates approved per voter, the share of the 11 decisions per
+    voter and of whole ballots the rule gets right, and per voter the candidates it
+    approves that the voter does not, and those it leaves out that the voter approves.],
+) <tab-approval-data>
+
+`ScoreHybrid` gets the most decisions and the most whole ballots right
+(@tab-approval-data). The other three approve too many, `ScoreAvg` most: of eleven
+candidates most are far from any one voter, and their distances raise the mean, so the
+cut of @eq-avg-cut falls late. The Weber argument for the mean of @sec-score does not
+describe these voters. `ScoreHybrid` errs the other way, by fewer: it leaves out 0.88
+approvals per voter.
+
+*Where voters cut.* On the scale of `Score`, from $1$ at the closest candidate to $0$ at
+the farthest, the farthest candidate a voter approves is at $0.76$ (median), the
+closest one the voter does not approve at $0.60$, and for 80% of the voters every
+approved candidate is closer than every other one. Approving above $0.7$ instead of
+$0.5$ would get 91.7% of the decisions right, approving 2.72 candidates: halfway is too
+low a cut, because the farthest candidate, which sets the scale, is far from the ones a
+voter considers.
+
+*The largest gap, near or far.* `ScoreDH` cuts at the largest gap. For 72% of the
+voters that gap starts closer than the midrange; there `ScoreDH` is nearly as right as
+`ScoreHybrid` (89.2% and 90.6% of the decisions, 39.7% and 42.0% of the ballots), and
+both better than `Score` (86.5%, 27.5%). For the other 28% the largest gap starts at the
+midrange or beyond, among candidates the voter rejects anyway. `ScoreDH` then approves
+7.2 candidates where the voters approve 3.1 and gets 62.4% of the decisions and 1.6% of
+the ballots right; `ScoreHybrid`, which looks for the gap among the closer candidates
+only, still 87.4% and 28.5% (`Score` 81.1% and 13.1%). Voters do cut at a gap, but at a
+gap among the candidates they consider, and that is the rule of `ScoreHybrid`.
+
+*Many levels.* The ratings of the other three data sets are on many levels and were
+given without any stake: few people use the whole scale (24% of the perfume raters give
+a 9, 32% a 1; for the creams 8% give a 10 and 17% a 0). A ballot does use it, so each
+person's ratings are mapped to $0$ at their lowest and $1$ at their highest, and compared
+with the ballot of each rule with as many levels as the rating scale:
+
+#figure(
+  align(center, table(
+    columns: 4,
+    align: (left, right, right, right),
+    stroke: none,
+    table.hline(),
+    [], [perfumes (0–8)], [creams (0–10)], [CSES (0–10)],
+    table.hline(stroke: 0.5pt),
+    [`Score`], [1.78], [2.16], [2.90],
+    [`ScoreAvg`], [1.74], [2.14], [2.87],
+    [`ScoreDH`], [1.93], [2.24], [2.89],
+    [`ScoreHybrid`], [1.83], [2.18], [2.88],
+    table.hline(),
+  )),
+  caption: [Mean distance between each rule's ballot and the ratings mapped to the whole
+    scale, in points of the scale, per person and then over the people.],
+) <tab-graded-data>
+
+The four rules are within $0.2$ points of each other (@tab-graded-data), while each
+misses by $1.7$ to $2.9$ points, and the same perfume rated twice by the same person
+differs by $2.0$ points. Ratings on many levels cannot tell the rules apart; approval
+ballots can, as @sec-score already found for the diagrams: the rules differ most with two
+levels.
+
+*Distances, not their squares.* `Score` on the distances to a power $p$ misses by:
+
+#align(center, table(
+  columns: 5,
+  align: (left, right, right, right, right),
+  stroke: none,
+  table.hline(),
+  [], [$p = 0.5$], [$p = 0.75$], [$p = 1$], [$p = 2$],
+  table.hline(stroke: 0.5pt),
+  [perfumes], [1.82], [1.79], [1.78], [2.01],
+  [creams], [2.19], [2.19], [2.16], [2.29],
+  [CSES], [2.90], [2.86], [2.90], [3.17],
+  table.hline(),
+))
+
+The squares are the worst in all three; the distances themselves are best for the
+products and within $0.04$ of the best for the parties. The rules use the distances, as
+argued in @sec-score.
+
+*Limits.* The Voter Autrement participants chose to take part online and lean left
+(41% of them voted Mélenchon in the first round, 21% Macron, 16% Hamon). They gave
+their opinions after voting, so the opinions may have been fitted to the ballots, and no
+ballot of the experiment counted. The opinions are utilities, not distances in a plane:
+where utility is not linear in distance, the cut falls elsewhere in the plane. And the
+closer half of `ScoreHybrid` was chosen on these data, so its lead in
+@tab-approval-data is measured on the data it was chosen on; the other rounds of Voter
+Autrement (2012, 2022) would test it on others.
 
 == Ties <sec-ties>
 

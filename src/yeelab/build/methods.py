@@ -13,6 +13,7 @@ from yeelab.build.blocks import (
     Score,
     ScoreAvg,
     ScoreDH,
+    ScoreHybrid,
     StrongestPaths,
     Tally,
     Unbeaten,
@@ -40,6 +41,7 @@ king_runoff = Runoff(M, koth, irv)                   # the king of the hill agai
 score_range = Highest(Tally(Score(6)))
 score_avg = Highest(Tally(ScoreAvg(6)))              # ... with the mean distance in the middle
 score_dh = Highest(Tally(ScoreDH(6)))                # ... the steps shared out among the gaps
+score_hybrid = Highest(Tally(ScoreHybrid(6)))        # ... among the gaps of the closer half
 
 METHODS: dict[str, Winner] = {
     "fptp": fptp,
@@ -56,4 +58,5 @@ METHODS: dict[str, Winner] = {
     "score_range": score_range,
     "score_avg": score_avg,
     "score_dh": score_dh,
+    "score_hybrid": score_hybrid,
 }

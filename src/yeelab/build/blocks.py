@@ -8,7 +8,7 @@ Every block has one type of output:
 
     Ballot           Plurality(), BordaCount(),         points one voter gives a candidate
                      Score(levels), ScoreAvg(levels), ScoreDH(levels, delta=...),
-                     Mix(first, second, share=...)
+                     ScoreHybrid(levels, delta=...), Mix(first, second, share=...)
     CandidateTotals  Tally(ballot), Weakest(diffs)      a total of each candidate at a point
     PairShares       Pairwise()                         share of the voters ranking c above e
     PairDiffs        Margins(shares),                   how strongly c beats e (antisymmetric)
@@ -27,8 +27,9 @@ the farthest, and to the others, for Score(levels), in proportion to where their
 is between the two; ScoreAvg(levels) likewise, with the mean distance in the middle of
 the scale; ScoreDH(levels, delta=...) shares the steps from the top score to 0 out among
 the gaps between neighbours in the order of distance, each to the gap with the largest
-gap / (its steps + delta), D'Hondt's rule at delta = 1. With two levels each is an
-approval ballot. Its total is the mean score as a part of the top score, counted down
+gap / (its steps + delta), D'Hondt's rule at delta = 1; ScoreHybrid(levels, delta=...)
+does that for the candidates closer than halfway, on the upper half of the scale, and
+Score's for the others, on the lower half. With two levels each is an approval ballot. Its total is the mean score as a part of the top score, counted down
 from 1: a voter who does not give a candidate the top score takes off what is missing.
 Mix(first, second, share=s) is two kinds of voters: s of them mark `second`, the others
 `first`.
@@ -65,7 +66,7 @@ import numpy as np
 
 from yeelab.build.rounds import drop_below_mean, drop_lowest
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Scored, Share, Voters
-from yeelab.score import AVG, DELTA, DHONDT, RANGE
+from yeelab.score import AVG, DELTA, DHONDT, HYBRID, RANGE
 from yeelab.voting import CYCLE, irv_rounds
 
 Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) at every point
@@ -304,14 +305,31 @@ class ScoreDH(Score):
         super().__post_init__()
         delta = self.delta
         if isinstance(delta, bool) or not isinstance(delta, int | float) or not 0 < delta < np.inf:
-            raise ValueError(f"ScoreDH delta must be a number above 0, got {delta!r}")
+            raise ValueError(f"{type(self).__name__} delta must be a number above 0, got {delta!r}")
 
     @property
     def scored(self) -> Scored:
         return Scored(self.levels, self.rule, self.delta)
 
     def __repr__(self):
-        return f"ScoreDH({self.levels}, delta={self.delta!r})"
+        return f"{type(self).__name__}({self.levels}, delta={self.delta!r})"
+
+
+@dataclass(frozen=True, repr=False)  # the fields and repr of ScoreDH, with this name
+class ScoreHybrid(ScoreDH):
+    """A score from 0 to levels - 1 for every candidate (yeelab.score): ScoreDH for the
+    candidates closer than halfway between the closest and the farthest, and Score for
+    the others, each on its own half of the scale. The upper ceil((levels - 1) / 2) steps
+    are shared out as by ScoreDH among the gaps between the closer candidates and the gap
+    from the last of them to halfway; the farther candidates get the lower
+    floor((levels - 1) / 2) in proportion to where their distance is between halfway and
+    the farthest. Every closer candidate gets a score at least that of every farther one.
+
+    The total is that of Score. ScoreHybrid(2) is an approval ballot for any delta: the
+    voter approves the candidates above the largest gap among those closer than halfway,
+    the gap to halfway included."""
+
+    rule = HYBRID
 
 
 @dataclass(frozen=True)

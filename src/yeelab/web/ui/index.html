@@ -685,7 +685,7 @@
       "for the farthest. Two are an approval ballot. For the score methods only.";
     levelsSlider.addEventListener("input", () => { pickLevels(); compute(dragGrid); });
     levelsSlider.addEventListener("change", () => compute());
-    // The δ slider is the divisor of Score (D'Hondt). It recomputes like the others.
+    // The δ slider is the divisor of Score (D'Hondt) and Score (hybrid). It recomputes like the others.
     deltaMethods = config.deltas;
     function pickDelta() {
       delta = Number(deltaSlider.valueAsNumber.toFixed(2));  // the step is 0.01: no 0.8100000000000001
@@ -697,7 +697,7 @@
     });
     deltaSlider.title = "Each step of a Score (D'Hondt) ballot goes to the gap with the largest " +
       "gap / (its steps + δ): 1 is D'Hondt, which favours the large gaps; a lower δ favours them " +
-      "less, down to Sainte-Laguë at 0.5. For Score (D'Hondt) only.";
+      "less, down to Sainte-Laguë at 0.5. For Score (D'Hondt) and Score (hybrid) only.";
     deltaSlider.addEventListener("input", () => { pickDelta(); compute(dragGrid); });
     deltaSlider.addEventListener("change", () => compute());
     choices(pixelMedians, config.pixel_medians, name => {

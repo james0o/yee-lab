@@ -17,3 +17,6 @@ tests/__pycache__/
 # output of the pixel pipeline
 src/yeelab/pixels/plots/
 src/yeelab/pixels/cache/
+
+# public data sets downloaded by docs/ballots.py
+docs/data/

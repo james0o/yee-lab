@@ -16,7 +16,7 @@ from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import AfterValidator, BaseModel, Field, field_validator
 
-from yeelab.build import Highest, Score, ScoreAvg, ScoreDH, Tally, Winner
+from yeelab.build import Highest, Score, ScoreAvg, ScoreDH, ScoreHybrid, Tally, Winner
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
 from yeelab.margin.regions import MARGINS, regions
@@ -48,11 +48,12 @@ assert DEVIATION in DEVIATIONS
 SCORE_LEVELS = 6
 MAX_LEVELS = 11
 MIN_DELTA, MAX_DELTA, DELTA_STEP = 0.5, 1.0, 0.01
-DELTAS = ["score_dh"]
+DELTAS = ["score_dh", "score_hybrid"]
 SLIDERS = {
     "score_range": lambda levels, delta: Highest(Tally(Score(levels))),
     "score_avg": lambda levels, delta: Highest(Tally(ScoreAvg(levels))),
     "score_dh": lambda levels, delta: Highest(Tally(ScoreDH(levels, delta=delta))),
+    "score_hybrid": lambda levels, delta: Highest(Tally(ScoreHybrid(levels, delta=delta))),
 }
 assert all(MARGINS[name] == build(SCORE_LEVELS, DELTA) for name, build in SLIDERS.items())
 assert MIN_DELTA <= DELTA <= MAX_DELTA and set(DELTAS) <= set(SLIDERS)
@@ -114,6 +115,17 @@ METHOD_INFO = {
                  "voter approves the candidates above the largest gap, and with more categories "
                  "than candidates it is still not Borda. The expression is the sliders' "
                  "defaults."},
+    "score_hybrid": {"label": "Score (hybrid)", "description": "Score (hybrid): a voter gives "
+                     "the closest candidate the top score, the farthest 0, and splits the "
+                     "candidates at halfway between those two. The closer ones share the upper "
+                     "half of the scale as in Score (D'Hondt): its steps go to the gaps between "
+                     "them and the gap from the last of them to halfway. The farther ones get "
+                     "the lower half in proportion to where their distance is between halfway "
+                     "and the farthest, as in Score (range). The highest mean score wins. The "
+                     "sliders below set the number of categories (scores) and δ; with two "
+                     "categories, for any δ, a voter approves the candidates above the largest "
+                     "gap among those closer than halfway, the gap to halfway included. The "
+                     "expression is the sliders' defaults."},
     "voronoi": {"label": "Voronoi", "description": "The nearest candidate to the pixel, without "
                 "voters: what the ranked methods draw when all voters are at their pixel. With "
                 "pixels at geometric medians it is drawn only where the voters above have one, "
@@ -177,7 +189,7 @@ class DiagramRequest(BaseModel):
     # towards their geometric median. The UI moves the diagram between the two in steps.
     shift: float = Field(1.0, ge=0, le=1)
     deviation: float = DEVIATION
-    levels: int = Field(SCORE_LEVELS, ge=2, le=MAX_LEVELS)  # score and score_dh only
+    levels: int = Field(SCORE_LEVELS, ge=2, le=MAX_LEVELS)  # SLIDERS only
     delta: float = Field(DELTA, ge=MIN_DELTA, le=MAX_DELTA)  # DELTAS only
     grid: int = Field(FINAL_GRID, ge=32, le=512)
 
