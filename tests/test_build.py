@@ -37,6 +37,7 @@ from yeelab.build import (
     PROFILE,
     BordaCount,
     Eliminate,
+    Finalist,
     Fallback,
     Highest,
     Margins,
@@ -45,11 +46,13 @@ from yeelab.build import (
     Plurality,
     Runoff,
     Score,
+    ScoreComparisons,
     ScoreAvg,
     ScoreCluster,
     ScoreDH,
     ScoreHybrid,
     Scored,
+    ScoredPairwise,
     StrongestPaths,
     Tally,
     Unbeaten,
@@ -466,6 +469,27 @@ def test_runoff_of_the_same_and_of_swapped_finalists(d):
         assert ((winner == a) & (a != b)).any() and ((winner == b) & (a != b)).any()
 
 
+def test_star_uses_the_two_highest_score_totals_and_abstaining_score_comparisons():
+    ballot = Score(6, power=1.5)
+    scored = ballot.scored
+    score_gaps = np.array([[0.0, 0.2, 0.8], [0.0, 0.2, 0.7], [0.0, 0.0, 0.8]])
+    score_diffs = np.zeros((3, 3, 3))
+    score_diffs[1:, 0, 1], score_diffs[1:, 1, 0] = -0.4, 0.4
+    voters = Voters(
+        unscored={scored: score_gaps},
+        scored_pairwise={ScoredPairwise(scored): score_diffs},
+    )
+
+    method = METHODS["star"]
+    winner, margin = method.evaluate(voters)
+    np.testing.assert_array_equal(winner, [0, 1, 1])
+    np.testing.assert_array_equal(margin, [0.0, 0.4, 0.4])
+    assert PAIRWISE not in method.needs
+    assert method.needs == {scored, ScoredPairwise(scored)}
+    comparisons = ScoreComparisons(ballot).evaluate(voters)
+    np.testing.assert_array_equal(comparisons[0], 0.0)  # tied ratings abstain
+
+
 @pytest.mark.parametrize("method", ELIMINATIONS, ids=repr)
 def test_eliminations_match_reference(profile, method):
     """Both the method (for irv the compiled voting.irv_rounds) and its rounds with
@@ -729,7 +753,7 @@ def test_condorcet_ties():
         np.testing.assert_array_equal(margin, 0.0, err_msg=name)
 
 
-def test_methods_are_the_twelve_expressions():
+def test_methods_are_the_thirteen_expressions():
     pairwise = Pairwise()
     margins = Margins(pairwise)
     assert METHODS == {
@@ -748,9 +772,13 @@ def test_methods_are_the_twelve_expressions():
             Unbeaten(margins, against=Highest(Tally(Plurality())), order=Tally(Plurality())),
             Eliminate(Tally(Plurality()), how="min")),
         "score": Highest(Tally(Score(6, power=1.5))),
+        "star": Runoff(
+            ScoreComparisons(Score(6, power=1.5)),
+            Finalist(Tally(Score(6, power=1.5)), 0),
+            Finalist(Tally(Score(6, power=1.5)), 1)),
     }
     assert list(METHODS) == ["fptp", "irv", "borda", "baldwin", "nanson", "schulze",
-                             "condorcet", "minimax", "black", "koth", "king_runoff", "score"]
+                             "condorcet", "minimax", "black", "koth", "king_runoff", "score", "star"]
 
 
 def test_repr_is_the_expression():
@@ -768,6 +796,10 @@ def test_repr_is_the_expression():
         "Unbeaten(Margins(Pairwise()), against=Highest(Tally(Plurality())), order=Tally(Plurality())), "
         'Eliminate(Tally(Plurality()), how="min"))')
     assert repr(METHODS["score"]) == "Highest(Tally(Score(6, power=1.5)))"
+    assert repr(METHODS["star"]) == (
+        "Runoff(ScoreComparisons(Score(6, power=1.5)), "
+        "Finalist(Tally(Score(6, power=1.5)), place=0), "
+        "Finalist(Tally(Score(6, power=1.5)), place=1))")
     challenged =Unbeaten(StrongestPaths(Margins(Pairwise())), against=METHODS["black"],
                           order=Weakest(Margins(Pairwise())))
     for method in [*METHODS.values(), *ELIMINATIONS, *BALLOTS, *PAIR_BLOCKS, challenged, *RUNOFFS]:

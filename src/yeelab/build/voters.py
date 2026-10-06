@@ -41,7 +41,14 @@ class Scored:
     power: float = POWER
 
 
-Share = Literal["first", "pairwise", "profile"] | Scored
+@dataclass(frozen=True)
+class ScoredPairwise:
+    """Strict pairwise preferences induced by the scores on one cardinal ballot."""
+
+    scored: Scored
+
+
+Share = Literal["first", "pairwise", "profile"] | Scored | ScoredPairwise
 FIRST: Share = "first"
 PAIRWISE: Share = "pairwise"
 PROFILE: Share = "profile"
@@ -56,6 +63,7 @@ class Voters:
     rankings: np.ndarray | None = None
     probs: np.ndarray | None = None
     unscored: dict[Scored, np.ndarray] | None = None
+    scored_pairwise: dict[ScoredPairwise, np.ndarray] | None = None
 
     @property
     def _marked(self) -> np.ndarray:

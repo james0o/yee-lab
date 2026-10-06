@@ -477,3 +477,77 @@ def unscored(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
                                float(kappa), float(power), sub, a, b, out),
         len(xs) - 1, ROWS)
     return out
+
+
+@njit(cache=True, nogil=True, error_model="numpy")
+def _comparisons(xs, ys, candidates, top, rule, delta, mu, kappa, power, sub, start, stop, out):
+    """Strict score comparisons over cells [xs[i], xs[i + 1]], into out (C, C, X, Y)."""
+    n = candidates.shape[0]
+    r, order, steps = np.empty(n), np.empty(n, dtype=np.int64), np.empty(n, dtype=np.int64)
+    work, back = np.empty((4, max(n, top + 1))), np.empty((n, top + 1), dtype=np.int64)
+    left, right = np.empty(ys.size, dtype=np.int64), np.empty(ys.size, dtype=np.int64)
+    counts = np.empty((n, n), dtype=np.int64)
+    for j in range(ys.size):
+        left[j] = _ballot(xs[start], ys[j], candidates, top, rule, delta, mu, kappa, power, r, order, steps,
+                          work, back)
+    for i in range(start, stop):
+        for j in range(ys.size):
+            right[j] = _ballot(xs[i + 1], ys[j], candidates, top, rule, delta, mu, kappa, power,
+                               r, order, steps, work, back)
+        for j in range(ys.size - 1):
+            code = left[j]
+            if code == left[j + 1] and code == right[j] and code == right[j + 1]:
+                for c in range(n):
+                    below_c = (code >> (BITS * c)) & MASK
+                    for e in range(c + 1, n):
+                        below_e = (code >> (BITS * e)) & MASK
+                        difference = 1 if below_c < below_e else -1 if below_c > below_e else 0
+                        out[c, e, i, j] = difference
+                        out[e, c, i, j] = -difference
+                continue
+            counts[:, :] = 0
+            for a in range(sub):
+                x = xs[i] + (a + 0.5) / sub * (xs[i + 1] - xs[i])
+                for b in range(sub):
+                    y = ys[j] + (b + 0.5) / sub * (ys[j + 1] - ys[j])
+                    code = _ballot(x, y, candidates, top, rule, delta, mu, kappa, power, r, order, steps,
+                                   work, back)
+                    for c in range(n):
+                        below_c = (code >> (BITS * c)) & MASK
+                        for e in range(c + 1, n):
+                            below_e = (code >> (BITS * e)) & MASK
+                            if below_c < below_e:
+                                counts[c, e] += 1
+                                counts[e, c] -= 1
+                            elif below_c > below_e:
+                                counts[c, e] -= 1
+                                counts[e, c] += 1
+            for c in range(n):
+                for e in range(c + 1, n):
+                    difference = counts[c, e] / (sub * sub)
+                    out[c, e, i, j] = difference
+                    out[e, c, i, j] = -difference
+        left, right = right, left
+
+
+def comparisons(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
+                delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
+                power: float = POWER) -> np.ndarray:
+    """short[c, e, i, j] = share strictly scoring c above e minus e above c among
+    voters in each rectangle [xs[i], xs[i + 1]] x [ys[j], ys[j + 1]]. Voters who give
+    the pair equal scores contribute 0. Curved score borders are sampled at sub x sub
+    points in cells where the ballot changes; output shape is (C, C, X, Y)."""
+    xs = np.ascontiguousarray(xs, dtype=np.float64)
+    ys = np.ascontiguousarray(ys, dtype=np.float64)
+    candidates = np.ascontiguousarray(candidates, dtype=np.float64)
+    if not 2 <= len(candidates) <= MAX_CANDIDATES:
+        raise ValueError(f"score ballots need 2 to {MAX_CANDIDATES} candidates, got {len(candidates)}")
+    if not 2 <= levels <= MAX_LEVELS:
+        raise ValueError(f"score ballots need 2 to {MAX_LEVELS} levels, got {levels}")
+    _check(rule, delta, mu, kappa, power)
+    out = np.zeros((len(candidates), len(candidates), len(xs) - 1, len(ys) - 1), dtype=np.float32)
+    threads.in_chunks(
+        lambda a, b: _comparisons(xs, ys, candidates, levels - 1, RULES.index(rule), float(delta), float(mu),
+                                 float(kappa), float(power), sub, a, b, out),
+        len(xs) - 1, ROWS)
+    return out

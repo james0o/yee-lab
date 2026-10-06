@@ -38,7 +38,7 @@ from yeelab import ranking_cells
 from yeelab.margin.shares import (GRID_CELLS, Model, _voter_grid, first_choice_shares, ranking_shares,
                                   unscored_shares)
 from yeelab.score import (AVG, CLUSTER, DELTA, DHONDT, HYBRID, KAPPA, MAX_CANDIDATES, MAX_LEVELS, MU, POWER, RANGE,
-                          RULES, distances, from_distances, scored, unscored)
+                          RULES, comparisons, distances, from_distances, scored, unscored)
 
 FIVE = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
 CANDIDATES = {2: np.random.default_rng(5).random((2, 2)), 3: np.random.default_rng(3).random((3, 2)),
@@ -520,6 +520,17 @@ def test_cluster_keeps_a_tight_cluster_with_few_levels_and_grades_it_with_many()
 def test_cluster_without_a_cost_of_splitting_is_range(levels):
     r = np.random.default_rng(levels).random((20_000, 6))
     np.testing.assert_array_equal(from_distances(r, levels, CLUSTER, mu=0.0), from_distances(r, levels, RANGE))
+
+
+def test_score_comparisons_count_strict_preferences_and_abstain_on_ties():
+    tied_candidates = np.full((3, 2), [0.5, 0.5])
+    tied = comparisons([0.4, 0.6], [0.4, 0.6], tied_candidates, 6, 1)
+    np.testing.assert_array_equal(tied, 0.0)
+
+    candidates = np.array([[0.0, 0.5], [1.0, 0.5]])
+    strict = comparisons([0.2, 0.3], [0.45, 0.55], candidates, 2, 1)
+    np.testing.assert_array_equal(strict[:, :, 0, 0], [[0.0, 1.0], [-1.0, 0.0]])
+
 
 # ---------------------------------------------------------------- Grid
 

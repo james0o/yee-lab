@@ -38,6 +38,7 @@ from yeelab.build.blocks import (
     BordaCount,
     CandidateTotals,
     Eliminate,
+    Finalist,
     Fallback,
     Highest,
     Margins,
@@ -48,6 +49,7 @@ from yeelab.build.blocks import (
     Plurality,
     Runoff,
     Score,
+    ScoreComparisons,
     ScoreAvg,
     ScoreCluster,
     ScoreDH,
@@ -59,11 +61,11 @@ from yeelab.build.blocks import (
     Winner,
 )
 from yeelab.build.methods import METHODS
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Scored, Share, Voters
+from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Scored, ScoredPairwise, Share, Voters
 
 __all__ = [
-    "Ballot", "BordaCount", "CandidateTotals", "Eliminate", "Fallback", "Highest", "Margins", "Mix",
-    "PairDiffs", "PairShares", "Pairwise", "Plurality", "Runoff", "Score", "ScoreAvg", "ScoreCluster",
-    "ScoreDH", "ScoreHybrid", "StrongestPaths", "Tally", "Unbeaten", "Weakest", "Winner", "METHODS",
-    "FIRST", "PAIRWISE", "PROFILE", "Scored", "Share", "Voters",
+    "Ballot", "BordaCount", "CandidateTotals", "Eliminate", "Finalist", "Fallback", "Highest", "Margins",
+    "Mix", "PairDiffs", "PairShares", "Pairwise", "Plurality", "Runoff", "Score", "ScoreComparisons",
+    "ScoreAvg", "ScoreCluster", "ScoreDH", "ScoreHybrid", "StrongestPaths", "Tally", "Unbeaten", "Weakest",
+    "Winner", "METHODS", "FIRST", "PAIRWISE", "PROFILE", "Scored", "ScoredPairwise", "Share", "Voters",
 ]

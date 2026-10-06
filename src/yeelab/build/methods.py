@@ -4,6 +4,7 @@ lists them (margin/regions.py MARGINS)."""
 from yeelab.build.blocks import (
     BordaCount,
     Eliminate,
+    Finalist,
     Fallback,
     Highest,
     Margins,
@@ -11,6 +12,7 @@ from yeelab.build.blocks import (
     Plurality,
     Runoff,
     Score,
+    ScoreComparisons,
     StrongestPaths,
     Tally,
     Unbeaten,
@@ -38,6 +40,9 @@ king_runoff = Runoff(M, koth, irv)                   # the king of the hill agai
 # closest and the farthest candidate, that part of the way to the power SCORE_POWER
 SCORE_POWER = 1.5  # the web UI's default; the one power that fits real ballots best (docs/math.pdf)
 score = Highest(Tally(Score(6, power=SCORE_POWER)))
+STAR_SCORE = Score(6, power=SCORE_POWER)
+STAR_TOTALS = Tally(STAR_SCORE)
+star = Runoff(ScoreComparisons(STAR_SCORE), Finalist(STAR_TOTALS, 0), Finalist(STAR_TOTALS, 1))
 
 METHODS: dict[str, Winner] = {
     "fptp": fptp,
@@ -52,4 +57,5 @@ METHODS: dict[str, Winner] = {
     "koth": koth,
     "king_runoff": king_runoff,
     "score": score,
+    "star": star,
 }

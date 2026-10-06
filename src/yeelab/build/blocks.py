@@ -13,11 +13,12 @@ Every block has one type of output:
     CandidateTotals  Tally(ballot), Weakest(diffs)      a total of each candidate at a point
     PairShares       Pairwise()                         share of the voters ranking c above e
     PairDiffs        Margins(shares),                   how strongly c beats e (antisymmetric)
-                     StrongestPaths(diffs)
+                     StrongestPaths(diffs), ScoreComparisons(Score(...))
     Winner           Highest(totals), Unbeaten(diffs),  winner and margin at every point
                      Eliminate(totals, how=...),
                      Fallback(first, second),
                      Unbeaten(diffs, against=winner, order=totals),
+                     Finalist(totals, place),
                      Runoff(diffs, first, second)
 
 A ranked ballot gives weight(k, C) points to the candidate at position k (0 = closest)
@@ -45,6 +46,9 @@ A diff s[c, e] = -s[e, c] says that c beats e where it is positive. PairDiffs ar
 transitive (PairDiffs.transitive) if the candidates that beat each other cannot form a
 cycle: Margins are not, StrongestPaths are.
 
+ScoreComparisons(Score(...)) compares the cardinal scores on each ballot: a voter who
+gives a pair equal scores abstains. It does not use ranked pairwise shares.
+
 Unbeaten(diffs) elects the candidate no one beats. Unbeaten(diffs, against=winner,
 order=totals) only asks that of the winner of `against`, the king: if someone beats it,
 the highest `order` total among those who do wins instead. King of the hill is
@@ -53,6 +57,9 @@ the highest `order` total among those who do wins instead. King of the hill is
 
 Runoff(diffs, first, second) puts the winners of two methods against each other: the
 one who beats the other on the diffs wins.
+Finalist(totals, place) picks the highest (place=0) or second-highest (place=1) total,
+with the margin to the third-highest total, so the top two stay finalists when their
+order switches.
 
 A Winner returns (winner, margin): the margin is >= 0, continuous in the shares and 0
 on every border between two winners, since margin/regions.py draws the borders as its
@@ -70,7 +77,7 @@ from typing import Literal
 import numpy as np
 
 from yeelab.build.rounds import drop_below_mean, drop_lowest
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Scored, Share, Voters
+from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Scored, ScoredPairwise, Share, Voters
 from yeelab.score import AVG, CLUSTER, DELTA, DHONDT, HYBRID, KAPPA, MU, POWER, RANGE
 from yeelab.voting import CYCLE, irv_rounds
 
@@ -477,6 +484,27 @@ class PairDiffs(Block):
 
 
 @dataclass(frozen=True)
+class ScoreComparisons(PairDiffs):
+    """Strict score-ballot preferences: voters giving both candidates the same score abstain."""
+
+    ballot: Score
+    transitive = False
+
+    def __post_init__(self):
+        _expect(self, self.ballot, Score, "a Score ballot")
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return frozenset({ScoredPairwise(self.ballot.scored)})
+
+    def evaluate(self, voters: Voters) -> np.ndarray:
+        return voters.scored_pairwise[ScoredPairwise(self.ballot.scored)]
+
+    def __repr__(self):
+        return f"ScoreComparisons({self.ballot!r})"
+
+
+@dataclass(frozen=True)
 class Margins(PairDiffs):
     """d - d^T: how much more of the voters rank c above e than e above c. Not transitive,
     the majorities can go round in a cycle."""
@@ -629,6 +657,39 @@ class Highest(Winner):
 
     def __repr__(self):
         return f"Highest({self.totals!r})"
+
+
+@dataclass(frozen=True)
+class Finalist(Winner):
+    """One of the top two candidates by totals; its margin is the second-to-third gap."""
+
+    totals: CandidateTotals
+    place: Literal[0, 1]
+
+    def __post_init__(self):
+        _expect(self, self.totals, CandidateTotals, "CandidateTotals")
+        if isinstance(self.place, bool) or self.place not in (0, 1):
+            raise ValueError(f"Finalist place must be 0 or 1, got {self.place!r}")
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return self.totals.needs
+
+    def evaluate(self, voters: Voters) -> Result:
+        totals = self.totals.evaluate(voters)
+        if totals.shape[-1] < 2:
+            raise ValueError("Finalist needs at least two candidates")
+        order = np.argsort(-totals, axis=-1, kind="stable")
+        winner = order[..., self.place]
+        if totals.shape[-1] == 2:
+            margin = np.full(totals.shape[:-1], np.inf)
+        else:
+            finalists = np.take_along_axis(totals, order[..., :3], axis=-1)
+            margin = finalists[..., 1] - finalists[..., 2]
+        return winner, margin
+
+    def __repr__(self):
+        return f"Finalist({self.totals!r}, place={self.place})"
 
 
 @dataclass(frozen=True)

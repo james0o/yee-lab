@@ -13,9 +13,11 @@ import pytest
 from fastapi.testclient import TestClient
 from matplotlib.path import Path as MplPath
 
-from yeelab.build import Highest, Mix, Score, ScoreAvg, ScoreCluster, ScoreDH, ScoreHybrid, Scored, Tally, Voters
+from yeelab.build import (
+    Highest, Mix, Score, ScoreAvg, ScoreCluster, ScoreDH, ScoreHybrid, Scored, ScoredPairwise, Tally, Voters,
+)
 from yeelab.margin.regions import MARGINS, grid, regions, winners
-from yeelab.margin.shares import Model, first_choice_shares, unscored_shares
+from yeelab.margin.shares import Model, first_choice_shares, score_comparison_shares, unscored_shares
 from yeelab.pixels import beta as pixel_beta, methods as pixel_methods, normal as pixel_normal
 from yeelab.ranking_cells import pixel_medians
 from yeelab.voting import irv_rounds
@@ -46,13 +48,20 @@ def _pixel_winners(method, model, rankings, probs):
     if method in pixel_methods.METHODS:
         return pixel_methods.METHODS[method](rankings, probs)
     scores = [share for share in MARGINS[method].needs if isinstance(share, Scored)]
-    if not scores:
+    score_pairs = [share for share in MARGINS[method].needs if isinstance(share, ScoredPairwise)]
+    if not scores and not score_pairs:
         return MARGINS[method].evaluate(_voters(rankings, probs))[0]
     centres = pixel_medians(probs.shape[0])
     unscored = {share: unscored_shares(CANDIDATES, model, share.levels, centres, share.rule, share.delta,
                                        mu=share.mu, kappa=share.kappa, power=share.power)
                 for share in scores}
-    return MARGINS[method].evaluate(Voters(unscored=unscored))[0]
+    score_pairwise = {
+        share: score_comparison_shares(CANDIDATES, model, centres, share.scored.levels, share.scored.rule,
+                                       share.scored.delta, mu=share.scored.mu, kappa=share.scored.kappa,
+                                       power=share.scored.power)
+        for share in score_pairs
+    }
+    return MARGINS[method].evaluate(Voters(unscored=unscored, scored_pairwise=score_pairwise))[0]
 
 
 def _irv_reference(rankings, probs):
@@ -199,20 +208,24 @@ def test_first_choice_regions_tile_even_with_normal_voters_outside():
 
 def test_config_lists_every_method():
     """The UI makes a button of each; a built method's tooltip ends with its expression.
-    Score is the one score method."""
+    Score and STAR use the score settings."""
     config = TestClient(app).get("/api/config").json()
     methods = config["methods"]
     assert [m["name"] for m in methods] == list(MARGINS)
     assert [m["label"] for m in methods + config["ideals"]] == [
         "FPTP", "IRV", "Borda", "Baldwin", "Nanson", "Schulze", "Condorcet", "Minimax",
-        "Black", "King of the hill", "King runoff", "Score", "Voronoi"]
+        "Black", "King of the hill", "King runoff", "Score", "STAR", "Voronoi"]
     descriptions = {m["name"]: m["description"] for m in methods}
     assert descriptions["nanson"].endswith('\nEliminate(Tally(BordaCount()), how="mean")')
     # the categories and power sliders: their method, their defaults, which it is listed
     # with, and their ranges
-    assert config["scores"] == ["score"]
+    assert config["scores"] == ["score", "star"]
     assert config["levels"] == 6 and config["max_levels"] == 11
     assert descriptions["score"].endswith("\nHighest(Tally(Score(6, power=1.5)))")
+    assert descriptions["star"].endswith(
+        "\nRunoff(ScoreComparisons(Score(6, power=1.5)), "
+        "Finalist(Tally(Score(6, power=1.5)), place=0), "
+        "Finalist(Tally(Score(6, power=1.5)), place=1))")
     assert config["power"] == 1.5
     assert (config["min_power"], config["max_power"], config["power_step"]) == (1.0, 2.0, 0.05)
     for gone in ("deltas", "delta", "clusters", "mu", "kappa", "powers"):

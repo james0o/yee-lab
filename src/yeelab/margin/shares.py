@@ -14,9 +14,9 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
     king_runoff                       all three: koth against irv, the duel by pairwise
                                       shares
     score                             the part of the top score a candidate does not
-                                      get: these voters have curved borders, so the
-                                      shares come from a grid of voters, not from
-                                      polygons
+                                      get, and STAR the strict cardinal comparisons of
+                                      each pair: these voters have curved borders, so
+                                      the shares come from a grid of voters, not polygons
 
 (Borda needs only pairwise shares: a ballot gives c one point per candidate ranked
 below c, so c's expected score is sum_e d[c, e].)
@@ -373,3 +373,20 @@ def unscored_shares(candidates, model: Model, levels: int, medians,
     short = score.unscored(lines, lines, candidates, levels, GRID_SUB, rule, delta, mu=mu,
                            kappa=kappa, power=power).astype(np.float64)
     return np.moveaxis(mass @ short @ mass.T, 0, -1) / (levels - 1)
+
+
+def score_comparison_shares(candidates, model: Model, medians, levels: int,
+                            rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
+                            mu: float = score.MU, kappa: float = score.KAPPA,
+                            power: float = score.POWER) -> np.ndarray:
+    """Strict score-comparison differences at each median: equal scores abstain."""
+    lines, mass = _voter_grid(model, medians)
+    short = score.comparisons(lines, lines, candidates, levels, GRID_SUB, rule, delta,
+                              mu=mu, kappa=kappa, power=power).astype(np.float64)
+    n, m = len(candidates), len(medians)
+    comparisons = np.zeros((m, m, n, n), dtype=np.float64)
+    for c in range(n):
+        for e in range(c + 1, n):
+            comparisons[:, :, c, e] = mass @ short[c, e] @ mass.T
+            comparisons[:, :, e, c] = -comparisons[:, :, c, e]
+    return comparisons
