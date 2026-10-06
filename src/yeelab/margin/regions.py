@@ -89,7 +89,8 @@ def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Vote
     scores = [share for share in needs if isinstance(share, Scored)]
     if scores:
         shares["unscored"] = {share: unscored_shares(candidates, model, share.levels, medians, share.rule,
-                                                     share.delta)
+                                                     share.delta, mu=share.mu, kappa=share.kappa,
+                                                     power=share.power)
                               for share in scores}
     return Voters(**shares)
 

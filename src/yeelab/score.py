@@ -2,17 +2,20 @@
 
 A score ballot has `levels` scores, 0 to levels - 1. A voter at v gives the closest
 candidate the top score and the farthest 0. Which score the others get depends on the
-distances r_i = |v - c_i|, in one of four ways (`rule`):
+distances r_i = |v - c_i|, in one of five ways (`rule`):
 
-    RANGE   the score in proportion to where r_i is between the closest and the
-            farthest, rounded to a whole score:
+    RANGE   the score by where r_i is between the closest and the farthest, its part
+            of the way to the power `power`, rounded to a whole score:
 
-                score_i = round((r_max - r_i) / (r_max - r_min) * (levels - 1))
+                score_i = round(((r_max - r_i) / (r_max - r_min))^power * (levels - 1))
 
-            A half is rounded to the even score, like np.round. The candidates in
-            between do not move the scale: only the closest and the farthest do. A
-            voter as far from every candidate (r_max = r_min) gives them all the top
-            score
+            A half is rounded to the even score, like np.round. power = 1, the
+            default POWER, is in proportion to the distance; above 1 the top scores
+            are kept for the candidates near the closest (with two levels the voter
+            approves those beyond 2^(-1 / power) of the way, not halfway), below 1 they
+            reach farther. The web UI has a slider for it. The candidates in between do
+            not move the scale: only the closest and the farthest do. A voter as far
+            from every candidate (r_max = r_min) gives them all the top score
     AVG     like RANGE, but with the mean distance rbar = (r_1 + ... + r_C) / C in the
             middle of the scale in place of halfway between the closest and the
             farthest: the part of the way goes linearly from 1 at the closest to 1/2
@@ -55,6 +58,23 @@ distances r_i = |v - c_i|, in one of four ways (`rule`):
             near candidates apart by their gaps, the far ones by distance alone, and
             the far ones do not move the cut among the near ones. A voter as far from
             every candidate gives them all the top score
+    CLUSTER RANGE, unless that splits a cluster of candidates: the scores s_i from 0
+            to T = levels - 1, never less for a closer candidate, T for the closest
+            and 0 for the farthest, that minimize
+
+                sum_i (s_i / T - part_i)^2
+                    + mu * sum_k w_k * max(0, 1 - T g_k) * [s_(k) != s_(k + 1)]
+
+            with part_i RANGE's part of the way, g_k the gap between the k-th and the
+            next distinct distance as a part of r_max - r_min, and w_k how firmly gap
+            k holds a cluster: the strongest run of neighbouring distances it lies in,
+            1 - kappa * (largest gap inside the run) / (smaller gap around it), 0 at
+            least. A split costs nothing at a gap of a step or more (T g_k >= 1), nor at
+            the gaps next to the closest and the farthest, whose scores are fixed. The
+            defaults are MU and KAPPA; the web UI has a slider for each. mu = 0 is
+            RANGE; with few levels a tight cluster keeps one score, with many it is
+            graded like RANGE. A voter as far from every candidate gives them all the
+            top score
 
 Nothing changes when all distances are scaled. With two levels every rule is an
 approval ballot: the voter approves the candidates with the top score, from the closest
@@ -63,7 +83,8 @@ closest and the farthest, AVG those closer than the mean distance (at it, the ha
 rounded to 0: not approved), DHONDT, whatever delta, those above the largest gap
 (ties: the first) and HYBRID, whatever delta, those above the largest gap among the
 candidates closer than halfway, the gap from the last of them to halfway included
-(ties: the first). AVG's is the best ballot of a voter with the utility -r_i who takes
+(ties: the first). CLUSTER approves those RANGE approves, unless that cut splits a
+cluster and another gap costs less. AVG's is the best ballot of a voter with the utility -r_i who takes
 every pair of candidates to be as likely to tie (Weber): approving c is worth
 sum_e (r_e - r_c), which is positive for these. For three candidates RANGE, AVG and
 DHONDT are the same ballot, and HYBRID approves the middle one only closer than a
@@ -81,12 +102,13 @@ any number of levels, so as a part of the top score their advantage fades. HYBRI
 halves are the two halves of that part of the way.
 
 Borders. A RANGE score changes where its part of the way is half a score,
-r_max - r_i = (k + 1/2) / (levels - 1) * (r_max - r_min), an AVG score likewise with
+r_max - r_i = ((k + 1/2) / (levels - 1))^(1 / power) * (r_max - r_min), an AVG score likewise with
 rbar for one end of its part of the way; a DHONDT step moves where two gaps tie,
 (l + delta) (r_a - r_b) = (k + delta) (r_c - r_d). A HYBRID score changes where one of
 its DHONDT steps moves, with m for r_a or r_c at the gap to the midrange, where a
 candidate crosses m, 2 r_i = r_min + r_max, and where a RANGE score of its lower half is
-half a score. Unlike the bisectors these are curves, so the mean score is not a sum
+half a score. A CLUSTER score changes where two choices of scores cost the same. Unlike
+the bisectors these are curves, so the mean score is not a sum
 over polygons. `unscored` gives, for a grid of rectangles, the mean points below the
 top score of each candidate in each rectangle; margin/shares.py weighs it with the
 voters of each rectangle.
@@ -104,13 +126,16 @@ RANGE = "range"
 DHONDT = "dhondt"
 AVG = "avg"
 HYBRID = "hybrid"
-Rule = Literal["range", "dhondt", "avg", "hybrid"]
-RULES: tuple[Rule, ...] = (RANGE, DHONDT, AVG, HYBRID)
+CLUSTER = "cluster"
+Rule = Literal["range", "dhondt", "avg", "hybrid", "cluster"]
+RULES: tuple[Rule, ...] = (RANGE, DHONDT, AVG, HYBRID, CLUSTER)
 BITS = 4  # of each candidate in the code of a ballot: its points below the top score
 MASK = (1 << BITS) - 1
 MAX_CANDIDATES = 63 // BITS  # a ballot is a code in an int64
 MAX_LEVELS = MASK + 1  # the points below the top score fit the bits of a candidate
 DELTA = 0.8  # of DHONDT and HYBRID: each step to the largest g_k / (d_k + DELTA)
+MU, KAPPA = 0.1, 2.0  # of CLUSTER: the cost of a split, and how much farther a cluster's neighbours are
+POWER = 1.0  # of RANGE: the part of the way to this power; 1 is in proportion to the distance
 ROWS = 8  # grid rows per task of the compiled loop (threads.py)
 
 
@@ -121,26 +146,37 @@ def distances(points, candidates) -> np.ndarray:
     return np.sqrt(((points[..., None, :] - candidates) ** 2).sum(axis=-1))
 
 
-def _check(rule, delta):
+def _check(rule, delta, mu=MU, kappa=KAPPA, power=POWER):
     if rule not in RULES:
         raise ValueError(f"unknown rule {rule!r}; choose from {', '.join(RULES)}")
     if not 0 < delta < math.inf:
         raise ValueError(f"delta must be a number above 0, got {delta!r}")
+    if not 0 <= mu < math.inf:
+        raise ValueError(f"mu must be a number of 0 or more, got {mu!r}")
+    if not 0 < kappa < math.inf:
+        raise ValueError(f"kappa must be a number above 0, got {kappa!r}")
+    if not 0 < power < math.inf:
+        raise ValueError(f"power must be a number above 0, got {power!r}")
 
 
-def scored(points, candidates, levels: int, rule: Rule = RANGE, delta: float = DELTA) -> np.ndarray:
+def scored(points, candidates, levels: int, rule: Rule = RANGE, delta: float = DELTA, *, mu: float = MU,
+           kappa: float = KAPPA, power: float = POWER) -> np.ndarray:
     """The score a voter at each of the points (..., 2) gives each candidate, int
     (..., C) from 0 to levels - 1: the ballot from its definition, one voter at a time.
-    delta is the divisor of DHONDT and HYBRID; the other rules do not use it."""
-    return from_distances(distances(points, candidates), levels, rule, delta)
+    delta is the divisor of DHONDT and HYBRID, mu and kappa the cost of a split and the
+    cohesion of CLUSTER, power that of RANGE; the other rules do not use them."""
+    return from_distances(distances(points, candidates), levels, rule, delta, mu=mu, kappa=kappa, power=power)
 
 
-def from_distances(r, levels: int, rule: Rule = RANGE, delta: float = DELTA) -> np.ndarray:
+def from_distances(r, levels: int, rule: Rule = RANGE, delta: float = DELTA, *, mu: float = MU,
+                   kappa: float = KAPPA, power: float = POWER) -> np.ndarray:
     """scored() of voters at the distances r (..., C) from the candidates, wherever they
     are: the ballot depends on nothing else. docs/ballots.py gives it the distances of
     real voters."""
-    _check(rule, delta)
+    _check(rule, delta, mu, kappa, power)
     r = np.asarray(r, dtype=np.float64)
+    if rule == CLUSTER:
+        return levels - 1 - _cluster_below(r, levels - 1, mu, kappa)
     if rule == DHONDT:
         return levels - 1 - _dhondt_below(r, levels - 1, delta)
     if rule == HYBRID:
@@ -150,7 +186,7 @@ def from_distances(r, levels: int, rule: Rule = RANGE, delta: float = DELTA) -> 
     far = r.max(axis=-1, keepdims=True)
     span = far - r.min(axis=-1, keepdims=True)
     part = np.divide(far - r, span, out=np.ones_like(r), where=span > 0)
-    return np.rint(part * (levels - 1)).astype(np.int64)
+    return np.rint(part ** power * (levels - 1)).astype(np.int64)
 
 
 def _avg_part(r):
@@ -197,7 +233,90 @@ def _hybrid_below(r, top, delta):
     below = np.where(far > near, below, 0)
     return np.take_along_axis(below, np.argsort(order, axis=-1, kind="stable"), axis=-1)
 
+
+def _cluster_below(r, top, mu, kappa):
+    """Points below the top score `top` of each candidate on a CLUSTER ballot, int
+    (..., C), for the distances r (..., C)."""
+    flat = np.ascontiguousarray(r.reshape(-1, r.shape[-1]))
+    out = np.empty(flat.shape, dtype=np.int64)
+    _cluster_ballots(flat, top, float(mu), float(kappa), out)
+    return out.reshape(r.shape)
+
 # ---------------------------------------------------------------- Compiled
+
+
+@njit(cache=True, error_model="numpy")
+def _cohesion(g, kappa, w):
+    """How firmly each gap holds a cluster, into w (m,), for the gaps g (m,) between
+    neighbouring distinct distances in order: the strongest run of distances i..j that
+    gap lies in, 1 - kappa * (largest gap inside) / (smaller gap around), 0 at least.
+    The run of all distances has no gap around it."""
+    m = g.size
+    w[:] = 0.0
+    for i in range(m):
+        left, inner = g[i - 1] if i > 0 else np.inf, 0.0
+        for j in range(i + 1, m + 1 if i > 0 else m):
+            inner = max(inner, g[j - 1])  # the largest of g[i:j]
+            if kappa * inner >= left:
+                break  # 0 or less for this run and the longer ones
+            strength = 1.0 - kappa * inner / min(left, g[j] if j < m else np.inf)
+            for k in range(i, j):
+                w[k] = max(w[k], strength)
+
+
+@njit(cache=True, error_model="numpy")
+def _cluster(r, order, top, mu, kappa, work, back, below):
+    """CLUSTER's ballot of the voter at the distances r (C,), with order (C,) the
+    candidates closest first: the points below the top score `top` of each distinct
+    distance, closest first, into below. work (4, max(C, top + 1)) and back (C, top + 1)
+    are scratch. Dynamic programming over the distances in order: cost[v] is the least
+    cost so far with the last score v, and back[k, v] the score before it, the same v if
+    that costs no more, else the lowest of the cheapest."""
+    values, g, w, cost = work[0], work[1], work[2], work[3]
+    n = 0
+    for k in range(r.size):
+        if n == 0 or r[order[k]] > values[n - 1]:
+            values[n] = r[order[k]]
+            n += 1
+    below[0] = 0
+    if n == 1:
+        return
+    span = values[n - 1] - values[0]
+    for k in range(n - 1):
+        g[k] = (values[k + 1] - values[k]) / span
+    _cohesion(g[:n - 1], kappa, w[:n - 1])
+    cost[:] = np.inf
+    cost[top] = 0.0
+    for k in range(1, n):
+        split = 0.0 if k == 1 or k == n - 1 else mu * w[k - 1] * max(0.0, 1.0 - top * g[k - 1])
+        part = (values[n - 1] - values[k]) / span
+        least, at = np.inf, -1  # of cost[u] + split over u > v, the lowest such u
+        for v in range(top, -1, -1):
+            stay = cost[v]
+            cost[v] = min(stay, least) + (v / top - part) ** 2
+            back[k, v] = at if least < stay else v
+            if stay + split <= least:
+                least, at = stay + split, v
+    v = 0
+    for k in range(n - 1, 0, -1):
+        below[k] = top - v
+        v = back[k, v]
+
+
+@njit(cache=True, error_model="numpy")
+def _cluster_ballots(r, top, mu, kappa, out):
+    """_cluster_below() of the voters r (V, C), into out (V, C)."""
+    n = r.shape[1]
+    work, back = np.empty((4, max(n, top + 1))), np.empty((n, top + 1), dtype=np.int64)
+    below = np.empty(n, dtype=np.int64)
+    for i in range(r.shape[0]):
+        order = np.argsort(r[i], kind="mergesort")
+        _cluster(r[i], order, top, mu, kappa, work, back, below)
+        d = 0
+        for k in range(n):
+            if k > 0 and r[i, order[k]] > r[i, order[k - 1]]:
+                d += 1
+            out[i, order[k]] = below[d]
 
 
 @njit(inline="always", error_model="numpy")
@@ -215,12 +334,23 @@ def by_distance(x, y, candidates, r, order):
 
 
 @njit(inline="always", error_model="numpy")
-def _ballot(x, y, candidates, top, rule, delta, r, order, steps):
+def _ballot(x, y, candidates, top, rule, delta, mu, kappa, power, r, order, steps, work, back):
     """scored() of the voter at (x, y) as a code: BITS bits per candidate, holding the
     points it is below the top score `top`. `rule` is the index of the rule in RULES,
-    delta the divisor of DHONDT and HYBRID; r, order and steps (C,) are scratch."""
+    delta the divisor of DHONDT and HYBRID, mu and kappa those of CLUSTER, power that of
+    RANGE; r, order and
+    steps (C,), work and back (those of _cluster) are scratch."""
     n = candidates.shape[0]
     code = 0
+    if rule == 4:  # CLUSTER
+        by_distance(x, y, candidates, r, order)
+        _cluster(r, order, top, mu, kappa, work, back, steps)
+        d = 0
+        for k in range(n):
+            if k > 0 and r[order[k]] > r[order[k - 1]]:
+                d += 1
+            code |= steps[d] << (BITS * order[k])
+        return code
     if rule == 3:  # HYBRID
         by_distance(x, y, candidates, r, order)
         near, far = r[order[0]], r[order[n - 1]]
@@ -280,23 +410,29 @@ def _ballot(x, y, candidates, top, rule, delta, r, order, steps):
             code |= (top - np.int64(np.rint(part * top))) << (BITS * c)
     elif span > 0:
         for c in range(n):
-            code |= (top - np.int64(np.rint((far - r[c]) / span * top))) << (BITS * c)
+            part = (far - r[c]) / span
+            if power != 1.0:
+                part = part ** power
+            code |= (top - np.int64(np.rint(part * top))) << (BITS * c)
     return code
 
 
 @njit(cache=True, nogil=True, error_model="numpy")
-def _unscored(xs, ys, candidates, top, rule, delta, sub, start, stop, out):
+def _unscored(xs, ys, candidates, top, rule, delta, mu, kappa, power, sub, start, stop, out):
     """unscored() of the cells [xs[i], xs[i + 1]] with start <= i < stop, into
     out (C, X, Y)."""
     n = candidates.shape[0]
     r, points = np.empty(n), np.empty(n, dtype=np.int64)
     order, steps = np.empty(n, dtype=np.int64), np.empty(n, dtype=np.int64)
+    work, back = np.empty((4, max(n, top + 1))), np.empty((n, top + 1), dtype=np.int64)
     left, right = np.empty(ys.size, dtype=np.int64), np.empty(ys.size, dtype=np.int64)
     for j in range(ys.size):
-        left[j] = _ballot(xs[start], ys[j], candidates, top, rule, delta, r, order, steps)
+        left[j] = _ballot(xs[start], ys[j], candidates, top, rule, delta, mu, kappa, power, r, order, steps,
+                          work, back)
     for i in range(start, stop):
         for j in range(ys.size):
-            right[j] = _ballot(xs[i + 1], ys[j], candidates, top, rule, delta, r, order, steps)
+            right[j] = _ballot(xs[i + 1], ys[j], candidates, top, rule, delta, mu, kappa, power,
+                               r, order, steps, work, back)
         for j in range(ys.size - 1):
             code = left[j]
             if code == left[j + 1] and code == right[j] and code == right[j + 1]:
@@ -308,7 +444,8 @@ def _unscored(xs, ys, candidates, top, rule, delta, sub, start, stop, out):
                 x = xs[i] + (a + 0.5) / sub * (xs[i + 1] - xs[i])
                 for b in range(sub):
                     y = ys[j] + (b + 0.5) / sub * (ys[j + 1] - ys[j])
-                    code = _ballot(x, y, candidates, top, rule, delta, r, order, steps)
+                    code = _ballot(x, y, candidates, top, rule, delta, mu, kappa, power, r, order, steps,
+                                   work, back)
                     for c in range(n):
                         points[c] += (code >> (BITS * c)) & MASK
             for c in range(n):
@@ -317,10 +454,12 @@ def _unscored(xs, ys, candidates, top, rule, delta, sub, start, stop, out):
 
 
 def unscored(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
-             delta: float = DELTA) -> np.ndarray:
+             delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
+             power: float = POWER) -> np.ndarray:
     """short[c, i, j] = mean points below the top score that the voters of the rectangle
     [xs[i], xs[i + 1]] x [ys[j], ys[j + 1]] give candidate c, from 0 to levels - 1, shape
-    (C, X, Y) for X + 1 and Y + 1 increasing grid lines; delta as in scored(). A
+    (C, X, Y) for X + 1 and Y + 1 increasing grid lines; delta, mu, kappa and power as in
+    scored(). A
     rectangle whose four corners have the same ballot counts as all of that ballot; in
     the others, which a border crosses, the ballots at sub x sub points are averaged.
     Chunks of the rows run in parallel threads."""
@@ -331,10 +470,10 @@ def unscored(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
         raise ValueError(f"score ballots need 2 to {MAX_CANDIDATES} candidates, got {len(candidates)}")
     if not 2 <= levels <= MAX_LEVELS:
         raise ValueError(f"score ballots need 2 to {MAX_LEVELS} levels, got {levels}")
-    _check(rule, delta)
+    _check(rule, delta, mu, kappa, power)
     out = np.empty((len(candidates), len(xs) - 1, len(ys) - 1), dtype=np.float32)
     threads.in_chunks(
-        lambda a, b: _unscored(xs, ys, candidates, levels - 1, RULES.index(rule), float(delta), sub,
-                               a, b, out),
+        lambda a, b: _unscored(xs, ys, candidates, levels - 1, RULES.index(rule), float(delta), float(mu),
+                               float(kappa), float(power), sub, a, b, out),
         len(xs) - 1, ROWS)
     return out

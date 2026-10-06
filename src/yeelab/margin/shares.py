@@ -13,8 +13,8 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
                                       remaining set)
     king_runoff                       all three: koth against irv, the duel by pairwise
                                       shares
-    score_range, score_avg, score_dh, the part of the top score a candidate does not
-    score_hybrid                      get: these voters have curved borders, so the
+    score                             the part of the top score a candidate does not
+                                      get: these voters have curved borders, so the
                                       shares come from a grid of voters, not from
                                       polygons
 
@@ -343,10 +343,12 @@ def _voter_grid(model: Model, medians):
 
 
 def unscored_shares(candidates, model: Model, levels: int, medians,
-                    rule: score.Rule = score.RANGE, delta: float = score.DELTA) -> np.ndarray:
+                    rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
+                    mu: float = score.MU, kappa: float = score.KAPPA,
+                    power: float = score.POWER) -> np.ndarray:
     """unscored[i, j, c] = mean part of the top score that the voters with median
     (medians[i], medians[j]) do not give c on a score ballot with `levels` scores by
-    `rule` and `delta` (yeelab.score), from 0 to 1, shape (M, M, C). The mean score of c
+    `rule`, `delta`, `mu`, `kappa` and `power` (yeelab.score), from 0 to 1, shape (M, M, C). The mean score of c
     is the top score, levels - 1, times 1 minus this. With two levels it is the share of
     the voters who do not approve c.
 
@@ -368,5 +370,6 @@ def unscored_shares(candidates, model: Model, levels: int, medians,
     The shares are not interpolated from the nodes: a tail of 1e-20 is far below the
     error of the interpolant, and one more median costs only a row of each product."""
     lines, mass = _voter_grid(model, medians)
-    short = score.unscored(lines, lines, candidates, levels, GRID_SUB, rule, delta).astype(np.float64)
+    short = score.unscored(lines, lines, candidates, levels, GRID_SUB, rule, delta, mu=mu,
+                           kappa=kappa, power=power).astype(np.float64)
     return np.moveaxis(mass @ short @ mass.T, 0, -1) / (levels - 1)

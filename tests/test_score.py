@@ -15,7 +15,10 @@ scale, and RANGE from halfway for the others, on the lower half; the two halves 
 one score and never cross. With two levels AVG, DHONDT and HYBRID are checked against
 approval ballots defined on their own (_approval); for three candidates RANGE, AVG and
 DHONDT give the same ballot, and HYBRID approves the middle one only within a quarter of
-the way. The compiled ballot of the grid must be that of the definition.
+the way. RANGE with a power raises its part of the way to it; with two levels it
+approves the candidates beyond 2^(-1 / power) of the way. CLUSTER's ballot must have the least of the cost it minimizes, computed apart
+from score.py over every ballot it may give; with mu = 0 it is RANGE. The compiled ballot
+of the grid must be that of the definition.
 
 The shares come from a grid of voters, so they are approximate. They are compared with
 exact shares where there are some (two candidates get the top score from their first
@@ -25,7 +28,7 @@ part of the top score not given, which must stay exact where it is tiny: the lea
 between two candidates nearly all voters give the top score.
 """
 
-from itertools import combinations, product
+from itertools import combinations, combinations_with_replacement, product
 
 import numpy as np
 import pytest
@@ -34,8 +37,8 @@ from scipy.special import ndtr
 from yeelab import ranking_cells
 from yeelab.margin.shares import (GRID_CELLS, Model, _voter_grid, first_choice_shares, ranking_shares,
                                   unscored_shares)
-from yeelab.score import (AVG, DELTA, DHONDT, HYBRID, MAX_CANDIDATES, MAX_LEVELS, RANGE, RULES, distances,
-                          scored, unscored)
+from yeelab.score import (AVG, CLUSTER, DELTA, DHONDT, HYBRID, KAPPA, MAX_CANDIDATES, MAX_LEVELS, MU, POWER, RANGE,
+                          RULES, distances, from_distances, scored, unscored)
 
 FIVE = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
 CANDIDATES = {2: np.random.default_rng(5).random((2, 2)), 3: np.random.default_rng(3).random((3, 2)),
@@ -117,6 +120,29 @@ def test_the_score_is_the_rounded_part_of_the_way(levels):
         for row in dist:
             expected = np.round((row.max() - row) / (row.max() - row.min()) * (levels - 1))
             assert _ballot(row, levels) == expected.tolist()
+
+
+@pytest.mark.parametrize("power", [0.5, 1.5, 2.0, 3.0])
+@pytest.mark.parametrize("levels", LEVELS)
+def test_a_power_raises_the_part_of_the_way_to_it(levels, power):
+    rng = np.random.default_rng(levels)
+    dist = rng.random((2000, 6)) + 0.01
+    part = (dist.max(axis=1, keepdims=True) - dist) / np.ptp(dist, axis=1, keepdims=True)
+    np.testing.assert_array_equal(from_distances(dist, levels, RANGE, power=power),
+                                  np.round(part ** power * (levels - 1)))
+    assert (from_distances(dist, levels, RANGE, power=POWER) == from_distances(dist, levels, RANGE)).all()
+
+
+def test_a_power_above_1_keeps_the_top_scores_for_the_near_candidates():
+    """With two levels the voter approves those beyond 2^(-1 / power) of the way: 0.71 for
+    power 2, so of distances 0, 2, 3, 6 and 10 (parts 1, 0.8, 0.7, 0.4, 0) the third is
+    approved with power 1 but not 2. A higher power never gives a candidate more."""
+    assert _ballot([0, 2, 3, 6, 10], 2) == [1, 1, 1, 0, 0]
+    assert scored(np.zeros(2), _at([0, 2, 3, 6, 10]), 2, power=2.0).tolist() == [1, 1, 0, 0, 0]
+    dist = np.random.default_rng(2).random((5000, 6))
+    for levels in LEVELS:
+        ballots = [from_distances(dist, levels, RANGE, power=power) for power in (0.5, 1, 1.5, 2, 3)]
+        assert all((more <= less).all() for less, more in zip(ballots, ballots[1:]))
 
 
 def test_evenly_spaced_candidates_get_evenly_spaced_scores():
@@ -399,9 +425,9 @@ def test_hybrid_gives_each_half_its_own_part_of_the_scale(levels):
 
 def test_unknown_rules_are_rejected():
     for rule in ("gap", "dh", None):
-        with pytest.raises(ValueError, match=f"unknown rule {rule!r}; choose from range, dhondt, avg, hybrid"):
+        with pytest.raises(ValueError, match=f"unknown rule {rule!r}; choose from range, dhondt, avg, hybrid, cluster"):
             scored(np.zeros(2), FIVE, 3, rule)
-        with pytest.raises(ValueError, match=f"unknown rule {rule!r}; choose from range, dhondt, avg, hybrid"):
+        with pytest.raises(ValueError, match=f"unknown rule {rule!r}; choose from range, dhondt, avg, hybrid, cluster"):
             unscored(np.linspace(0, 1, 5), np.linspace(0, 1, 5), FIVE, 3, 4, rule)
 
 
@@ -412,22 +438,110 @@ def test_delta_must_be_above_zero():
         with pytest.raises(ValueError, match=f"delta must be a number above 0, got {delta!r}"):
             unscored(np.linspace(0, 1, 5), np.linspace(0, 1, 5), FIVE, 3, 4, DHONDT, delta)
 
+
+def test_power_must_be_above_zero():
+    lines = np.linspace(0, 1, 5)
+    for power in (0, -1, np.inf, np.nan):
+        with pytest.raises(ValueError, match=f"power must be a number above 0, got {power!r}"):
+            scored(np.zeros(2), FIVE, 3, RANGE, power=power)
+        with pytest.raises(ValueError, match=f"power must be a number above 0, got {power!r}"):
+            unscored(lines, lines, FIVE, 3, 4, RANGE, power=power)
+
+
+def test_mu_and_kappa_must_be_numbers_cluster_can_use():
+    lines = np.linspace(0, 1, 5)
+    for mu in (-0.1, np.inf, np.nan):
+        with pytest.raises(ValueError, match=f"mu must be a number of 0 or more, got {mu!r}"):
+            scored(np.zeros(2), FIVE, 3, CLUSTER, mu=mu)
+        with pytest.raises(ValueError, match=f"mu must be a number of 0 or more, got {mu!r}"):
+            unscored(lines, lines, FIVE, 3, 4, CLUSTER, mu=mu)
+    for kappa in (0, -1, np.inf, np.nan):
+        with pytest.raises(ValueError, match=f"kappa must be a number above 0, got {kappa!r}"):
+            scored(np.zeros(2), FIVE, 3, CLUSTER, kappa=kappa)
+        with pytest.raises(ValueError, match=f"kappa must be a number above 0, got {kappa!r}"):
+            unscored(lines, lines, FIVE, 3, 4, CLUSTER, kappa=kappa)
+
+
+
+def _cluster_cost(r, scores, levels, mu=MU, kappa=KAPPA):
+    """The cost CLUSTER minimizes, from its definition, apart from score.py: for the
+    scores (n,) of the distinct distances r (n,), closest first, the squared distances
+    from RANGE's parts of the way, and mu * w_k * max(0, 1 - T g_k) for each split gap
+    but the first and the last. w_k is the strongest run of distances gap k lies in:
+    1 - kappa * its largest gap / the smaller gap around it, 0 at least."""
+    top, g = levels - 1, np.diff(r) / (r[-1] - r[0])
+    m = len(g)
+    w = np.zeros(m)
+    for i, j in combinations(range(m + 1), 2):  # the run of distances i..j
+        if (i, j) != (0, m):
+            around = min(g[i - 1] if i > 0 else np.inf, g[j] if j < m else np.inf)
+            w[i:j] = np.maximum(w[i:j], 1 - kappa * g[i:j].max() / around)
+    split = mu * w * np.maximum(0, 1 - top * g) * (np.diff(scores) != 0)
+    return (((scores / top - (r[-1] - r) / (r[-1] - r[0])) ** 2).sum() + split[1:-1].sum())
+
+
+@pytest.mark.parametrize(("mu", "kappa"), [(MU, KAPPA), (0.5, 1.0), (0.03, 4.0)])
+@pytest.mark.parametrize("levels", [2, 3, 6, 11])
+def test_cluster_gives_the_ballot_of_least_cost(levels, mu, kappa):
+    """Among every ballot it may give, from T for the closest to 0 for the farthest and
+    never more for a farther candidate, CLUSTER's costs the least, at the defaults of mu
+    and kappa and away from them. Clusters of three are common enough among the random
+    distances."""
+    rng = np.random.default_rng(levels)
+    top, splits = levels - 1, 0
+    for n in range(2, 7):
+        for row in rng.random((300 if n < 6 else 60, n)) ** 2:
+            r = np.sort(row)
+            ballot = from_distances(r, levels, CLUSTER, mu=mu, kappa=kappa)
+            assert ballot[0] == top and ballot[-1] == 0 and (np.diff(ballot) <= 0).all()
+            least = min(_cluster_cost(r, np.array([top, *inner, 0]), levels, mu, kappa)
+                        for inner in combinations_with_replacement(range(top, -1, -1), n - 2))
+            assert _cluster_cost(r, ballot, levels, mu, kappa) <= least + 1e-12
+            splits += (ballot != from_distances(r, levels, RANGE)).any()
+    assert splits > 0
+
+
+def test_cluster_keeps_a_tight_cluster_with_few_levels_and_grades_it_with_many():
+    """Two clusters: RANGE splits both with six levels, CLUSTER keeps each one score; with
+    16 the gaps are a step or more and CLUSTER is RANGE. With two levels the cluster of
+    0.44 and 0.54 is not split, which RANGE does with six."""
+    r = [0, 0.04, 0.12, 0.88, 0.95, 1]
+    assert _ballot(r, 6) == [5, 5, 4, 1, 0, 0]
+    assert _ballot(r, 6, CLUSTER) == [5, 5, 5, 0, 0, 0]
+    assert _ballot(r, 16, CLUSTER) == _ballot(r, 16) == [15, 14, 13, 2, 1, 0]
+    assert _ballot(r[::-1], 6, CLUSTER) == [0, 0, 0, 5, 5, 5]  # in any order of the candidates
+    assert _ballot([0, 0.44, 0.54, 1], 6) == [5, 3, 2, 0]
+    assert _ballot([0, 0.44, 0.54, 1], 6, CLUSTER) == [5, 3, 3, 0]
+    assert _ballot([0, 1, 2, 3, 21], 6, CLUSTER) == [5, 5, 5, 5, 0]
+    assert _ballot([3, 3, 3], 6, CLUSTER) == [5, 5, 5]
+
+
+@pytest.mark.parametrize("levels", LEVELS)
+def test_cluster_without_a_cost_of_splitting_is_range(levels):
+    r = np.random.default_rng(levels).random((20_000, 6))
+    np.testing.assert_array_equal(from_distances(r, levels, CLUSTER, mu=0.0), from_distances(r, levels, RANGE))
+
 # ---------------------------------------------------------------- Grid
 
 
-@pytest.mark.parametrize(("rule", "delta"), [(RANGE, DELTA), (AVG, DELTA)]
-                         + [(rule, delta) for rule in (DHONDT, HYBRID) for delta in DELTAS])
+@pytest.mark.parametrize(("rule", "delta", "mu", "kappa", "power"),
+                         [(RANGE, DELTA, MU, KAPPA, power) for power in (POWER, 0.5, 1.5, 2.5)]
+                         + [(AVG, DELTA, MU, KAPPA, POWER)]
+                         + [(rule, delta, MU, KAPPA, POWER) for rule in (DHONDT, HYBRID) for delta in DELTAS]
+                         + [(CLUSTER, DELTA, mu, kappa, POWER)
+                            for mu, kappa in ((MU, KAPPA), (0.5, 1.0), (0.02, 5.0))])
 @pytest.mark.parametrize("n", CANDIDATES)
-def test_the_compiled_ballot_is_the_definition(n, rule, delta):
+def test_the_compiled_ballot_is_the_definition(n, rule, delta, mu, kappa, power):
     """A rectangle too small for a border to cross holds the ballot of the voter at it,
     as the points below the top score, for candidates and voters in and around the
     square."""
     rng = np.random.default_rng(n)
     points = 2 * rng.random((200, 2)) - 0.5
     for levels in LEVELS:
-        short = np.stack([unscored([x, x + 1e-9], [y, y + 1e-9], CANDIDATES[n], levels, 2, rule, delta)[:, 0, 0]
-                          for x, y in points])
-        np.testing.assert_array_equal(short, levels - 1 - scored(points, CANDIDATES[n], levels, rule, delta))
+        short = np.stack([unscored([x, x + 1e-9], [y, y + 1e-9], CANDIDATES[n], levels, 2, rule, delta,
+                                   mu=mu, kappa=kappa, power=power)[:, 0, 0] for x, y in points])
+        np.testing.assert_array_equal(short, levels - 1 - scored(points, CANDIDATES[n], levels, rule, delta,
+                                                                 mu=mu, kappa=kappa, power=power))
 
 
 @pytest.mark.parametrize("rule", RULES)

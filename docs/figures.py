@@ -25,13 +25,13 @@ from scipy.special import betainc, ndtr, ndtri
 from scipy.stats import beta as beta_dist
 
 from yeelab import normal, ranking_cells
-from yeelab.build import Highest, ScoreAvg, ScoreDH, ScoreHybrid, Tally, Voters
+from yeelab.build import Highest, Score, ScoreAvg, ScoreCluster, ScoreDH, ScoreHybrid, Tally, Voters
 from yeelab.margin.geometric import geometric_median_at, geometric_medians
-from yeelab.margin.regions import MARGINS, regions, winners
+from yeelab.margin.regions import MARGINS, grid, nearest, regions, winners
 from yeelab.margin.shares import Model, pairwise_shares
 from yeelab.pixels import beta as pixel_beta, normal as pixel_normal
 from yeelab.pixels.methods import _pairwise_preferences, borda, condorcet, fptp, irv, schulze, voronoi
-from yeelab.score import AVG, DHONDT, HYBRID, unscored
+from yeelab.score import RANGE, unscored
 from yeelab.voting import CYCLE
 from yeelab.web.app import DEVIATION as UI_DEVIATION, DRAG_GRID, FINAL_GRID
 
@@ -865,63 +865,107 @@ def geometric_median():
     fig.savefig(FIGURES / "geometric.png", dpi=150)
     plt.close(fig)
 
-# ---------------------------------------------------------------- approval voting
+# ---------------------------------------------------------------- score voting
 
-# approval: the score methods of the web UI with two levels, name, label, rule and the
-# method itself
-APPROVALS = [("score_dh, 2 levels", "largest gap", DHONDT, Highest(Tally(ScoreDH(2)))),
-             ("score_hybrid, 2 levels", "largest gap, closer half", HYBRID, Highest(Tally(ScoreHybrid(2)))),
-             ("score_avg, 2 levels", "mean distance", AVG, Highest(Tally(ScoreAvg(2))))]
+# the ends and the default of the power slider of the web UI
+POWERS = (1.0, 1.5, 2.0)
+
+
+def _score(levels, power):
+    return Highest(Tally(Score(levels, power=power)))
+
+
+def _voronoi_at_medians(candidates, size):
+    """The nearest candidate to the median of each point of the grid of winners()."""
+    medians = grid(size, PIXELS)[1]
+    return nearest(candidates, np.stack(np.meshgrid(medians, medians, indexing="ij"), axis=-1))[0]
 
 
 def approval():
-    """The voters who approve D (top row), and the diagrams (bottom row), for the score
-    methods with two levels."""
-    fig, axes = plt.subplots(2, len(APPROVALS), figsize=(10, 7), layout="constrained")
+    """Two levels: the voters who approve D (top row) and the diagrams (bottom row) of
+    Score at each power of the slider, against the Voronoi diagram."""
+    fig, axes = plt.subplots(2, len(POWERS), figsize=(10, 7), layout="constrained")
     lines = np.linspace(0, 1, 401)
     shade = LinearSegmentedColormap.from_list("approves", ["white", PALETTE[D]])
-    for k, (title, label, rule, method) in enumerate(APPROVALS):
-        cover = 1 - unscored(lines, lines, CANDIDATES, 2, 4, rule)  # the part approving
-        print(f"{title}: approved by the voters of this part of the square " + "  ".join(
-            f"{name} {cover[c].mean():.3f}" for c, name in enumerate(NAMES))
-            + f"; approved candidates per voter {cover.sum(axis=0).mean():.3f}")
+    ideal = _voronoi_at_medians(CANDIDATES, FINAL_GRID)[1:-1, 1:-1]
+    print("Voronoi: share of the square " + "  ".join(
+        f"{name} {(ideal == c).mean():.3f}" for c, name in enumerate(NAMES)))
+    for k, power in enumerate(POWERS):
+        cover = 1 - unscored(lines, lines, CANDIDATES, 2, 4, RANGE, power=power)  # the part approving
+        print(f"Score(2, power={power:g}), cut at {0.5 ** (1 / power):.2f} of the way: approved by the voters "
+              "of the square " + "  ".join(f"{name} {cover[c].mean():.3f}" for c, name in enumerate(NAMES))
+              + f"; approved candidates per voter {cover.sum(axis=0).mean():.3f}")
         ax = axes[0, k]
         ax.imshow(cover[D].T, cmap=shade, vmin=0, vmax=1, origin="lower", extent=(0, 1, 0, 1), alpha=0.6)
         ax.scatter(*CANDIDATES.T, c=PALETTE[:5], s=45, edgecolors="k", linewidths=1, zorder=3)
         for name, (x, y) in zip(NAMES, CANDIDATES):
             ax.annotate(name, (x + 0.015, y + 0.015), weight="bold", fontsize=9)
-        ax.set_title(f"voters who approve D: {label}", fontsize=10)
-        winner = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
-        show(axes[1, k], winner, f"{title}: {label}")
-    compared = [("fptp", "fptp"), ("borda", "borda"), ("schulze", "schulze"),
-                *[(name, method) for name, _, _, method in APPROVALS]]
-    for name, method in compared:
-        winner = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+        ax.set_title(f"voters who approve D, p = {power:g}", fontsize=10)
+        winner = winners(_score(2, power), CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+        print(f"  share of the square won " + "  ".join(
+            f"{name} {(winner == c).mean():.3f}" for c, name in enumerate(NAMES))
+            + f"; not won by the nearest candidate {(winner != ideal).mean():.3f}")
+        show(axes[1, k], winner, f"Score, 2 levels, p = {power:g}")
+    for name in ("fptp", "borda", "schulze"):
+        winner = winners(name, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
         print(f"{name}: share of the square won " + "  ".join(
-            f"{name} {(winner == c).mean():.3f}" for c, name in enumerate(NAMES)))
+            f"{n} {(winner == c).mean():.3f}" for c, n in enumerate(NAMES)))
     fig.savefig(FIGURES / "approval.png", dpi=150)
     plt.close(fig)
 
 
 def score_voting():
-    """The four score methods of the web UI at their default of six levels, with the
-    mean score of each candidate."""
-    fig, axes = plt.subplots(1, 4, figsize=(13, 3.6), layout="constrained")
-    for ax, (method, label) in zip(axes, [("score_range", "Score (range)"), ("score_avg", "Score (avg)"),
-                                          ("score_dh", "Score (D'Hondt), δ = 0.8"),
-                                          ("score_hybrid", "Score (hybrid), δ = 0.8")]):
-        winner = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
-        print(f"{method}: share of the square won " + "  ".join(
-            f"{name} {(winner == c).mean():.3f}" for c, name in enumerate(NAMES)))
-        show(ax, winner, label)
+    """Six levels, the default: Score at each power of the slider next to the Voronoi
+    diagram, with the mean score of each candidate."""
+    fig, axes = plt.subplots(1, 1 + len(POWERS), figsize=(13, 3.6), layout="constrained")
+    ideal = _voronoi_at_medians(CANDIDATES, FINAL_GRID)[1:-1, 1:-1]
+    show(axes[0], ideal, "Voronoi (no voters)")
     lines = np.linspace(0, 1, 401)
-    for method, rule in (("score_range", "range"), ("score_avg", AVG), ("score_dh", DHONDT),
-                         ("score_hybrid", HYBRID)):
-        short = unscored(lines, lines, CANDIDATES, 6, 4, rule)
-        print(f"{method}: mean score of the voters of the square " + "  ".join(
-            f"{name} {5 - short[c].mean():.2f}" for c, name in enumerate(NAMES)))
+    for ax, power in zip(axes[1:], POWERS):
+        winner = winners(_score(6, power), CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+        short = unscored(lines, lines, CANDIDATES, 6, 4, RANGE, power=power)
+        print(f"Score(6, power={power:g}): share of the square won " + "  ".join(
+            f"{name} {(winner == c).mean():.3f}" for c, name in enumerate(NAMES))
+            + f"; not won by the nearest {(winner != ideal).mean():.3f}; mean score of the voters of the "
+            "square " + "  ".join(f"{name} {5 - short[c].mean():.2f}" for c, name in enumerate(NAMES)))
+        show(ax, winner, f"Score, 6 levels, p = {power:g}")
     fig.savefig(FIGURES / "score.png", dpi=150)
     plt.close(fig)
+
+
+# the score ballots compared with the Voronoi diagram on random candidates: Score at the
+# powers of the slider, and the other rules of yeelab.score
+AGAINST_VORONOI = {**{f"Score, p = {p:g}": (lambda levels, p=p: Score(levels, power=p)) for p in POWERS},
+                   "ScoreAvg": ScoreAvg, "ScoreDH": ScoreDH, "ScoreHybrid": ScoreHybrid,
+                   "ScoreCluster": ScoreCluster}
+
+
+def score_against_voronoi(layouts=60, size=64):
+    """Over random layouts of 3 to 7 candidates, every other one with two of them 0.08 to
+    0.2 apart, voters of the web UI's default: the part of the square not won by the
+    nearest candidate (Voronoi, at the median of the voters), and the candidates who win
+    less than a quarter of their Voronoi cell, per diagram."""
+    rng = np.random.default_rng(1)
+    sets = []
+    for k in range(layouts):
+        candidates = rng.uniform(0.1, 0.9, (rng.integers(3, 8), 2))
+        if k % 2:
+            angle, apart = rng.uniform(0, 2 * np.pi), rng.uniform(0.08, 0.2)
+            candidates[1] = np.clip(candidates[0] + apart * np.array([np.cos(angle), np.sin(angle)]), 0.05, 0.95)
+        sets.append(candidates)
+    print(f"against the Voronoi diagram, {layouts} random layouts, D = {UI_DEVIATION}: part of the square not "
+          "won by the nearest candidate, and candidates who lose three quarters of their cell")
+    for levels in (2, 6):
+        for name, ballot in AGAINST_VORONOI.items():
+            wrong, lost = [], []
+            for candidates in sets:
+                ideal = _voronoi_at_medians(candidates, size)
+                winner = winners(Highest(Tally(ballot(levels))), candidates, UI_MODEL, size)[1]
+                area = np.bincount(winner.ravel(), minlength=len(candidates))
+                cell = np.bincount(ideal.ravel(), minlength=len(candidates))
+                wrong.append((winner != ideal).mean())
+                lost.append(np.sum((cell > 0.02 * cell.sum()) & (area < 0.25 * cell)))
+            print(f"  {levels} levels, {name:12s} {np.mean(wrong):.1%}  {np.mean(lost):.2f}")
 
 
 if __name__ == "__main__":
@@ -952,3 +996,4 @@ if __name__ == "__main__":
     geometric_median()
     approval()
     score_voting()
+    score_against_voronoi()

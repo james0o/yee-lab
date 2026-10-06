@@ -46,6 +46,7 @@ from yeelab.build import (
     Runoff,
     Score,
     ScoreAvg,
+    ScoreCluster,
     ScoreDH,
     ScoreHybrid,
     Scored,
@@ -500,7 +501,7 @@ def test_tally_is_the_sum_of_weights(profile, ballot):
 
 
 # the shares of the score ballots below: two and six levels, by every rule
-SCORED = [Scored(levels, rule) for levels in (2, 6) for rule in ("range", "avg", "dhondt", "hybrid")]
+SCORED = [Scored(levels, rule) for levels in (2, 6) for rule in ("range", "avg", "dhondt", "hybrid", "cluster")]
 # two kinds of approving voters for the mixes: above their largest gap, and closer than
 # their mean distance
 BY_GAP, BY_MEAN = ScoreDH(2), ScoreAvg(2)
@@ -521,12 +522,12 @@ def test_the_highest_mean_score_wins():
     rule: the candidate the voters give the largest part of the top score wins (ties: the
     lowest index), with two levels the most approved one, and the margin is its lead
     over the second. The tally is counted down from 1, the remaining candidates of an
-    elimination keep theirs, and the others get -1. ScoreAvg, ScoreDH and ScoreHybrid
-    read the shares of their own rules, not those of Score."""
+    elimination keep theirs, and the others get -1. ScoreAvg, ScoreDH, ScoreHybrid and
+    ScoreCluster read the shares of their own rules, not those of Score."""
     voters = _scoring_voters()
     assert voters.shape == (4, 6) and voters.n_candidates == 5
     for levels, (score, rule) in product((2, 6), ((Score, "range"), (ScoreAvg, "avg"), (ScoreDH, "dhondt"),
-                                                   (ScoreHybrid, "hybrid"))):
+                                                   (ScoreHybrid, "hybrid"), (ScoreCluster, "cluster"))):
         ballot, shares = score(levels), voters.unscored[Scored(levels, rule)]
         assert ballot.needs == ballot.needs_remaining == {Scored(levels, rule)}
         np.testing.assert_array_equal(ballot.tally(voters, None), -shares)
@@ -545,7 +546,7 @@ def test_a_lead_among_candidates_nearly_all_give_the_top_score_is_kept():
     in floating point, and the second still wins by 2e-30."""
     unscored = np.array([[3e-30, 1e-30, 0.4], [1e-40, 2e-40, 1.0]])
     assert ((1 - unscored[:, 0]) == (1 - unscored[:, 1])).all()
-    for ballot in (Score(6), ScoreAvg(2), ScoreDH(2), ScoreHybrid(6)):
+    for ballot in (Score(6), ScoreAvg(2), ScoreDH(2), ScoreHybrid(6), ScoreCluster(2)):
         winner, margin = Highest(Tally(ballot)).evaluate(Voters(unscored={ballot.scored: unscored}))
         np.testing.assert_array_equal(winner, [1, 0])
         np.testing.assert_allclose(margin, [2e-30, 1e-40], rtol=1e-12, atol=0)
@@ -639,15 +640,17 @@ def test_score_takes_the_number_of_levels():
     assert ScoreAvg(3) == ScoreAvg(levels=3) != ScoreAvg(4)
     assert ScoreDH(3) == ScoreDH(levels=3) != ScoreDH(4)
     assert ScoreHybrid(3) == ScoreHybrid(levels=3) != ScoreHybrid(4)
-    scores = (Score(3), ScoreAvg(3), ScoreDH(3), ScoreHybrid(3))
-    assert len(set(scores)) == len({score.needs for score in scores}) == 4
+    assert ScoreCluster(3) == ScoreCluster(levels=3) != ScoreCluster(4)
+    scores = (Score(3), ScoreAvg(3), ScoreDH(3), ScoreHybrid(3), ScoreCluster(3))
+    assert len(set(scores)) == len({score.needs for score in scores}) == 5
     assert ([repr(score) for score in scores]
-            == ["Score(3)", "ScoreAvg(3)", "ScoreDH(3, delta=0.8)", "ScoreHybrid(3, delta=0.8)"])
-    for score, levels in product((Score, ScoreAvg, ScoreDH, ScoreHybrid), (1, 0, -3, 2.5, "3", True)):
+            == ["Score(3)", "ScoreAvg(3)", "ScoreDH(3, delta=0.8)", "ScoreHybrid(3, delta=0.8)",
+                "ScoreCluster(3, mu=0.1, kappa=2.0)"])
+    for score, levels in product((Score, ScoreAvg, ScoreDH, ScoreHybrid, ScoreCluster), (1, 0, -3, 2.5, "3", True)):
         with pytest.raises(ValueError, match=re.escape(
                 f"{score.__name__} levels must be a whole number of at least 2, got {levels!r}")):
             score(levels)
-    for score in (Score, ScoreAvg, ScoreDH, ScoreHybrid):
+    for score in (Score, ScoreAvg, ScoreDH, ScoreHybrid, ScoreCluster):
         with pytest.raises(TypeError):  # no cut or rule to choose: each block has its own
             score(3, "gap")
     # the divisor of ScoreDH and ScoreHybrid: each step to the largest gap / (its steps
@@ -662,9 +665,34 @@ def test_score_takes_the_number_of_levels():
                     f"{score.__name__} delta must be a number above 0, got {delta!r}")):
                 score(3, delta=delta)
     assert ScoreHybrid(3, delta=0.5) != ScoreDH(3, delta=0.5)
-    for score in (Score, ScoreAvg):
+    for score in (Score, ScoreAvg, ScoreCluster):
         with pytest.raises(TypeError):
             score(3, delta=0.5)  # only DHONDT and HYBRID have a divisor
+    # the cost of a split and the cohesion of ScoreCluster, by keyword; mu = 0 is allowed
+    assert ScoreCluster(3) == ScoreCluster(3, mu=0.1, kappa=2) != ScoreCluster(3, mu=0.2)
+    assert ScoreCluster(3, kappa=3).needs == {Scored(3, "cluster", kappa=3)} != ScoreCluster(3).needs
+    assert ScoreCluster(3, mu=0).needs == {Scored(3, "cluster", mu=0)}
+    assert eval(repr(ScoreCluster(3, mu=0.25, kappa=1.5))) == ScoreCluster(3, mu=0.25, kappa=1.5)
+    for mu in (-0.1, np.inf, np.nan, True, "1"):
+        with pytest.raises(ValueError, match=re.escape(f"ScoreCluster mu must be a number of 0 or more, got {mu!r}")):
+            ScoreCluster(3, mu=mu)
+    for kappa in (0, -1, np.inf, np.nan, True, "1"):
+        with pytest.raises(ValueError, match=re.escape(f"ScoreCluster kappa must be a number above 0, got {kappa!r}")):
+            ScoreCluster(3, kappa=kappa)
+    for score in (Score, ScoreAvg, ScoreDH, ScoreHybrid):
+        with pytest.raises(TypeError):
+            score(3, mu=0.2)  # only CLUSTER has mu and kappa
+    # the power of Score's part of the way, by keyword; 1 is the default and not printed
+    assert Score(3) == Score(3, power=1) == Score(3, power=1.0) != Score(3, power=1.5)
+    assert Score(3, power=1.5).needs == {Scored(3, power=1.5)} != Score(3).needs
+    assert repr(Score(3, power=1.5)) == "Score(3, power=1.5)" and repr(Score(3, power=1)) == "Score(3)"
+    assert eval(repr(Score(3, power=2.25))) == Score(3, power=2.25)
+    for power in (0, -1, np.inf, np.nan, True, "1"):
+        with pytest.raises(ValueError, match=re.escape(f"Score power must be a number above 0, got {power!r}")):
+            Score(3, power=power)
+    for score in (ScoreAvg, ScoreDH, ScoreHybrid, ScoreCluster):
+        with pytest.raises(TypeError, match=f"{score.__name__} has no power; only Score has"):
+            score(3, power=1.5)  # only RANGE has a power
     # as a ballot like any other: mixed with another, and eliminated round by round
     mixed = Mix(ScoreAvg(4), Score(4), share=0.5)
     assert mixed.needs == {Scored(4, "avg"), Scored(4)}
@@ -701,7 +729,7 @@ def test_condorcet_ties():
         np.testing.assert_array_equal(margin, 0.0, err_msg=name)
 
 
-def test_methods_are_the_fifteen_expressions():
+def test_methods_are_the_twelve_expressions():
     pairwise = Pairwise()
     margins = Margins(pairwise)
     assert METHODS == {
@@ -719,14 +747,10 @@ def test_methods_are_the_fifteen_expressions():
             margins,
             Unbeaten(margins, against=Highest(Tally(Plurality())), order=Tally(Plurality())),
             Eliminate(Tally(Plurality()), how="min")),
-        "score_range": Highest(Tally(Score(6))),
-        "score_avg": Highest(Tally(ScoreAvg(6))),
-        "score_dh": Highest(Tally(ScoreDH(6))),
-        "score_hybrid": Highest(Tally(ScoreHybrid(6))),
+        "score": Highest(Tally(Score(6, power=1.5))),
     }
     assert list(METHODS) == ["fptp", "irv", "borda", "baldwin", "nanson", "schulze",
-                             "condorcet", "minimax", "black", "koth", "king_runoff",
-                             "score_range", "score_avg", "score_dh", "score_hybrid"]
+                             "condorcet", "minimax", "black", "koth", "king_runoff", "score"]
 
 
 def test_repr_is_the_expression():
@@ -743,10 +767,7 @@ def test_repr_is_the_expression():
         "Runoff(Margins(Pairwise()), "
         "Unbeaten(Margins(Pairwise()), against=Highest(Tally(Plurality())), order=Tally(Plurality())), "
         'Eliminate(Tally(Plurality()), how="min"))')
-    assert repr(METHODS["score_range"]) == "Highest(Tally(Score(6)))"
-    assert repr(METHODS["score_avg"]) == "Highest(Tally(ScoreAvg(6)))"
-    assert repr(METHODS["score_dh"]) == "Highest(Tally(ScoreDH(6, delta=0.8)))"
-    assert repr(METHODS["score_hybrid"]) == "Highest(Tally(ScoreHybrid(6, delta=0.8)))"
+    assert repr(METHODS["score"]) == "Highest(Tally(Score(6, power=1.5)))"
     challenged =Unbeaten(StrongestPaths(Margins(Pairwise())), against=METHODS["black"],
                           order=Weakest(Margins(Pairwise())))
     for method in [*METHODS.values(), *ELIMINATIONS, *BALLOTS, *PAIR_BLOCKS, challenged, *RUNOFFS]:
@@ -781,10 +802,12 @@ def test_needs():
     assert Eliminate(Tally(Plurality()), how="mean").needs == {PROFILE}
     assert all(block.needs == {PAIRWISE} for block in PAIR_BLOCKS)
     assert Highest(Tally(Mix(BY_GAP, BY_MEAN, share=0.5))).needs == {Scored(2, "dhondt"), Scored(2, "avg")}
-    assert METHODS["score_range"].needs == {Scored(6)} == {Scored(6, "range")}
-    assert METHODS["score_avg"].needs == {Scored(6, "avg")}
-    assert METHODS["score_dh"].needs == {Scored(6, "dhondt")}
-    assert METHODS["score_hybrid"].needs == {Scored(6, "hybrid")}
+    assert METHODS["score"].needs == {Scored(6, power=1.5)} == {Scored(6, "range", power=1.5)}
+    assert Highest(Tally(Score(6))).needs == {Scored(6)} == {Scored(6, "range")}
+    assert Highest(Tally(ScoreAvg(6))).needs == {Scored(6, "avg")}
+    assert Highest(Tally(ScoreDH(6))).needs == {Scored(6, "dhondt")}
+    assert Highest(Tally(ScoreHybrid(6))).needs == {Scored(6, "hybrid")}
+    assert Highest(Tally(ScoreCluster(6))).needs == {Scored(6, "cluster")}
     assert Eliminate(Tally(BY_GAP), how="min").needs == {Scored(2, "dhondt")}
     assert Fallback(METHODS["condorcet"], Highest(Tally(BY_MEAN))).needs == {PAIRWISE, Scored(2, "avg")}
 

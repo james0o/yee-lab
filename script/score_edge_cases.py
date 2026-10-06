@@ -1,6 +1,11 @@
-"""Edge cases of the score rules: where RANGE, AVG, DHONDT, DH_NEAR and CLUSTER differ.
+"""Edge cases of the score rules: where RANGE, AVG, DHONDT, DH_NEAR, CLUSTER and POW differ.
 
-DH_NEAR is HYBRID of yeelab.score. CLUSTER lives only here: the scores s from 0 to
+POW is RANGE with its part of the way to the power p, round(part^p * T): with two levels
+it approves the candidates beyond 2^(-1 / p) of the way instead of halfway. p is
+--power, 1.5 by default here (score.POWER, 1, is RANGE itself), the single power that
+fits the real ballots of docs/ballots.py best.
+
+DH_NEAR is HYBRID of yeelab.score, CLUSTER its CLUSTER: the scores s from 0 to
 T = levels - 1, never less for a closer candidate, T for the closest and 0 for the
 farthest, that minimize
 
@@ -10,31 +15,35 @@ part_i is RANGE's part of the way, g_k the gap between neighbouring distinct dis
 as a part of the span, w_k how firmly gap k holds a cluster: the strongest run of
 neighbours it lies in, 1 - kappa * (largest inner gap) / (smaller gap around), 0 at
 least. The gaps next to the closest and the farthest, whose scores are fixed, cost
-nothing to split.
+nothing to split. The methods keep mu and kappa at score.MU and score.KAPPA, the
+defaults here.
+
+The summary judges every rule by criteria that do not name one of them; whether a rule
+gives RANGE's ballot is shown as a property, not judged.
 
     uv run python script/score_edge_cases.py              # every case
-    uv run python script/score_edge_cases.py -c b -c m    # some of them
+    uv run python script/score_edge_cases.py -c b -c j    # some of them
     uv run python script/score_edge_cases.py --list
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 import numpy as np
 import typer
-from numba import njit
 from rich import box
 from rich.console import Console
 from rich.padding import Padding
 from rich.table import Table
 from rich.text import Text
 
-from yeelab.score import AVG, DELTA, DHONDT, HYBRID, MAX_LEVELS, RANGE, _avg_part, from_distances
+from yeelab.score import (AVG, CLUSTER, DELTA, DHONDT, HYBRID, KAPPA, MAX_LEVELS, MU, RANGE, _avg_part, _cohesion,
+                          from_distances)
 
-CLUSTER = "cluster"
-ORDER = (RANGE, AVG, DHONDT, HYBRID, CLUSTER)
-NAMES = {RANGE: "range", AVG: "avg", DHONDT: "dhondt", HYBRID: "dh_near", CLUSTER: "cluster"}
+POW = "pow"  # RANGE with a power: not a rule of yeelab.score, but RANGE with power=
+POWER = 1.5  # default of --power
+ORDER = (RANGE, AVG, DHONDT, HYBRID, CLUSTER, POW)
+NAMES = {RANGE: "range", AVG: "avg", DHONDT: "dhondt", HYBRID: "dh_near", CLUSTER: "cluster", POW: "pow"}
 LABELS = tuple(NAMES[rule] for rule in ORDER)
-MU, KAPPA = 0.1, 2.0  # defaults of --mu and --kappa
 SEED = 1
 console = Console()
 app = typer.Typer(add_completion=False, context_settings={"help_option_names": ["-h", "--help"]})
@@ -45,100 +54,38 @@ class Settings:
     delta: float
     mu: float
     kappa: float
+    power: float
     levels: tuple[int, ...]  # of every table of ballots; () for each case's own
     voters: int
 
     def of(self, levels):
         return self.levels or levels
 
-# ---------------------------------------------------------------- CLUSTER
 
-
-@njit
-def _cohesion(g, kappa, w):
-    """w (m,) for the gaps g (m,) between neighbouring distinct distances in order."""
-    m = g.size
-    w[:] = 0.0
-    for i in range(m + 1):  # the run of distances i..j
-        for j in range(i + 1, m + 1):
-            if i == 0 and j == m:
-                continue
-            around = min(g[i - 1] if i > 0 else np.inf, g[j] if j < m else np.inf)
-            strength = 1.0 - kappa * g[i:j].max() / around
-            for k in range(i, j):
-                w[k] = max(w[k], strength)
-
-
-@njit
-def _cluster_ballot(r, top, mu, kappa, out):
-    """The CLUSTER ballot of the voter at the distances r (C,), into out (C,)."""
-    order = np.argsort(r)
-    values = np.empty(r.size)  # the distinct distances, closest first
-    group = np.empty(r.size, dtype=np.int64)  # of each candidate: the index of its distance
-    n = 0
-    for c in order:
-        if n == 0 or r[c] > values[n - 1]:
-            values[n] = r[c]
-            n += 1
-        group[c] = n - 1
-    if n == 1:
-        out[:] = top
-        return
-    span = values[n - 1] - values[0]
-    g = np.diff(values[:n]) / span
-    w = np.empty(n - 1)
-    _cohesion(g, kappa, w)
-    cost = np.full(top + 1, np.inf)  # of the best scores so far, by the score of the last
-    cost[top] = 0.0
-    new = np.empty(top + 1)
-    back = np.zeros((n, top + 1), dtype=np.int64)
-    for k in range(1, n):
-        split = 0.0 if k == 1 or k == n - 1 else mu * w[k - 1] * max(0.0, 1.0 - top * g[k - 1])
-        part = (values[n - 1] - values[k]) / span
-        for v in range(top + 1):
-            best, arg = cost[v], v
-            for u in range(v + 1, top + 1):
-                if cost[u] + split < best:
-                    best, arg = cost[u] + split, u
-            new[v] = best + (v / top - part) ** 2
-            back[k, v] = arg
-        cost[:] = new
-    scores = np.empty(n, dtype=np.int64)
-    v = 0
-    for k in range(n - 1, -1, -1):
-        scores[k] = v
-        v = back[k, v]
-    out[:] = scores[group]
-
-
-@njit
-def _cluster_ballots(r, top, mu, kappa, out):
-    for i in range(r.shape[0]):
-        _cluster_ballot(r[i], top, mu, kappa, out[i])
-
-
-def cluster_scores(r, levels, mu=MU, kappa=KAPPA):
+def scores(r, levels, rule, s: Settings):
+    """int (..., C): the scores of the rule for the distances r (..., C)."""
     r = np.asarray(r, dtype=np.float64)
-    flat = np.ascontiguousarray(r.reshape(-1, r.shape[-1]))
-    out = np.empty(flat.shape, dtype=np.int64)
-    _cluster_ballots(flat, levels - 1, float(mu), float(kappa), out)
-    return out.reshape(r.shape)
+    if rule == POW:
+        return from_distances(r, levels, RANGE, power=s.power)
+    return from_distances(r, levels, rule, s.delta, mu=s.mu, kappa=s.kappa)
+
+
+def limit(r, rule, s):
+    """(..., C): what score / (levels - 1) of the rule tends to with many levels: AVG's part
+    of the way bent at the mean, POW's part to its power, the others' part itself."""
+    if rule == AVG:
+        return _avg_part(r)
+    lo, hi = r.min(axis=-1, keepdims=True), r.max(axis=-1, keepdims=True)
+    return ((hi - r) / (hi - lo)) ** (s.power if rule == POW else 1.0)
 
 
 def cohesion(r, kappa=KAPPA):
-    """(gaps, w) of the voter at the distances r (C,)."""
+    """(gaps, w) of the voter at the distances r (C,): how firmly each gap holds a cluster."""
     values = np.unique(np.asarray(r, dtype=np.float64))
     g = np.diff(values) / (values[-1] - values[0])
     w = np.empty_like(g)
     _cohesion(g, float(kappa), w)
     return g, w
-
-
-def scores(r, levels, rule, s: Settings):
-    """int (..., C): the scores of the rule for the distances r (..., C)."""
-    if rule == CLUSTER:
-        return cluster_scores(r, levels, s.mu, s.kappa)
-    return from_distances(np.asarray(r, dtype=np.float64), levels, rule, s.delta)
 
 # ---------------------------------------------------------------- Output
 
@@ -209,10 +156,11 @@ def knife_edge(s):
 @case("b", "A cluster between two nearly equal gaps")
 def cluster_between(s):
     note("""0, a, a + 0.1, 1; the gaps tie at a = 0.45. DHONDT moves the cluster as a block.
-    CLUSTER splits it with two levels, keeps it with six and grades it like RANGE with 16.""")
+    CLUSTER splits it with two levels, keeps it with six and grades it like RANGE with 16.
+    POW's cut is further from the farthest: it approves the cluster later, one at a time.""")
     for L in s.of((2, 6, 16)):
         out = table("distances", *LABELS, title=f"L = {L}")
-        for a in (.39, .41, .44, .46, .49, .51):
+        for a in (.19, .29, .39, .41, .44, .46, .49, .51):
             r = [0, a, round(a + .1, 2), 1]
             out.add_row(distances(r), *(ballot(r, L, rule, s) for rule in ORDER))
         console.print(out)
@@ -234,7 +182,8 @@ def clones(s):
 @case("e", "An extremist")
 def extremist(s):
     note("""One far candidate pushes the others to the top; DHONDT and DH_NEAR give the near four one
-    score, CLUSTER the three after the closest.""")
+    score, CLUSTER the three after the closest; with six levels POW keeps the top for the two
+    nearest.""")
     ballots([[0, 1, 2, 3], [0, 1, 2, 3, 20]], s.of((2, 6)), s)
 
 
@@ -245,39 +194,17 @@ def clusters(s):
     ballots([[0, .04, .12, .88, .95, 1]], s.of((2, 6, 16)), s)
 
 
-@case("g", "Exact ties and halves")
-def ties(s):
-    note("""Tied gaps give DHONDT's spare steps to the closer ones; an exact half rounds to even
-    (CLUSTER: as the floating point falls). Both on sets of no area.""")
-    ballots([[0, .25, .5, .75, 1], [0, .5, 1]], s.of((2, 4, 6)), s)
-
-
-@case("h", "The divisor delta")
-def divisor(s):
-    note("A lower delta gives the small gaps more steps; with two levels delta does not matter.")
-    r, rules = [.1, .5, .65, .8, .9, 1], (DHONDT, HYBRID)
-    out = table("L", "delta", *(NAMES[rule] for rule in rules), title=distances(r))
-    for L in s.of((2, 6)):
-        for k, d in enumerate((0.5, 0.65, 0.8, 1.0)):
-            out.add_row(str(L) if k == 0 else "", f"{d:g}", *(ballot(r, L, rule, replace(s, delta=d)) for rule in rules),
-                        end_section=k == 3)
-    console.print(out)
-
-
-@case("i", "Many levels")
+@case("g", "Many levels")
 def many_levels(s):
-    note("""Mean |score / (L - 1) - (1 - x)| over random voters: all but AVG tend to 0; AVG tends
-    to its own part of the way, bent at the mean (last row).""")
+    note("""Mean |score / (L - 1) - limit| over random voters: every rule tends to its own limit,
+    AVG to its part of the way bent at the mean, POW to the part to its power, the others to
+    the part itself.""")
     r = random_distances(s, 5)
-    lo, hi = r.min(axis=1, keepdims=True), r.max(axis=1, keepdims=True)
-    linear, bent = (hi - r) / (hi - lo), _avg_part(r)
     levels = (2, 3, 4, 6, 11, 16)
-    part = {L: {rule: scores(r, L, rule, s) / (L - 1) for rule in ORDER} for L in levels}
     out = table("rule", *(f"L={L}" for L in levels))
     for rule in ORDER:
-        out.add_row(NAMES[rule], *(f"{np.abs(part[L][rule] - linear).mean():.3f}" for L in levels),
-                    end_section=rule == ORDER[-1])
-    out.add_row("avg, to its own", *(f"{np.abs(part[L][AVG] - bent).mean():.3f}" for L in levels))
+        own = limit(r, rule, s)
+        out.add_row(NAMES[rule], *(f"{np.abs(scores(r, L, rule, s) / (L - 1) - own).mean():.3f}" for L in levels))
     console.print(out)
 
 
@@ -290,7 +217,7 @@ def walk_distances(n=100_001):
     return np.sqrt(((points[:, None, :] - WALK) ** 2).sum(axis=-1))
 
 
-@case("j", "A voter walking across the plane")
+@case("h", "A voter walking across the plane")
 def walk(s):
     note("100 000 steps past six candidates: how often scores change, and how many at once.")
     r = walk_distances()
@@ -305,39 +232,13 @@ def walk(s):
     console.print(out)
 
 
-@case("k", "Identities over random voters")
+@case("i", "Identities over random voters")
 def identities(s):
     r = random_distances(s, 6)
-    levels = range(2, MAX_LEVELS + 1)
     approve = {rule: scores(r, 2, rule, s) for rule in (RANGE, DHONDT, HYBRID)}
     out = table("identity", "voters for whom it fails")
     out.add_row("two levels: DH_NEAR approves no one RANGE or DHONDT leaves out",
                 share(np.mean((approve[HYBRID] > np.minimum(approve[RANGE], approve[DHONDT])).any(axis=1))))
-    out.add_row("three candidates: DHONDT with delta 0.5 is RANGE, any L", share(max(
-        np.mean((from_distances(r[:, :3], L, DHONDT, 0.5) != from_distances(r[:, :3], L, RANGE)).any(axis=1))
-        for L in levels)))
-    out.add_row("CLUSTER with mu = 0 is RANGE, any L", share(max(
-        np.mean((cluster_scores(r, L, 0.0, s.kappa) != from_distances(r, L, RANGE)).any(axis=1)) for L in levels)))
-    console.print(out)
-
-
-@case("l", "CLUSTER: cohesion of the gaps, and the cost of a split")
-def cluster_rule(s):
-    note("""w: how firmly each gap holds a cluster (0 at a border). Every level counts, so the near
-    clone 0.95, 0.951 does not hide the two clusters. Then CLUSTER at other mu; mu = 0 is RANGE.""")
-    out = table("distances", "gaps", "w", title=f"kappa = {s.kappa:g}")
-    for r in ([0, .19, .39, .59, .78, 1], [0, .44, .54, 1], [0, 6, 8, 9, 20], [0, .04, .12, .88, .95, 1],
-              [0, .04, .12, .88, .95, .951, 1], [0, .3, .6, .65, 1]):
-        g, w = cohesion(r, s.kappa)
-        out.add_row(distances(r), " ".join(f"{v:.3g}" for v in g), " ".join(f"{v:.2f}" for v in w))
-    console.print(out)
-    mus = (0.0, 0.05, MU, 0.2)
-    out = table("distances", "L", *(f"mu = {mu:g}" for mu in mus))
-    for r in ([0, .44, .54, 1], [0, .04, .12, .88, .95, 1]):
-        levels = s.of((2, 6, 11, 16))
-        for k, L in enumerate(levels):
-            out.add_row(distances(r) if k == 0 else "", str(L), *(ballot(r, L, CLUSTER, replace(s, mu=mu)) for mu in mus),
-                        end_section=k == len(levels) - 1)
     console.print(out)
 
 # ---------------------------------------------------------------- Summary
@@ -360,9 +261,9 @@ def random_distances(s, count, voters=None):
     return np.random.default_rng(SEED).random((voters or s.voters, count))
 
 
-def b_sweep(L, rule, s, n=1200):
-    """(n, 4): the ballots of case B for a from 0.39 to 0.51."""
-    a = np.linspace(.39, .51, n)
+def sweep(L, rule, s, low=.39, high=.51, n=1200):
+    """(n, 4): the ballots of case B for a from low to high."""
+    a = np.linspace(low, high, n)
     return scores(np.stack([np.zeros_like(a), a, a + .1, np.ones_like(a)], axis=-1), L, rule, s)
 
 
@@ -374,27 +275,36 @@ def is_cluster(r, members, kappa):
     return set(np.nonzero((where >= lo) & (where <= hi))[0]) == set(members) and (cohesion(r, kappa)[1][lo:hi] > 0).all()
 
 
-@criterion(knife_edge, "no gap stands out: RANGE's ballot, L = 2 and 6")
-def _(rule, s):
-    rows = ([0, .21, .41, .61, .81, 1], [0, .19, .39, .59, .78, 1], [0, .2, .4, .6, .8, 1])
-    return all((scores(r, L, rule, s) == scores(r, L, RANGE, s)).all() for r in rows for L in (2, 6))
+KNIFE_EDGE = ([0, .21, .41, .61, .81, 1], [0, .19, .39, .59, .78, 1], [0, .2, .4, .6, .8, 1])
 
 
-@criterion(cluster_between, "L = 2: one approval changes at a time, through 1 1 0 0")
+@criterion(knife_edge, "a move of 0.03 at most: one approval more or less, no score off by more than a level")
 def _(rule, s):
-    b = b_sweep(2, rule, s)
+    for i, one in enumerate(KNIFE_EDGE):
+        for other in KNIFE_EDGE[i + 1:]:
+            if abs(scores(one, 2, rule, s).sum() - scores(other, 2, rule, s).sum()) > 1:
+                return False
+            if np.abs(scores(one, 6, rule, s) - scores(other, 6, rule, s)).max() > 1:
+                return False
+    return True
+
+
+@criterion(cluster_between, "L = 2, the cluster across the whole way: one approval changes at a time, "
+                            "and it is split somewhere")
+def _(rule, s):  # from 0.02 to 0.88 the cluster crosses the cut of every rule
+    b = sweep(2, rule, s, .02, .88, 4000)
     return ((b[1:] != b[:-1]).sum(axis=1) <= 1).all() and (b[:, 1] != b[:, 2]).any()
 
 
 @criterion(cluster_between, "L = 6: the cluster at most a level apart")
 def _(rule, s):
-    b = b_sweep(6, rule, s)
+    b = sweep(6, rule, s)
     return (np.abs(b[:, 1] - b[:, 2]) <= 1).all()
 
 
-@criterion(cluster_between, "L = 16: graded like RANGE")
+@criterion(cluster_between, "L = 16, the cluster across the whole way: no score jumps by more than a level")
 def _(rule, s):
-    return (b_sweep(16, rule, s) == b_sweep(16, RANGE, s)).all()
+    return (np.abs(np.diff(sweep(16, rule, s, .02, .88, 4000), axis=0)) <= 1).all()
 
 
 @criterion(far_gap, "0 6 8 9 21, L = 6: 6, 8 and 9 not all one score")
@@ -410,26 +320,10 @@ def _(rule, s):
     return all((scores(after, L, rule, s)[:, :6] == scores(r, L, rule, s)).all() for L in (2, 6))
 
 
-@shown(extremist, "0 1 2 3 21, near four, L = 6")
-def _(rule, s):  # 21, not 20: no score exactly half way
-    return styled(scores([0, 1, 2, 3, 21], 6, rule, s)[:4], 6)
-
-
-@shown(clusters, "two clusters, L = 6")
-def _(rule, s):
-    return styled(scores([0, .04, .12, .88, .95, 1], 6, rule, s), 6)
-
-
-@shown(clusters, "two clusters, L = 16")
-def _(rule, s):
-    return styled(scores([0, .04, .12, .88, .95, 1], 16, rule, s), 16)
-
-
-@criterion(many_levels, "L = 16: within a quarter level of 1 - x on average")
+@criterion(many_levels, "L = 16: within a quarter level of its own limit on average")
 def _(rule, s):
     r = random_distances(s, 5)
-    lo, hi = r.min(axis=1, keepdims=True), r.max(axis=1, keepdims=True)
-    return np.abs(scores(r, 16, rule, s) - 15 * (hi - r) / (hi - lo)).mean() <= 0.25
+    return np.abs(scores(r, 16, rule, s) - 15 * limit(r, rule, s)).mean() <= 0.25
 
 
 @criterion(walk, "only a cluster changes several scores in one step, L = 2 and 6")
@@ -461,9 +355,50 @@ def _(rule, s):
     return True
 
 
-@case("m", "Summary")
+@shown(extremist, "0 1 2 3 21, near four, L = 6")
+def _(rule, s):  # 21, not 20: no score exactly half way
+    return styled(scores([0, 1, 2, 3, 21], 6, rule, s)[:4], 6)
+
+
+@shown(clusters, "two clusters, L = 6")
+def _(rule, s):
+    return styled(scores([0, .04, .12, .88, .95, 1], 6, rule, s), 6)
+
+
+@shown(clusters, "two clusters, L = 16")
+def _(rule, s):
+    return styled(scores([0, .04, .12, .88, .95, 1], 16, rule, s), 16)
+
+
+LIKE_RANGE = []  # (source case, text, test(rule, s)): whether the rule gives RANGE's ballot
+
+
+@criterion(knife_edge, "RANGE's ballot, L = 2 and 6", LIKE_RANGE)
+def _(rule, s):
+    return all((scores(r, L, rule, s) == scores(r, L, RANGE, s)).all() for r in KNIFE_EDGE for L in (2, 6))
+
+
+@criterion(cluster_between, "L = 2, a from 0.39 to 0.51: one approval at a time, through 1 1 0 0", LIKE_RANGE)
+def _(rule, s):
+    b = sweep(2, rule, s)
+    return ((b[1:] != b[:-1]).sum(axis=1) <= 1).all() and (b[:, 1] != b[:, 2]).any()
+
+
+@criterion(cluster_between, "L = 16: graded like RANGE", LIKE_RANGE)
+def _(rule, s):
+    return (sweep(16, rule, s) == sweep(16, RANGE, s)).all()
+
+
+@criterion(many_levels, "L = 16: within a quarter level of 1 - x on average", LIKE_RANGE)
+def _(rule, s):
+    r = random_distances(s, 5)
+    return np.abs(scores(r, 16, rule, s) - 15 * limit(r, RANGE, s)).mean() <= 0.25
+
+
+@case("j", "Summary")
 def summary(s):
-    note("Criteria pass or fail; properties are shown, not judged.")
+    note("""Criteria pass or fail, and name no rule. Properties are shown, not judged: the ballots
+    of some cases, and whether a rule is RANGE where the earlier criteria asked for that.""")
     letters = {function: letter.upper() for letter, (_, function) in CASES.items()}
     out = table("case", "criterion", *LABELS)
     out.columns[1].no_wrap = False
@@ -475,6 +410,12 @@ def summary(s):
         out.add_row(letters[source], text, *(Text("pass", "green") if passed[rule] else Text("fail", "bold red")
                                              for rule in ORDER), end_section=k == len(CRITERIA) - 1)
     out.add_row("", "met", *(Text(f"{met[rule]} of {len(CRITERIA)}", "bold") for rule in ORDER))
+    console.print(out)
+    out = table("case", "like RANGE", *LABELS)
+    out.columns[1].no_wrap = False
+    for source, text, test in LIKE_RANGE:
+        out.add_row(letters[source], text, *(Text("yes") if test(rule, s) else Text("no", "bright_black")
+                                             for rule in ORDER))
     console.print(out)
     out = table("property", *(f"{letters[source]}: {text}" for source, text, _ in PROPERTIES))
     for rule in ORDER:
@@ -490,11 +431,12 @@ def main(
     delta: float = typer.Option(DELTA, "--delta", "-d", help="Divisor of DHONDT and DH_NEAR."),
     mu: float = typer.Option(MU, "--mu", help="CLUSTER: cost of a split; 0 is RANGE."),
     kappa: float = typer.Option(KAPPA, "--kappa", help="CLUSTER: how much farther a cluster's neighbours are."),
+    power: float = typer.Option(POWER, "--power", "-p", help="POW: the power of RANGE's part of the way; 1 is RANGE."),
     levels: list[int] = typer.Option([], "--levels", "-l", help="Levels of every ballot table; default each case's."),
     voters: int = typer.Option(100_000, "--voters", "-n", help="Random voters."),
     list_cases: bool = typer.Option(False, "--list", help="List the cases."),
 ) -> None:
-    """Edge cases of the five score rules, side by side."""
+    """Edge cases of the six score rules, side by side."""
     if list_cases:
         out = table("case", "title")
         for letter, (title, _) in CASES.items():
@@ -504,13 +446,14 @@ def main(
     cases = [c.lower() for c in cases] or list(CASES)
     if unknown := [c for c in cases if c not in CASES]:
         raise typer.BadParameter(f"unknown {', '.join(unknown)}; choose from {', '.join(CASES)}", param_hint="--case")
-    if not (0 < delta < np.inf and 0 <= mu < np.inf and 0 < kappa < np.inf and voters >= 1):
-        raise typer.BadParameter("delta and kappa above 0, mu 0 or more, voters 1 or more")
+    if not (0 < delta < np.inf and 0 <= mu < np.inf and 0 < kappa < np.inf and 0 < power < np.inf and voters >= 1):
+        raise typer.BadParameter("delta, kappa and power above 0, mu 0 or more, voters 1 or more")
     if not all(2 <= L <= MAX_LEVELS for L in levels):
         raise typer.BadParameter(f"levels must be 2 to {MAX_LEVELS}", param_hint="--levels")
 
-    settings = Settings(delta, mu, kappa, tuple(levels), voters)
-    console.print(f"delta {delta:g}   mu {mu:g}   kappa {kappa:g}   voters {voters}", style="bright_black")
+    settings = Settings(delta, mu, kappa, power, tuple(levels), voters)
+    console.print(f"delta {delta:g}   mu {mu:g}   kappa {kappa:g}   power {power:g}   voters {voters}",
+                  style="bright_black")
     for letter in cases:
         title, function = CASES[letter]
         console.print()

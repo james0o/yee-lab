@@ -26,8 +26,8 @@
     .choices > span { font-size: .9rem; color: #666; }  /* row labels only, not KaTeX spans */
     .choices > label { font-size: .9rem; display: flex; align-items: center; gap: .3rem; cursor: pointer; }
     .choices input[type=checkbox] { accent-color: #222; margin: 0; }
-    #deviation, #levels, #delta { width: 12rem; accent-color: #222; }
-    #deviationValue, #levelsValue, #deltaValue { font-size: .9rem; min-width: 6rem; }
+    #deviation, #levels, #power { width: 12rem; accent-color: #222; }
+    #deviationValue, #levelsValue, #powerValue { font-size: .9rem; min-width: 6rem; }
     button { font: inherit; padding: .4rem .9rem; border: 1px solid #222; border-radius: 4px; background: #fff; cursor: pointer; }
     button.active { background: #222; color: #fff; }
     button:disabled { opacity: .35; cursor: default; }
@@ -51,7 +51,7 @@
       <div class="choices" id="pixelMedians"><span>Pixel is:</span></div>
       <div class="choices" id="methods"><span>Voting method:</span></div>
       <div class="choices"><span>Score categories:</span><input type="range" id="levels" min="2" step="1"><output id="levelsValue"></output></div>
-      <div class="choices"><span>D'Hondt δ:</span><input type="range" id="delta"><output id="deltaValue"></output></div>
+      <div class="choices"><span>Score power p:</span><input type="range" id="power"><output id="powerValue"></output></div>
       <div class="choices" id="ideals"><span>Ideal scenario:</span></div>
       <p>Drag a candidate to move it · click empty space to add one · right-click to remove</p>
       <p>Hover the square to see the voters of a pixel along x (above) and in 2D</p>
@@ -78,8 +78,8 @@
     const deviationValue = document.getElementById("deviationValue");
     const levelsSlider = document.getElementById("levels");
     const levelsValue = document.getElementById("levelsValue");
-    const deltaSlider = document.getElementById("delta");
-    const deltaValue = document.getElementById("deltaValue");
+    const powerSlider = document.getElementById("power");
+    const powerValue = document.getElementById("powerValue");
     const joint = document.getElementById("joint");
     const votersText = document.getElementById("voters");
     const showMarginal = document.getElementById("showMarginal");  // the strip above the square
@@ -133,10 +133,9 @@
                           // quarter of the square the pixel whose voters have their geometric
                           // median there, and the border of the coloured region
     let deviation = 0;    // mean absolute deviation of the voters from their pixel
-    let scoreMethods = [];   // names of the methods the categories slider belongs to
+    let scoreMethods = [];   // names of the methods the categories and power sliders belong to
     let levels = 0;          // their number of scores on a ballot
-    let deltaMethods = [];   // names of the methods the δ slider belongs to
-    let delta = 0;           // their divisor: each step to the largest gap / (its steps + δ)
+    let power = 0;           // their part of the way is raised to this power
     let voters = {};      // deviation -> {sigma, beta_params} from the backend, where
                           // beta_params is [a, b] along one axis, per pixel
     let hovered = [0.5, 0.5];  // point whose voters are shown in the strip and the shade
@@ -501,7 +500,7 @@
       if (moving && performance.now() - moving.start >= MOVE) moving = null;  // it has arrived
       if (moving) grid = dragGrid;  // on its way: the coarser grid, like a drag
       const part = shift();
-      const asked = settings(), sliders = [deviation, levels, delta];
+      const asked = settings(), sliders = [deviation, levels, power];
       if (grid === finalGrid) message.textContent = `Computing ${labels[method]}…`;
       const start = performance.now();
       try {
@@ -509,7 +508,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            candidates, method, distribution, deviation, levels, delta, grid,
+            candidates, method, distribution, deviation, levels, power, grid,
             pixel_median: part > 0 ? "geometric" : "marginal", shift: part,
           }),
         });
@@ -535,11 +534,11 @@
     }
 
     // What the diagram shows, and how long it took (round trip, and computing it on the backend).
-    function describe(deviation, levels, delta, total, server) {
+    function describe(deviation, levels, power, total, server) {
       const tail = ` · ${candidates.length} candidates · ${total} ms (${server} ms computing)`;
       let name = labels[method];
       if (scoreMethods.includes(method)) name += `, ${levels} categories${levels === 2 ? " (approval)" : ""}`;
-      if (deltaMethods.includes(method)) name += `, δ = ${delta.toFixed(2)}`;
+      if (scoreMethods.includes(method)) name += `, p = ${power.toFixed(2)}`;
       if (method === "voronoi") {  // nearest candidate, no voters involved but for where it is drawn
         const where = geometric() ? " · only where voters have their geometric median" : "";
         message.textContent = `${name}${where}${tail}`;
@@ -637,11 +636,11 @@
       for (const button of pixelMedians.querySelectorAll("button")) button.disabled = distribution !== "beta";
     }
 
-    // The categories and δ sliders only apply to their methods.
+    // The categories and power sliders only apply to their methods.
     function pickMethod(name) {
       method = name;
       levelsSlider.disabled = !scoreMethods.includes(method);
-      deltaSlider.disabled = !deltaMethods.includes(method);
+      powerSlider.disabled = !scoreMethods.includes(method);
     }
 
 
@@ -682,24 +681,23 @@
     }
     Object.assign(levelsSlider, { max: config.max_levels, value: config.levels });
     levelsSlider.title = "Number of scores on a ballot: the top one for the closest candidate, 0 " +
-      "for the farthest. Two are an approval ballot. For the score methods only.";
+      "for the farthest. Two are an approval ballot. For Score only.";
     levelsSlider.addEventListener("input", () => { pickLevels(); compute(dragGrid); });
     levelsSlider.addEventListener("change", () => compute());
-    // The δ slider is the divisor of Score (D'Hondt) and Score (hybrid). It recomputes like the others.
-    deltaMethods = config.deltas;
-    function pickDelta() {
-      delta = Number(deltaSlider.valueAsNumber.toFixed(2));  // the step is 0.01: no 0.8100000000000001
-      const named = { 1: " (D'Hondt)", 0.5: " (Sainte-Laguë)" }[delta] ?? "";
-      deltaValue.textContent = delta.toFixed(2) + named;
+    // The power slider bends the scale of Score. It recomputes like the others.
+    function pickPower() {
+      power = Number(powerSlider.valueAsNumber.toFixed(2));  // the step is 0.05
+      powerValue.textContent = power.toFixed(2) + (power === 1 ? " (linear)" : "");
     }
-    Object.assign(deltaSlider, {
-      min: config.min_delta, max: config.max_delta, step: config.delta_step, value: config.delta,
+    Object.assign(powerSlider, {
+      min: config.min_power, max: config.max_power, step: config.power_step, value: config.power,
     });
-    deltaSlider.title = "Each step of a Score (D'Hondt) ballot goes to the gap with the largest " +
-      "gap / (its steps + δ): 1 is D'Hondt, which favours the large gaps; a lower δ favours them " +
-      "less, down to Sainte-Laguë at 0.5. For Score (D'Hondt) and Score (hybrid) only.";
-    deltaSlider.addEventListener("input", () => { pickDelta(); compute(dragGrid); });
-    deltaSlider.addEventListener("change", () => compute());
+    powerSlider.title = "A Score ballot gives a candidate its part of the way from the farthest to " +
+      "the closest to the power p: 1 is in proportion to the distance; above 1 the top scores stay " +
+      "with the candidates near the closest (with two categories the voter approves those beyond " +
+      "2^(-1/p) of the way, not halfway). For Score only.";
+    powerSlider.addEventListener("input", () => { pickPower(); compute(dragGrid); });
+    powerSlider.addEventListener("change", () => compute());
     choices(pixelMedians, config.pixel_medians, name => {
       const from = shift();  // where the diagram is now, also in the middle of a move
       pixelMedian = name;
@@ -718,8 +716,8 @@
       .classList.add("active");
     pickDeviation();
     pickLevels();
-    pickDelta();
-    pickMethod(null);  // none yet: the categories and δ sliders wait for their methods
+    pickPower();
+    pickMethod(null);  // none yet: the categories and power sliders wait for Score
     updatePixelMedians();
     draw();
     drawVoters();

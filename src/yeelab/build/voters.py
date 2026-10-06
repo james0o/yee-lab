@@ -10,7 +10,8 @@ pixels/.
     unscored    {Scored(levels, rule, delta): mean part of the top score that the voters
                 do not give each candidate (..., C)}, from 0 to 1, one entry per score
                 ballot: its number of levels, its rule (score.RANGE, score.AVG,
-                score.DHONDT, score.HYBRID) and the divisor of DHONDT and HYBRID. The
+                score.DHONDT, score.HYBRID, score.CLUSTER), the divisor of DHONDT and
+                HYBRID, the mu and kappa of CLUSTER and the power of RANGE. The
                 mean score is the top score, levels - 1, times 1 minus this. It is
                 not kept itself: where nearly all voters give two candidates the top
                 score, both mean scores are the top score to rounding, and only the
@@ -22,18 +23,22 @@ from typing import Literal
 
 import numpy as np
 
-from yeelab.score import DELTA, RANGE, Rule
+from yeelab.score import DELTA, KAPPA, MU, POWER, RANGE, Rule
 
 
 @dataclass(frozen=True)
 class Scored:
     """The scores on a ballot with `levels` scores, given by `rule` (score.RANGE,
-    score.AVG, score.DHONDT or score.HYBRID) and, for DHONDT and HYBRID, the divisor
-    `delta`; the others do not use it."""
+    score.AVG, score.DHONDT, score.HYBRID or score.CLUSTER), for DHONDT and HYBRID the
+    divisor `delta`, for CLUSTER the cost of a split `mu` and the cohesion `kappa`, and
+    for RANGE the `power` of the part of the way; the others do not use them."""
 
     levels: int
     rule: Rule = RANGE
     delta: float = DELTA
+    mu: float = MU
+    kappa: float = KAPPA
+    power: float = POWER
 
 
 Share = Literal["first", "pairwise", "profile"] | Scored

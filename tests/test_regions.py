@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from matplotlib.path import Path as MplPath
 
-from yeelab.build import Highest, Mix, Score, ScoreAvg, ScoreDH, ScoreHybrid, Scored, Tally, Voters
+from yeelab.build import Highest, Mix, Score, ScoreAvg, ScoreCluster, ScoreDH, ScoreHybrid, Scored, Tally, Voters
 from yeelab.margin.regions import MARGINS, grid, regions, winners
 from yeelab.margin.shares import Model, first_choice_shares, unscored_shares
 from yeelab.pixels import beta as pixel_beta, methods as pixel_methods, normal as pixel_normal
@@ -49,7 +49,8 @@ def _pixel_winners(method, model, rankings, probs):
     if not scores:
         return MARGINS[method].evaluate(_voters(rankings, probs))[0]
     centres = pixel_medians(probs.shape[0])
-    unscored = {share: unscored_shares(CANDIDATES, model, share.levels, centres, share.rule, share.delta)
+    unscored = {share: unscored_shares(CANDIDATES, model, share.levels, centres, share.rule, share.delta,
+                                       mu=share.mu, kappa=share.kappa, power=share.power)
                 for share in scores}
     return MARGINS[method].evaluate(Voters(unscored=unscored))[0]
 
@@ -154,9 +155,9 @@ def test_regions_reproduce_pixel_diagram(profile, method):
 
 @pytest.mark.parametrize("model", [Model("beta", 0.05, "rms"), Model("normal", 0.05)],
                          ids=lambda m: m.distribution)
-@pytest.mark.parametrize("method", ["score_range", "score_avg", "score_dh", "score_hybrid",
-                                    Highest(Tally(Score(2))), APPROVE_MEAN, APPROVE_GAP,
-                                    Highest(Tally(ScoreHybrid(2)))], ids=str)
+@pytest.mark.parametrize("method", ["score", Highest(Tally(Score(2))), Highest(Tally(Score(2, power=1.5))),
+                                    Highest(Tally(Score(2, power=2))), APPROVE_MEAN, APPROVE_GAP,
+                                    Highest(Tally(ScoreHybrid(2))), Highest(Tally(ScoreCluster(2)))], ids=str)
 def test_approval_is_decided_where_nearly_all_voters_approve_the_same(model, method):
     """Narrow voters far from the candidates all approve the same ones, whose shares are
     1 to rounding. Their lead must survive: no ties (a margin of 0 is in no region) and
@@ -197,26 +198,25 @@ def test_first_choice_regions_tile_even_with_normal_voters_outside():
 
 
 def test_config_lists_every_method():
-    """The UI makes a button of each; a built method's tooltip ends with its expression."""
+    """The UI makes a button of each; a built method's tooltip ends with its expression.
+    Score is the one score method."""
     config = TestClient(app).get("/api/config").json()
     methods = config["methods"]
     assert [m["name"] for m in methods] == list(MARGINS)
     assert [m["label"] for m in methods + config["ideals"]] == [
         "FPTP", "IRV", "Borda", "Baldwin", "Nanson", "Schulze", "Condorcet", "Minimax",
-        "Black", "King of the hill", "King runoff", "Score (range)", "Score (avg)",
-        "Score (D'Hondt)", "Score (hybrid)", "Voronoi"]
+        "Black", "King of the hill", "King runoff", "Score", "Voronoi"]
     descriptions = {m["name"]: m["description"] for m in methods}
     assert descriptions["nanson"].endswith('\nEliminate(Tally(BordaCount()), how="mean")')
-    # the slider: its methods, and its default, which the methods are listed with
-    assert config["scores"] == ["score_range", "score_avg", "score_dh", "score_hybrid"]
+    # the categories and power sliders: their method, their defaults, which it is listed
+    # with, and their ranges
+    assert config["scores"] == ["score"]
     assert config["levels"] == 6 and config["max_levels"] == 11
-    assert descriptions["score_range"].endswith("\nHighest(Tally(Score(6)))")
-    assert descriptions["score_avg"].endswith("\nHighest(Tally(ScoreAvg(6)))")
-    assert descriptions["score_dh"].endswith("\nHighest(Tally(ScoreDH(6, delta=0.8)))")
-    assert descriptions["score_hybrid"].endswith("\nHighest(Tally(ScoreHybrid(6, delta=0.8)))")
-    # the δ slider: its methods, its default and its range
-    assert config["deltas"] == ["score_dh", "score_hybrid"] and config["delta"] == 0.8
-    assert (config["min_delta"], config["max_delta"], config["delta_step"]) == (0.5, 1.0, 0.01)
+    assert descriptions["score"].endswith("\nHighest(Tally(Score(6, power=1.5)))")
+    assert config["power"] == 1.5
+    assert (config["min_power"], config["max_power"], config["power_step"]) == (1.0, 2.0, 0.05)
+    for gone in ("deltas", "delta", "clusters", "mu", "kappa", "powers"):
+        assert gone not in config
 
 
 @pytest.mark.parametrize("distribution", ["beta", "normal"])
@@ -242,7 +242,7 @@ def _mix(share):
 def test_a_built_method_is_drawn_like_a_named_one(model):
     """winners() and regions() take a method of yeelab.build itself. The approval mix
     with all voters of one kind is the approval of that kind."""
-    for built, expected in ((Highest(Tally(Score(6))), "score_range"), (_mix(0), APPROVE_GAP),
+    for built, expected in ((Highest(Tally(Score(6, power=1.5))), "score"), (_mix(0), APPROVE_GAP),
                             (_mix(1), APPROVE_MEAN)):
         for got, want in zip(winners(built, CANDIDATES, model, 64), winners(expected, CANDIDATES, model, 64)):
             np.testing.assert_array_equal(got, want)
@@ -299,9 +299,10 @@ def _score_dh(levels):
 
 
 @pytest.mark.parametrize("model", MODELS, ids=lambda m: m.distribution)
-def test_score_avg_is_a_method_apart_from_score_range(model):
+def test_score_avg_is_a_method_apart_from_score(model):
     """The mean distance in the middle of the scale moves the scores, and so the winners."""
-    assert (winners("score_avg", CANDIDATES, model, 64)[1] != winners("score_range", CANDIDATES, model, 64)[1]).any()
+    avg = winners(Highest(Tally(ScoreAvg(6))), CANDIDATES, model, 64)[1]
+    assert (avg != winners(_score(6), CANDIDATES, model, 64)[1]).any()
 
 
 @pytest.mark.parametrize("model", MODELS, ids=lambda m: m.distribution)
@@ -323,10 +324,19 @@ def test_score_hybrid_is_a_method_apart_from_score_range_and_score_dh(model):
             assert (hybrid != winners(Highest(Tally(other(levels))), CANDIDATES, model, 64)[1]).any()
 
 
-@pytest.mark.parametrize("method", ["score_range", "score_avg", "score_dh", "score_hybrid"])
-def test_api_builds_the_methods_of_the_slider(method):
-    """levels is the number of scores of the score methods. It defaults to what the
-    methods are listed with, and the other methods ignore it."""
+@pytest.mark.parametrize("model", MODELS, ids=lambda m: m.distribution)
+def test_score_cluster_is_a_method_apart_from_score_range(model):
+    """It is Score's ballot unless that splits a cluster, and the diagram is not Score's,
+    with six levels and with two."""
+    for levels in (6, 2):
+        cluster = winners(Highest(Tally(ScoreCluster(levels))), CANDIDATES, model, 64)[1]
+        assert (cluster != winners(Highest(Tally(Score(levels))), CANDIDATES, model, 64)[1]).any()
+
+
+def test_api_builds_score_from_levels_and_power():
+    """levels is the number of scores of Score, 2 to 11, and power, 1 to 2, raises its part
+    of the way to it. They default to what the method is listed with (6 and 1.5), the
+    other methods ignore them, and settings the UI no longer has are not taken."""
     client = TestClient(app)
 
     def shapes(method, **settings):
@@ -335,43 +345,26 @@ def test_api_builds_the_methods_of_the_slider(method):
         assert response.status_code == 200
         return response.json()["regions"]
 
-    assert shapes("borda", levels=5) == shapes("borda")
-
-    assert shapes(method) == shapes(method, levels=6)
-    seen = [shapes(method, levels=levels) for levels in (2, 3, 6, 11)]
+    assert shapes("borda", levels=5, power=2) == shapes("borda")
+    assert shapes("score") == shapes("score", levels=6, power=1.5)
+    seen = [shapes("score", levels=levels) for levels in (2, 3, 6, 11)]
     assert all(one != other for one, other in zip(seen, seen[1:]))
-    # two levels are the approval ballot of the method's own rule
-    approval = Highest(Tally({"score_range": Score, "score_avg": ScoreAvg, "score_dh": ScoreDH,
-                              "score_hybrid": ScoreHybrid}[method](2)))
-    assert seen[0] == json.loads(json.dumps(regions(approval, CANDIDATES.tolist(), MODELS[0], 64)))
+    for levels in (2, 6):
+        seen = [shapes("score", levels=levels, power=power) for power in (1, 1.5, 2)]
+        assert all(one != other for one, other in zip(seen, seen[1:]))
+    # two levels are the approval ballot that cuts at 2^(-1/p) of the way
+    for power in (1, 1.5, 2):
+        approval = Highest(Tally(Score(2, power=power)))
+        assert (shapes("score", levels=2, power=power)
+                == json.loads(json.dumps(regions(approval, CANDIDATES.tolist(), MODELS[0], 64))))
 
-    for settings in ({"levels": 1}, {"levels": 12}, {"levels": 2.5}):
-        request = {"candidates": CANDIDATES.tolist(), "method": method, **settings}
+    for settings in ({"levels": 1}, {"levels": 12}, {"levels": 2.5}, {"power": 0.95}, {"power": 2.05},
+                     {"power": "x"}):
+        request = {"candidates": CANDIDATES.tolist(), "method": "score", **settings}
         assert client.post("/api/regions", json=request).status_code == 422, settings
-
-
-@pytest.mark.parametrize("method", ["score_dh", "score_hybrid"])
-def test_api_builds_the_methods_of_delta(method):
-    """delta is the divisor of score_dh and score_hybrid, 0.5 to 1. It defaults to what the
-    methods are listed with, the other methods ignore it, and with two levels it changes
-    nothing."""
-    client = TestClient(app)
-
-    def shapes(method, **settings):
-        request = {"candidates": CANDIDATES.tolist(), "method": method, "grid": 64, **settings}
-        response = client.post("/api/regions", json=request)
-        assert response.status_code == 200
-        return response.json()["regions"]
-
-    assert shapes(method) == shapes(method, delta=0.8)
-    assert shapes(method, delta=0.5) != shapes(method, delta=1)
-    assert shapes(method, levels=2, delta=0.5) == shapes(method, levels=2, delta=1)
-    for other in ("score_range", "score_avg", "borda"):
-        assert shapes(other, delta=0.5) == shapes(other)
-
-    for delta in (0.49, 1.01, "x"):
-        request = {"candidates": CANDIDATES.tolist(), "method": method, "delta": delta}
-        assert client.post("/api/regions", json=request).status_code == 422, delta
+    for gone in ("score_range", "score_avg", "score_dh", "score_hybrid", "score_cluster"):
+        request = {"candidates": CANDIDATES.tolist(), "method": gone}
+        assert client.post("/api/regions", json=request).status_code == 422, gone
 
 
 def test_api_offers_deviations_from_005():
@@ -380,6 +373,6 @@ def test_api_offers_deviations_from_005():
     config = client.get("/api/config").json()
     assert config["deviations"] == [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4]
     assert [voters["deviation"] for voters in config["voters"]] == config["deviations"]
-    request = {"candidates": CANDIDATES.tolist(), "method": "score_dh", "grid": 64}
+    request = {"candidates": CANDIDATES.tolist(), "method": "score", "grid": 64}
     assert client.post("/api/regions", json={**request, "deviation": 0.05}).status_code == 200
     assert client.post("/api/regions", json={**request, "deviation": 0}).status_code == 422

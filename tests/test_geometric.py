@@ -223,7 +223,7 @@ def _area(ring):
     return 0.5 * np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y)
 
 
-@pytest.mark.parametrize("method", ["fptp", "irv", "condorcet", "score_avg"])
+@pytest.mark.parametrize("method", ["fptp", "irv", "condorcet", "score"])
 def test_regions_are_the_same_elections_moved_by_g(method):
     """The winner drawn at g(m) is the winner of the pixel with the medians m, the one
     the usual diagram draws at m. The polygons tile the image of g and nothing else."""

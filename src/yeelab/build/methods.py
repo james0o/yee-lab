@@ -11,9 +11,6 @@ from yeelab.build.blocks import (
     Plurality,
     Runoff,
     Score,
-    ScoreAvg,
-    ScoreDH,
-    ScoreHybrid,
     StrongestPaths,
     Tally,
     Unbeaten,
@@ -37,11 +34,10 @@ black = Fallback(condorcet, borda)                   # the Condorcet winner, els
 koth = Unbeaten(M, against=fptp, order=Tally(Plurality()))
 king_runoff = Runoff(M, koth, irv)                   # the king of the hill against the irv winner
 
-# the highest mean score, of 0 to 5, each voter's in proportion to the distances
-score_range = Highest(Tally(Score(6)))
-score_avg = Highest(Tally(ScoreAvg(6)))              # ... with the mean distance in the middle
-score_dh = Highest(Tally(ScoreDH(6)))                # ... the steps shared out among the gaps
-score_hybrid = Highest(Tally(ScoreHybrid(6)))        # ... among the gaps of the closer half
+# the highest mean score, of 0 to 5: each voter's by where the distance is between the
+# closest and the farthest candidate, that part of the way to the power SCORE_POWER
+SCORE_POWER = 1.5  # the web UI's default; the one power that fits real ballots best (docs/math.pdf)
+score = Highest(Tally(Score(6, power=SCORE_POWER)))
 
 METHODS: dict[str, Winner] = {
     "fptp": fptp,
@@ -55,8 +51,5 @@ METHODS: dict[str, Winner] = {
     "black": black,
     "koth": koth,
     "king_runoff": king_runoff,
-    "score_range": score_range,
-    "score_avg": score_avg,
-    "score_dh": score_dh,
-    "score_hybrid": score_hybrid,
+    "score": score,
 }

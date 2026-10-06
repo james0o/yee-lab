@@ -7,8 +7,9 @@
 Every block has one type of output:
 
     Ballot           Plurality(), BordaCount(),         points one voter gives a candidate
-                     Score(levels), ScoreAvg(levels), ScoreDH(levels, delta=...),
-                     ScoreHybrid(levels, delta=...), Mix(first, second, share=...)
+                     Score(levels, power=...), ScoreAvg(levels), ScoreDH(levels, delta=...),
+                     ScoreHybrid(levels, delta=...), ScoreCluster(levels, mu=..., kappa=...),
+                     Mix(first, second, share=...)
     CandidateTotals  Tally(ballot), Weakest(diffs)      a total of each candidate at a point
     PairShares       Pairwise()                         share of the voters ranking c above e
     PairDiffs        Margins(shares),                   how strongly c beats e (antisymmetric)
@@ -23,13 +24,17 @@ A ranked ballot gives weight(k, C) points to the candidate at position k (0 = cl
 of C; both count only the remaining candidates, and a higher total is better. A score
 ballot gives a score from 0 to levels - 1 (yeelab.score), which depends on how far the
 candidates are and not only on their order: the top score to the closest candidate, 0 to
-the farthest, and to the others, for Score(levels), in proportion to where their distance
-is between the two; ScoreAvg(levels) likewise, with the mean distance in the middle of
+the farthest, and to the others, for Score(levels, power=...), by where their distance
+is between the two, its part of the way to the power `power` (1: in proportion to it);
+ScoreAvg(levels) likewise, with the mean distance in the middle of
 the scale; ScoreDH(levels, delta=...) shares the steps from the top score to 0 out among
 the gaps between neighbours in the order of distance, each to the gap with the largest
 gap / (its steps + delta), D'Hondt's rule at delta = 1; ScoreHybrid(levels, delta=...)
 does that for the candidates closer than halfway, on the upper half of the scale, and
-Score's for the others, on the lower half. With two levels each is an approval ballot. Its total is the mean score as a part of the top score, counted down
+Score's for the others, on the lower half; ScoreCluster(levels, mu=..., kappa=...)
+gives Score's scores unless that splits a cluster of candidates at nearly the same
+distance, at a cost of mu, kappa setting how far a cluster must stand apart. With two levels
+each is an approval ballot. Its total is the mean score as a part of the top score, counted down
 from 1: a voter who does not give a candidate the top score takes off what is missing.
 Mix(first, second, share=s) is two kinds of voters: s of them mark `second`, the others
 `first`.
@@ -66,7 +71,7 @@ import numpy as np
 
 from yeelab.build.rounds import drop_below_mean, drop_lowest
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Scored, Share, Voters
-from yeelab.score import AVG, DELTA, DHONDT, HYBRID, RANGE
+from yeelab.score import AVG, CLUSTER, DELTA, DHONDT, HYBRID, KAPPA, MU, POWER, RANGE
 from yeelab.voting import CYCLE, irv_rounds
 
 Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) at every point
@@ -229,25 +234,34 @@ class BordaCount(Ballot):
 @dataclass(frozen=True)
 class Score(Ballot):
     """A score from 0 to levels - 1 for every candidate (yeelab.score): the top score for
-    the closest, 0 for the farthest, and for the others the score in proportion to where
-    their distance is between those two, rounded to a whole score.
+    the closest, 0 for the farthest, and for the others the score by where their
+    distance is between those two: its part of the way to the power `power`, rounded to
+    a whole score. power = 1, the default score.POWER, is in proportion to the distance;
+    above 1 the voter keeps the top scores for the candidates near the closest.
 
     The total is the mean score as a part of the top score, counted down from 1.
-    Score(2) is an approval ballot: the voter approves the candidates closer than halfway
-    between the closest and the farthest."""
+    Score(2) is an approval ballot: the voter approves the candidates beyond
+    2^(-1 / power) of the way from the farthest to the closest, halfway for power = 1.
+    The other score ballots, subclasses of this one, have no power."""
 
     levels: int
+    power: float = field(default=POWER, kw_only=True)
     rule = RANGE  # of the ballot (yeelab.score); not a field
 
     def __post_init__(self):
         if isinstance(self.levels, bool) or not isinstance(self.levels, int) or self.levels < 2:
             raise ValueError(f"{type(self).__name__} levels must be a whole number of at least 2, "
                              f"got {self.levels!r}")
+        power = self.power
+        if isinstance(power, bool) or not isinstance(power, int | float) or not 0 < power < np.inf:
+            raise ValueError(f"{type(self).__name__} power must be a number above 0, got {power!r}")
+        if self.rule != RANGE and power != POWER:  # as for any keyword the block does not take
+            raise TypeError(f"{type(self).__name__} has no power; only Score has")
 
     @property
     def scored(self) -> Scored:
         """Its shares in Voters.unscored."""
-        return Scored(self.levels, self.rule)
+        return Scored(self.levels, self.rule, power=self.power)
 
     @property
     def needs(self) -> frozenset[Share]:
@@ -266,7 +280,8 @@ class Score(Ballot):
         return totals if alive is None else np.where(alive, totals, -1.0)
 
     def __repr__(self):
-        return f"{type(self).__name__}({self.levels})"
+        power = f", power={self.power!r}" if self.power != POWER else ""
+        return f"{type(self).__name__}({self.levels}{power})"
 
 
 @dataclass(frozen=True, repr=False)  # the repr of Score, with this name
@@ -330,6 +345,42 @@ class ScoreHybrid(ScoreDH):
     the gap to halfway included."""
 
     rule = HYBRID
+
+
+@dataclass(frozen=True, repr=False)
+class ScoreCluster(Score):
+    """A score from 0 to levels - 1 for every candidate (yeelab.score): the top score for
+    the closest, 0 for the farthest, and to the others the scores closest to those of
+    Score, never less for a closer candidate, with a cost for each pair of neighbours in
+    the order of distance that get different scores although they are less than a step
+    apart and form a cluster: a run of candidates much closer to each other than to the
+    candidates around them. So a tight cluster keeps one score with few levels, and is
+    graded like Score with many. mu is the cost of a split, 0 for Score's ballot; a run of
+    candidates is a cluster when its gaps are less than 1 / kappa of the gaps around it.
+    The defaults are score.MU and score.KAPPA.
+
+    The total is that of Score. ScoreCluster(2) is an approval ballot: the voter approves
+    the candidates Score(2) approves, unless that cut splits a cluster and another gap
+    costs less."""
+
+    mu: float = field(default=MU, kw_only=True)
+    kappa: float = field(default=KAPPA, kw_only=True)
+    rule = CLUSTER
+
+    def __post_init__(self):
+        super().__post_init__()
+        mu, kappa = self.mu, self.kappa
+        if isinstance(mu, bool) or not isinstance(mu, int | float) or not 0 <= mu < np.inf:
+            raise ValueError(f"{type(self).__name__} mu must be a number of 0 or more, got {mu!r}")
+        if isinstance(kappa, bool) or not isinstance(kappa, int | float) or not 0 < kappa < np.inf:
+            raise ValueError(f"{type(self).__name__} kappa must be a number above 0, got {kappa!r}")
+
+    @property
+    def scored(self) -> Scored:
+        return Scored(self.levels, self.rule, mu=self.mu, kappa=self.kappa)
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.levels}, mu={self.mu!r}, kappa={self.kappa!r})"
 
 
 @dataclass(frozen=True)
