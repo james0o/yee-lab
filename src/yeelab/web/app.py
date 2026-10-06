@@ -16,7 +16,7 @@ from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import AfterValidator, BaseModel, Field, field_validator
 
-from yeelab.build import Finalist, Highest, Runoff, Score, ScoreComparisons, Tally, Winner
+from yeelab.build import Highest, Score, ScoreComparisons, Tally, Unbeaten, Winner
 from yeelab.build.methods import SCORE_POWER
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
@@ -57,8 +57,7 @@ def build_score(levels: int, power: float) -> Winner:
 def build_star(levels: int, power: float) -> Winner:
     """STAR with the sliders' settings."""
     ballot = Score(levels, power=power)
-    totals = Tally(ballot)
-    return Runoff(ScoreComparisons(ballot), Finalist(totals, 0), Finalist(totals, 1))
+    return Unbeaten(ScoreComparisons(ballot), among=Highest(Tally(ballot), n=2))
 
 
 assert MARGINS["score"] == build_score(SCORE_LEVELS, SCORE_POWER)
@@ -74,6 +73,9 @@ Coordinate = Annotated[float, Field(ge=0, le=1)]
 # methods built from blocks (yeelab.build) add the expression that builds them.
 METHOD_INFO = {
     "fptp": {"label": "FPTP", "description": "First past the post: the most first choices wins."},
+    "two_round": {"label": "Two-round", "description": "Two-round system: the two candidates "
+                  "with the most first choices go to a second round, head to head; the one more "
+                  "voters rank above the other wins."},
     "irv": {"label": "IRV", "description": "Instant runoff: the candidate with the fewest first "
             "choices among the remaining ones is eliminated, round by round, until one is left."},
     "borda": {"label": "Borda", "description": "Borda count: a voter gives C − 1 points to their "

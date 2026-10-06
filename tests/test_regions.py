@@ -213,7 +213,7 @@ def test_config_lists_every_method():
     methods = config["methods"]
     assert [m["name"] for m in methods] == list(MARGINS)
     assert [m["label"] for m in methods + config["ideals"]] == [
-        "FPTP", "IRV", "Borda", "Baldwin", "Nanson", "Schulze", "Condorcet", "Minimax",
+        "FPTP", "Two-round", "IRV", "Borda", "Baldwin", "Nanson", "Schulze", "Condorcet", "Minimax",
         "Black", "King of the hill", "King runoff", "Score", "STAR", "Voronoi"]
     descriptions = {m["name"]: m["description"] for m in methods}
     assert descriptions["nanson"].endswith('\nEliminate(Tally(BordaCount()), how="mean")')
@@ -223,9 +223,7 @@ def test_config_lists_every_method():
     assert config["levels"] == 6 and config["max_levels"] == 11
     assert descriptions["score"].endswith("\nHighest(Tally(Score(6, power=1.5)))")
     assert descriptions["star"].endswith(
-        "\nRunoff(ScoreComparisons(Score(6, power=1.5)), "
-        "Finalist(Tally(Score(6, power=1.5)), place=0), "
-        "Finalist(Tally(Score(6, power=1.5)), place=1))")
+        "\nUnbeaten(ScoreComparisons(Score(6, power=1.5)), among=Highest(Tally(Score(6, power=1.5)), n=2))")
     assert config["power"] == 1.5
     assert (config["min_power"], config["max_power"], config["power_step"]) == (1.0, 2.0, 0.05)
     for gone in ("deltas", "delta", "clusters", "mu", "kappa", "powers"):

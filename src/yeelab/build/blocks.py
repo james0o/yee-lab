@@ -14,12 +14,11 @@ Every block has one type of output:
     PairShares       Pairwise()                         share of the voters ranking c above e
     PairDiffs        Margins(shares),                   how strongly c beats e (antisymmetric)
                      StrongestPaths(diffs), ScoreComparisons(Score(...))
-    Winner           Highest(totals), Unbeaten(diffs),  winner and margin at every point
-                     Eliminate(totals, how=...),
-                     Fallback(first, second),
+    Winner           Highest(totals, n=...),            the candidates chosen and the
+                     Eliminate(totals, how=..., until=...),  margin at every point;
+                     Unbeaten(diffs, among=...),        a method chooses one, its winner
                      Unbeaten(diffs, against=winner, order=totals),
-                     Finalist(totals, place),
-                     Runoff(diffs, first, second)
+                     Fallback(first, second), first | second
 
 A ranked ballot gives weight(k, C) points to the candidate at position k (0 = closest)
 of C; both count only the remaining candidates, and a higher total is better. A score
@@ -55,17 +54,24 @@ the highest `order` total among those who do wins instead. King of the hill is
 
     Unbeaten(Margins(Pairwise()), against=fptp, order=Tally(Plurality()))
 
-Runoff(diffs, first, second) puts the winners of two methods against each other: the
-one who beats the other on the diffs wins.
-Finalist(totals, place) picks the highest (place=0) or second-highest (place=1) total,
-with the margin to the third-highest total, so the top two stay finalists when their
-order switches.
+Eliminate drops the lowest total (how="min"), every total at most the mean ("mean"),
+or all but the highest ("all", in one round) until `until` candidates are left;
+Highest(totals, n) is Eliminate(totals, how="all", until=n). Unbeaten(diffs,
+among=finalists) is a runoff among the candidates `finalists` chooses: the one who
+beats the others wins, and a tied duel on Margins or ScoreComparisons is a draw, no
+one. A tie is exact, so it is only ever on a border, where the margin is 0. STAR is
 
-A Winner returns (winner, margin): the margin is >= 0, continuous in the shares and 0
-on every border between two winners, since margin/regions.py draws the borders as its
-zero set. Each decision a block takes has a gap, 0 where the decision flips, and the
-margin is the smallest gap of all of them. Where no one is elected, the winner is
-voting.CYCLE.
+    Unbeaten(ScoreComparisons(ballot), among=Highest(Tally(ballot), n=2))
+
+the finalist more voters score higher. first | second (Union) chooses the candidates either one does: the winners of two
+methods as the finalists of a runoff.
+
+A Winner chooses candidates (select): a mask (..., C) and a margin, >= 0, continuous in
+the shares and 0 wherever the choice changes, since margin/regions.py draws the borders
+as its zero set. Each decision a block takes has a gap, 0 where the decision flips, and
+the margin is the smallest gap of all of them. A voting method chooses one candidate
+(seats == 1), and evaluate() gives its (winner, margin); where no one is chosen, in a
+cycle or a draw, the winner is voting.CYCLE.
 
 Blocks are frozen dataclasses, so equal blocks are equal methods and hash alike, and
 repr(block) is the expression that builds it: eval(repr(block)) == block.
@@ -81,8 +87,8 @@ from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Scored, ScoredPairwise
 from yeelab.score import AVG, CLUSTER, DELTA, DHONDT, HYBRID, KAPPA, MU, POWER, RANGE
 from yeelab.voting import CYCLE, irv_rounds
 
-Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) at every point
-HOW = ("min", "mean")  # what Eliminate drops each round
+Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) or (chosen, margin) at every point
+HOW = ("min", "mean", "all")  # what Eliminate drops each round
 
 
 class Block:
@@ -129,10 +135,19 @@ def _paths(diffs: np.ndarray) -> np.ndarray:
     return p - np.swapaxes(p, -1, -2)
 
 
-def _unbeaten(diffs: np.ndarray, transitive: bool) -> Result:
-    """Winner and margin of Unbeaten for diffs s (..., C, C) (see there)."""
+def _unbeaten(diffs: np.ndarray, transitive: bool, running: np.ndarray | None = None) -> Result:
+    """Winner and margin of Unbeaten for diffs s (..., C, C) (see there), among the
+    candidates marked in running (..., C), all for None."""
     n = diffs.shape[-1]
-    beaten = _off_diagonal(diffs, -np.inf).max(axis=-2)  # [..., e] = max_{f != e} s[f, e]
+    if running is None:
+        beaten = _off_diagonal(diffs, -np.inf).max(axis=-2)  # [..., e] = max_{f != e} s[f, e]
+    else:  # only the running f count, and only the running e can win
+        beaten = np.full(running.shape, -np.inf, dtype=diffs.dtype)
+        for f in range(n):  # faster than a max over the short axis -2
+            into = np.where(running[..., f, None], diffs[..., f, :], -np.inf)
+            into[..., f] = -np.inf
+            np.maximum(beaten, into, out=beaten)
+        beaten = np.where(running, beaten, np.inf)
     winner = beaten.argmin(axis=-1)
     others = np.where(np.arange(n) == winner[..., None], np.inf, np.maximum(beaten, 0.0))
     margin = others.min(axis=-1)
@@ -140,6 +155,8 @@ def _unbeaten(diffs: np.ndarray, transitive: bool) -> Result:
         best = beaten.min(axis=-1)  # the winner's: negative if it beats everyone
         margin = np.minimum(margin, np.abs(best))
         winner = np.where(best < 0, winner, CYCLE)
+    if running is not None:  # no one runs: no one wins (margin inf, the runners' own decides)
+        winner = np.where(running.any(axis=-1), winner, CYCLE)
     return winner, margin
 
 
@@ -185,8 +202,8 @@ class Ballot(Block):
         raise NotImplementedError
 
     def eliminate(self, voters: Voters, how: str) -> Result | None:
-        """Eliminate(Tally(self), how) by a formula of the ballot's own, or None to
-        tally the remaining candidates again in every round."""
+        """Eliminate(Tally(self), how) down to one by a formula of the ballot's own, or
+        None to tally the remaining candidates again in every round."""
         return None
 
 
@@ -628,117 +645,173 @@ class Weakest(CandidateTotals):
 
 
 class Winner(Block):
-    """A voting method: winner and margin at every point, from the shares in `needs`."""
+    """Chooses candidates at every point, from the shares in `needs`; a voting method
+    chooses one, its winner.
+
+    select() gives the chosen candidates as a mask and the margin. `seats` is how many
+    candidates the block chooses at most: 1 for a method, n for Highest(totals, n=n),
+    None where that differs from point to point (a Union). No one is chosen in a
+    Condorcet cycle, or in a duel that ties (a draw). evaluate() is the method's winner and
+    margin, only for one seat. A block defines one of the two; the other follows."""
 
     kind = "a Winner"
     needs: frozenset[Share]
+    seats = 1
+
+    def select(self, voters: Voters) -> Result:
+        """(chosen (..., C) bool, margin (...))."""
+        winner, margin = self.evaluate(voters)
+        return winner[..., None] == np.arange(voters.n_candidates), margin
 
     def evaluate(self, voters: Voters) -> Result:
-        """(winner, margin), both of voters.shape."""
-        raise NotImplementedError
+        """(winner, margin), both of voters.shape: the chosen candidate, voting.CYCLE
+        where no one is chosen."""
+        self._one_seat()
+        chosen, margin = self.select(voters)
+        return np.where(chosen.any(axis=-1), chosen.argmax(axis=-1), CYCLE), margin
+
+    def _one_seat(self):
+        """ValueError unless the block chooses one candidate, a winner."""
+        if self.seats != 1:
+            seats = "a number of candidates" if self.seats is None else f"{self.seats} candidates"
+            raise ValueError(f"{self!r} chooses {seats}, not a winner: let a method choose among them, "
+                             f"Unbeaten(diffs, among=...)")
+
+    def __or__(self, other):
+        return Union(self, other)
 
 
-@dataclass(frozen=True)
-class Highest(Winner):
-    """The highest total wins (ties: the lowest index); the margin is its lead over the
-    second."""
-
-    totals: CandidateTotals
-
-    def __post_init__(self):
-        _expect(self, self.totals, CandidateTotals, "CandidateTotals")
-
-    @property
-    def needs(self) -> frozenset[Share]:
-        return self.totals.needs
-
-    def evaluate(self, voters: Voters) -> Result:
-        return _top_two(self.totals.evaluate(voters))
-
-    def __repr__(self):
-        return f"Highest({self.totals!r})"
-
-
-@dataclass(frozen=True)
-class Finalist(Winner):
-    """One of the top two candidates by totals; its margin is the second-to-third gap."""
-
-    totals: CandidateTotals
-    place: Literal[0, 1]
-
-    def __post_init__(self):
-        _expect(self, self.totals, CandidateTotals, "CandidateTotals")
-        if isinstance(self.place, bool) or self.place not in (0, 1):
-            raise ValueError(f"Finalist place must be 0 or 1, got {self.place!r}")
-
-    @property
-    def needs(self) -> frozenset[Share]:
-        return self.totals.needs
-
-    def evaluate(self, voters: Voters) -> Result:
-        totals = self.totals.evaluate(voters)
-        if totals.shape[-1] < 2:
-            raise ValueError("Finalist needs at least two candidates")
-        order = np.argsort(-totals, axis=-1, kind="stable")
-        winner = order[..., self.place]
-        if totals.shape[-1] == 2:
-            margin = np.full(totals.shape[:-1], np.inf)
-        else:
-            finalists = np.take_along_axis(totals, order[..., :3], axis=-1)
-            margin = finalists[..., 1] - finalists[..., 2]
-        return winner, margin
-
-    def __repr__(self):
-        return f"Finalist({self.totals!r}, place={self.place})"
+def _highest(totals: np.ndarray, n: int) -> Result:
+    """(chosen (..., C), margin) of the n highest totals (ties: the lowest index): the
+    n-th highest total minus the next, inf with no more than n candidates."""
+    if totals.shape[-1] <= n:
+        return np.ones(totals.shape, dtype=bool), np.full(totals.shape[:-1], np.inf)
+    chosen = np.zeros(totals.shape, dtype=bool)
+    rest = np.array(totals)
+    for _ in range(n):  # n argmax are faster than sorting a handful of candidates
+        top = rest.argmax(axis=-1)[..., None]
+        last = np.take_along_axis(rest, top, axis=-1)[..., 0]
+        np.put_along_axis(chosen, top, True, axis=-1)
+        np.put_along_axis(rest, top, -np.inf, axis=-1)
+    return chosen, last - rest.max(axis=-1)
 
 
 @dataclass(frozen=True)
 class Eliminate(Winner):
-    """Drops candidates round by round, tallying the remaining ones again each round,
-    until one is left:
+    """Drops candidates round by round until `until` are left, by default one, the winner:
 
         how="min"   the lowest total goes (ties: the lowest index); the round's gap is
                     the second lowest total minus the lowest
         how="mean"  every total at most the mean of the remaining ones goes; if that is
-                    all of them, all totals are equal and the lowest index wins. The
-                    round's gap is the smallest distance of a total from the mean
+                    all of them, all totals are equal and the lowest index stays. The
+                    round's gap is the smallest distance of a total from the mean. A
+                    round that would leave fewer than `until` keeps the `until` highest
+                    instead, and the until-th highest minus the next is a gap too
+        how="all"   all but the `until` highest go in one round (ties: the lowest index
+                    stays); the gap is the until-th highest total minus the next, inf
+                    if no more are left
 
-    The margin is the smallest gap of all rounds, like voting.irv_rounds: the winner
-    changes only where some round's elimination flips, and there the gap is 0.
+    "min" and "mean" tally the remaining candidates again each round, so their totals are
+    a Tally; "all" reads any totals once. The margin is the smallest gap of all rounds,
+    like voting.irv_rounds: the candidates left change only where some round's
+    elimination flips, and there the gap is 0. Highest(totals, n) is Eliminate(totals,
+    how="all", until=n).
     """
 
-    totals: Tally
-    how: Literal["min", "mean"]
+    totals: CandidateTotals
+    how: Literal["min", "mean", "all"]
+    until: int = 1
+    _until = "until"  # the name of `until` in error messages; not a field
 
     def __post_init__(self):
-        _expect(self, self.totals, Tally, "a Tally (it tallies the remaining candidates again)")
+        name = type(self).__name__
         if self.how not in HOW:
-            raise ValueError(f'Eliminate how must be "min" or "mean", got {self.how!r}')
+            raise ValueError(f'{name} how must be "min", "mean" or "all", got {self.how!r}')
+        if self.how == "all":
+            _expect(self, self.totals, CandidateTotals, "CandidateTotals")
+        else:
+            _expect(self, self.totals, Tally, "a Tally (it tallies the remaining candidates again)")
+        until = self.until
+        if isinstance(until, bool) or not isinstance(until, int) or until < 1:
+            raise ValueError(f"{name} {self._until} must be a whole number of at least 1, got {until!r}")
+
+    @property
+    def seats(self) -> int:
+        return self.until
 
     @property
     def needs(self) -> frozenset[Share]:
-        return self.totals.needs_remaining
+        return self.totals.needs if self.how == "all" else self.totals.needs_remaining
 
     def evaluate(self, voters: Voters) -> Result:
+        self._one_seat()
+        if self.how == "all":
+            return _top_two(self.totals.evaluate(voters))
         result = self.totals.ballot.eliminate(voters, self.how)
         return self.rounds(voters) if result is None else result
+
+    def select(self, voters: Voters) -> Result:
+        if self.until == 1:
+            return super().select(voters)  # from evaluate, which may be the ballot's own formula
+        if self.how == "all":
+            return _highest(self.totals.evaluate(voters), self.until)
+        return self.remaining(voters)
 
     def rounds(self, voters: Voters) -> Result:
         """evaluate() with one tally per round, whatever formula the ballot has of its
         own (Ballot.eliminate)."""
+        alive, margin = self.remaining(voters)
+        return alive.argmax(axis=-1), margin
+
+    def remaining(self, voters: Voters) -> Result:
+        """select() of "min" and "mean", with one tally per round."""
         n = voters.n_candidates
         alive = np.ones((*voters.shape, n), dtype=bool)
         margin = np.full(voters.shape, np.inf)
         drop = drop_lowest if self.how == "min" else drop_below_mean
-        for _ in range(n - 1):  # every round drops at least one candidate
-            gap = drop(self.totals.evaluate(voters, alive), alive)
+        for _ in range(n - self.until):  # every round drops at least one candidate
+            totals = self.totals.evaluate(voters, alive)
+            gap = drop(totals, alive) if self.until == 1 else self._round(drop, totals, alive)
             np.minimum(margin, gap, out=margin)
-            if self.how == "mean" and alive.sum(axis=-1).max() == 1:  # often done early
+            if self.how == "mean" and alive.sum(axis=-1).max() <= self.until:  # often done early
                 break
-        return alive.argmax(axis=-1), margin
+        return alive, margin
+
+    def _round(self, drop, totals: np.ndarray, alive: np.ndarray) -> np.ndarray:
+        """drop() on alive (..., C) in place where more than `until` are left; where it
+        leaves fewer, the `until` highest totals stay instead. Returns the gap."""
+        before = alive.copy()
+        done = before.sum(axis=-1) <= self.until
+        gap = drop(totals, alive)
+        alive[done], gap[done] = before[done], np.inf
+        short = alive.sum(axis=-1) < self.until
+        if short.any():
+            kept, lead = _highest(np.where(before, totals, -np.inf)[short], self.until)
+            alive[short], gap[short] = kept, np.minimum(gap[short], lead)
+        return gap
 
     def __repr__(self):
-        return f'Eliminate({self.totals!r}, how="{self.how}")'
+        until = f", until={self.until!r}" if self.until != 1 else ""
+        return f'Eliminate({self.totals!r}, how="{self.how}"{until})'
+
+
+class Highest(Eliminate):
+    """The n highest totals, by default one, the winner (ties: the lowest index). The
+    margin is the n-th highest total minus the next: for one, the winner's lead over the
+    second. Eliminate(totals, how="all", until=n) by its own name."""
+
+    _until = "n"
+
+    def __init__(self, totals: CandidateTotals, n: int = 1):
+        super().__init__(totals, "all", n)
+
+    @property
+    def n(self) -> int:
+        return self.until
+
+    def __repr__(self):
+        n = f", n={self.n!r}" if self.n != 1 else ""
+        return f"Highest({self.totals!r}{n})"
 
 
 @dataclass(frozen=True)
@@ -751,11 +824,17 @@ class Unbeaten(Winner):
     the closest of them is from being unbeaten, which is when the winner would change.
 
     PairDiffs that are not transitive can form a cycle. Then the winner must also beat
-    everyone (beaten < 0), or the point is a voting.CYCLE, and since that flips where
-    the winner's beaten crosses 0, |beaten| of the winner is a gap too: the margin is at
+    everyone (beaten < 0), or no one wins (voting.CYCLE), and since that flips where the
+    winner's beaten crosses 0, |beaten| of the winner is a gap too: the margin is at
     most that. Transitive diffs leave it out: someone is always unbeaten, and on
     strongest paths the winner's beaten is 0 on whole areas, where the widest paths to
     and from another candidate share their weakest diff.
+
+    With `among` only the candidates `among` chooses run, and only against each other
+    (the diffs themselves, strongest paths too, are those of all candidates). Two of
+    them are a duel: the one who beats the other wins. A tie is a draw, no one, on diffs
+    that are not transitive, and the lowest index on transitive ones, as above. Where `among` chooses one, it wins; where no one, no one does. The
+    margin is the smaller of among's and the one among them.
 
     With `against` and `order` (both or neither) only one candidate has to stay unbeaten,
     the king: the winner of `against`. Its challengers are the candidates c who beat it,
@@ -773,47 +852,111 @@ class Unbeaten(Winner):
     diffs: PairDiffs
     against: Winner | None = None
     order: CandidateTotals | None = None
+    among: Winner | None = None
 
     def __post_init__(self):
         _expect(self, self.diffs, PairDiffs, "PairDiffs")
         if (self.against is None) != (self.order is None):
             raise ValueError("Unbeaten takes against and order together, or neither")
         if self.against is not None:
+            if self.among is not None:
+                raise ValueError("Unbeaten takes among or against, not both")
             _expect(self, self.against, Winner, "a Winner as against")
             _expect(self, self.order, CandidateTotals, "CandidateTotals as order")
+            if self.against.seats != 1:
+                raise ValueError(f"Unbeaten against must choose one candidate, the king, "
+                                 f"not {self.against!r}")
+        if self.among is not None:
+            _expect(self, self.among, Winner, "a Winner as among")
 
     @property
     def needs(self) -> frozenset[Share]:
-        if self.against is None:
-            return self.diffs.needs
-        return self.diffs.needs | self.against.needs | self.order.needs
+        needs = self.diffs.needs
+        if self.against is not None:
+            needs |= self.against.needs | self.order.needs
+        if self.among is not None:
+            needs |= self.among.needs
+        return needs
 
     def evaluate(self, voters: Voters) -> Result:
-        result = self.diffs.unbeaten(voters) if self.against is None else None
+        plain = self.against is None and self.among is None
+        result = self.diffs.unbeaten(voters) if plain else None
         return self.decide(voters) if result is None else result
 
     def decide(self, voters: Voters) -> Result:
         """evaluate() on the diffs as they are, whatever formula they have of their own
         (PairDiffs.unbeaten)."""
         diffs = self.diffs.evaluate(voters)
-        if self.against is None:
+        if self.against is not None:
+            return _challenged(diffs, *self.against.evaluate(voters), self.order.evaluate(voters))
+        if self.among is None:
             return _unbeaten(diffs, self.diffs.transitive)
-        return _challenged(diffs, *self.against.evaluate(voters), self.order.evaluate(voters))
+        running, margin = self.among.select(voters)
+        winner, gap = _unbeaten(diffs, self.diffs.transitive, running)
+        return winner, np.minimum(margin, gap)
 
     def __repr__(self):
-        if self.against is None:
-            return f"Unbeaten({self.diffs!r})"
-        return f"Unbeaten({self.diffs!r}, against={self.against!r}, order={self.order!r})"
+        args = [repr(self.diffs)]
+        if self.against is not None:
+            args += [f"against={self.against!r}", f"order={self.order!r}"]
+        if self.among is not None:
+            args.append(f"among={self.among!r}")
+        return f"Unbeaten({', '.join(args)})"
 
 
 @dataclass(frozen=True)
 class Fallback(Winner):
-    """The winner of `first`, or where it elects no one (voting.CYCLE), the winner of
-    `second`. The margin is first's where it elects someone, and the smaller of the two
-    in a cycle of first: the winner changes where either one would."""
+    """The candidates `first` chooses, or where it chooses no one (a voting.CYCLE, a
+    draw), those of `second`. The margin is first's where it chooses someone, and the
+    smaller of the two where not: the choice changes where either one would."""
 
     first: Winner
     second: Winner
+
+    def __post_init__(self):
+        _expect(self, self.first, Winner, "a Winner")
+        _expect(self, self.second, Winner, "a Winner")
+
+    @property
+    def seats(self) -> int | None:
+        return self.first.seats if self.first.seats == self.second.seats else None
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return self.first.needs | self.second.needs
+
+    def evaluate(self, voters: Voters) -> Result:
+        self._one_seat()
+        winner, margin = self.first.evaluate(voters)
+        cycle = winner == CYCLE
+        if cycle.any():
+            other, gap = self.second.evaluate(voters)
+            winner = np.where(cycle, other, winner)
+            margin = np.where(cycle, np.minimum(margin, gap), margin)
+        return winner, margin
+
+    def select(self, voters: Voters) -> Result:
+        chosen, margin = self.first.select(voters)
+        empty = ~chosen.any(axis=-1)
+        if empty.any():
+            other, gap = self.second.select(voters)
+            chosen = np.where(empty[..., None], other, chosen)
+            margin = np.where(empty, np.minimum(margin, gap), margin)
+        return chosen, margin
+
+    def __repr__(self):
+        return f"Fallback({self.first!r}, {self.second!r})"
+
+
+@dataclass(frozen=True)
+class Union(Winner):
+    """first | second: the candidates either one chooses, e.g. the winners of two methods
+    as the finalists of a runoff, Unbeaten(diffs, among=koth | irv). The margin is the
+    smaller of the two: the candidates change where either one's do."""
+
+    first: Winner
+    second: Winner
+    seats = None  # one or two winners; not a field
 
     def __post_init__(self):
         _expect(self, self.first, Winner, "a Winner")
@@ -823,55 +966,11 @@ class Fallback(Winner):
     def needs(self) -> frozenset[Share]:
         return self.first.needs | self.second.needs
 
-    def evaluate(self, voters: Voters) -> Result:
-        winner, margin = self.first.evaluate(voters)
-        cycle = winner == CYCLE
-        if cycle.any():
-            other, gap = self.second.evaluate(voters)
-            winner = np.where(cycle, other, winner)
-            margin = np.where(cycle, np.minimum(margin, gap), margin)
-        return winner, margin
+    def select(self, voters: Voters) -> Result:
+        first, margin = self.first.select(voters)
+        second, gap = self.second.select(voters)
+        return first | second, np.minimum(margin, gap)
 
     def __repr__(self):
-        return f"Fallback({self.first!r}, {self.second!r})"
-
-
-@dataclass(frozen=True)
-class Runoff(Winner):
-    """The winner of `first` against the winner of `second`, one on one: `second` wins
-    where it beats `first` on the diffs, s[second, first] > 0, otherwise `first` does.
-    Two candidates cannot form a cycle, so not even diffs that are not transitive leave
-    the duel open. Where both elect the same candidate, that candidate wins.
-
-    The margin is the smallest of three gaps: the margins of `first` and of `second` (a
-    finalist changes) and |s[first, second]| (the duel flips), which is left out where
-    both are the same candidate. Where either one elects no one (voting.CYCLE) there is
-    no duel either, and the point stays a CYCLE with the smaller of their two margins."""
-
-    diffs: PairDiffs
-    first: Winner
-    second: Winner
-
-    def __post_init__(self):
-        _expect(self, self.diffs, PairDiffs, "PairDiffs")
-        _expect(self, self.first, Winner, "a Winner")
-        _expect(self, self.second, Winner, "a Winner")
-
-    @property
-    def needs(self) -> frozenset[Share]:
-        return self.diffs.needs | self.first.needs | self.second.needs
-
-    def evaluate(self, voters: Voters) -> Result:
-        first, margin = self.first.evaluate(voters)
-        second, gap = self.second.evaluate(voters)
-        diffs = self.diffs.evaluate(voters)
-        n = diffs.shape[-1]
-        cycle = (first == CYCLE) | (second == CYCLE)
-        a, b = np.where(cycle, 0, first), np.where(cycle, 0, second)  # a = b in a cycle: no duel
-        pairs = diffs.reshape(*diffs.shape[:-2], n * n)
-        duel = np.take_along_axis(pairs, (a * n + b)[..., None], axis=-1)[..., 0]  # s[first, second]
-        margin = np.minimum(np.minimum(margin, gap), np.where(a == b, np.inf, np.abs(duel)))
-        return np.where(cycle, CYCLE, np.where(duel < 0, second, first)), margin
-
-    def __repr__(self):
-        return f"Runoff({self.diffs!r}, {self.first!r}, {self.second!r})"
+        second = f"({self.second!r})" if isinstance(self.second, Union) else repr(self.second)
+        return f"{self.first!r} | {second}"
