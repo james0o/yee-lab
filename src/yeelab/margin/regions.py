@@ -144,7 +144,7 @@ def contour_regions(coords, winner, margin, points=None):
 
 
 def voronoi_regions(candidates):
-    """Exact regions of pixels.methods.voronoi: straight borders, no grid."""
+    """Exact Voronoi regions: straight borders, no grid."""
     return [{"winner": c, "polygons": [[_ring(cell)]]}
             for c, cell in enumerate(voronoi_cells(candidates)) if cell is not None]
 

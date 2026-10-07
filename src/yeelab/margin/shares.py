@@ -1,7 +1,6 @@
 """Voter shares that a voting method needs, fast enough to follow a dragged candidate.
 
-The ranking probabilities of pixels/beta.py and pixels/normal.py are a complete profile,
-enough for every method, but they need all cells of the bisector arrangement:
+Computing the complete ranking profile needs all cells of the bisector arrangement:
 O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far less:
 
     borda, baldwin, nanson, schulze,  pairwise shares d[c, e] = P(c ranked above e),
@@ -22,8 +21,8 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
 below c, so c's expected score is sum_e d[c, e].)
 
 Every share of a polygon is a sum over its edges: Green's theorem edge integrals
-(pixels.beta._edge_integral, compiled on the tabulated CDFs of beta_tables.py) for
-Beta voters, signed triangles with Owen's T (normal.triangle_terms) for normal voters. An edge
+(compiled on the tabulated CDFs of beta_tables.py) for Beta voters, signed triangles
+with Owen's T (normal.triangle_terms) for normal voters. An edge
 term depends only on the edge, so they are cached by their endpoints: dragging one
 candidate moves only its C - 1 bisectors, and only edges on those are new.
 For normal voters a half-plane holds Phi(signed distance / sigma) of the voters, so
@@ -266,9 +265,8 @@ def first_choice_shares(candidates, model: Model) -> np.ndarray:
 
 
 def ranking_shares(candidates, model: Model):
-    """(rankings (R, C), shares (N, N, R)) as pixels.beta / pixels.normal
-    compute_ranking_probabilities return them: the cells of the bisector arrangement,
-    with their edges from the edge cache."""
+    """Return rankings (R, C) and shares (N, N, R) at interpolation nodes, using
+    the cells of the bisector arrangement and cached edge integrals."""
     candidates = np.asarray(candidates, dtype=np.float64)
     if model.distribution == "beta":
         polygons, rankings = ranking_cells.ranking_cells(candidates)

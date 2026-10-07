@@ -29,7 +29,7 @@ dev = [
 
 [tool.uv.build-backend]
 module-name = "yeelab"  # the project is yee-lab, but a package name cannot have a hyphen
-# output of the pixel pipeline, not part of the package
+# Exclude leftover generated artifacts from the retired pixel renderer.
 source-exclude = ["src/yeelab/pixels/cache", "src/yeelab/pixels/plots"]
 wheel-exclude = ["yeelab/pixels/cache", "yeelab/pixels/plots"]
 

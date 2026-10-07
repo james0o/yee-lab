@@ -1,8 +1,7 @@
 """The voters a built method is evaluated on: the shares it needs, at every point.
 
 A method's `needs` names the shares it reads (blocks.py); margin/regions.py computes
-only those at the points of its grid, the tests take them from a complete profile of
-pixels/.
+only those at the points of its grid.
 
     first       first-choice shares (..., C)
     pairwise    d[..., c, e] = share ranking c above e, d[..., c, c] = 0, (..., C, C)

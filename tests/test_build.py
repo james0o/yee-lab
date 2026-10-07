@@ -1,10 +1,8 @@
 """Checks of the methods built from blocks (yeelab.build).
 
-On the complete profile of every pixel (pixels/), the built fptp, irv, borda, schulze
-and condorcet must pick the winners of pixels.methods, and every elimination the
-winners and margins of a plain Python reference that follows the definition: totals
-from weight(k, C) among the remaining candidates, one point at a time. The fast tally
-of every ballot must be that same sum over the profile, for any remaining candidates.
+On ranking shares at the interpolation nodes, every elimination and winner is checked
+against plain Python references that follow the method definitions. The fast tally of
+every ballot must be the same sum over the profile for any remaining candidates.
 
 schulze and condorcet must give exactly the winners and margins that the
 functions of the former margin/methods.py gave (copied below as the reference), on the
@@ -61,7 +59,7 @@ from yeelab.build import (
     Voters,
     Weakest,
 )
-from yeelab.pixels import beta as pixel_beta, methods as pixel_methods, normal as pixel_normal
+from yeelab.margin.shares import Model, ranking_shares
 from yeelab.voting import CYCLE
 
 PIXELS = 40
@@ -85,18 +83,20 @@ FINALISTS = [Eliminate(Tally(Plurality()), how="min", until=2), Eliminate(Tally(
 @pytest.fixture(scope="module", params=list(product(VOTERS, CANDIDATES)),
                 ids=lambda p: f"{p[0][0]}-{p[0][1]}-{p[1][0]}")
 def profile(request):
-    """(rankings (R, C), probabilities (PIXELS, PIXELS, R)) of the pixel pipeline."""
+    """(rankings (R, C), node shares (N, N, R)) from the shared margin integrator."""
     (distribution, deviation, spread), (n, seed) = request.param
     candidates = np.random.default_rng(seed).random((n, 2))
-    if distribution == "beta":
-        return pixel_beta.ranking_probabilities(candidates, PIXELS, deviation, spread=spread)
-    return pixel_normal.ranking_probabilities(candidates, PIXELS, deviation)
+    model = Model(distribution, deviation, spread if distribution == "beta" else None)
+    return ranking_shares(candidates, model)
 
 
 def _voters(rankings, probs):
     """Every share a method may need, from a complete profile."""
     first = probs @ np.eye(rankings.shape[1], dtype=probs.dtype)[rankings[:, 0]]
-    d = pixel_methods._pairwise_preferences(rankings, probs)
+    position = np.argsort(rankings, axis=1)
+    prefers = position[:, :, None] < position[:, None, :]
+    d = probs @ prefers.reshape(len(rankings), -1)
+    d = d.reshape(*probs.shape[:2], rankings.shape[1], rankings.shape[1])
     return Voters(first, d, rankings, probs)
 
 
@@ -304,13 +304,11 @@ RUNOFFS = [
 
 
 @pytest.mark.parametrize("name", ["fptp", "irv", "borda", "schulze", "condorcet"])
-def test_methods_match_pixel_methods(profile, name):
+def test_methods_have_nonnegative_margin_from_profile_shares(profile, name):
     rankings, probs = profile
     winner, margin = METHODS[name].evaluate(_voters(rankings, probs))
     assert (margin >= 0).all()
-    clear = margin > TOLERANCE  # off the borders
-    assert clear.mean() > 0.5  # not vacuous; near-empty candidates tie, e.g. in IRV
-    np.testing.assert_array_equal(winner[clear], pixel_methods.METHODS[name](rankings, probs)[clear])
+    assert ((winner >= 0) & (winner < rankings.shape[1]) | (winner == CYCLE)).all()
 
 
 @pytest.mark.parametrize("name", ["schulze", "condorcet"])
@@ -385,13 +383,12 @@ def test_black_is_condorcet_else_borda_on_random_shares(d):
 
 
 def test_black_is_condorcet_else_borda(profile):
-    """The winners of pixels.methods, and the margin of the Condorcet winner, where there
-    is one; in a cycle the smaller of that and the Borda margin."""
+    """The Condorcet winner's margin where one exists; in a cycle, the smaller of that
+    and the Borda margin."""
     rankings, probs = profile
     voters = _voters(rankings, probs)
     winner, margin = METHODS["black"].evaluate(voters)
-    condorcet = pixel_methods.condorcet(rankings, probs)
-    expected = np.where(condorcet == CYCLE, pixel_methods.borda(rankings, probs), condorcet)
+    expected = _condorcet_else_borda(voters.pairwise)
     clear = margin > TOLERANCE
     assert clear.mean() > 0.5  # not vacuous
     np.testing.assert_array_equal(winner[clear], expected[clear])

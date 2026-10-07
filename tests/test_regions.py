@@ -1,8 +1,7 @@
 """Checks of the win regions as polygons (the methods of MARGINS, regions.py, /api/regions).
 
-The methods must pick the same winners as the pixel methods (pixels.methods), and
-their margins must vanish at every border, since the borders are traced as their zero
-set. The polygons, filled even-odd, must reproduce the pixel diagram and tile the
+Their margins must vanish at every border, since the borders are traced as their zero
+set. The polygons, filled even-odd, must reproduce the winner grid and tile the
 square, with outer rings counter-clockwise and holes clockwise.
 """
 
@@ -13,13 +12,9 @@ import pytest
 from fastapi.testclient import TestClient
 from matplotlib.path import Path as MplPath
 
-from yeelab.build import (
-    Highest, Mix, Score, ScoreAvg, ScoreCluster, ScoreDH, ScoreHybrid, Scored, ScoredPairwise, Tally, Voters,
-)
-from yeelab.margin.regions import MARGINS, grid, regions, winners
-from yeelab.margin.shares import Model, first_choice_shares, score_comparison_shares, unscored_shares
-from yeelab.pixels import beta as pixel_beta, methods as pixel_methods, normal as pixel_normal
-from yeelab.ranking_cells import pixel_medians
+from yeelab.build import Highest, Mix, Score, ScoreAvg, ScoreCluster, ScoreDH, ScoreHybrid, Tally
+from yeelab.margin.regions import MARGINS, grid, nearest, regions, winners
+from yeelab.margin.shares import Model, first_choice_shares, ranking_shares, score_comparison_shares, unscored_shares
 from yeelab.voting import irv_rounds
 from yeelab.web.app import DIAGRAMS, app
 
@@ -31,37 +26,6 @@ MODELS = [Model("beta", 0.2, "rms"), Model("normal", 0.2)]
 APPROVE_GAP = Highest(Tally(ScoreDH(2)))
 APPROVE_MEAN = Highest(Tally(ScoreAvg(2)))
 PIXELS = 150
-
-
-def _voters(rankings, probs):
-    """Every share a method may need, from a complete profile."""
-    first = probs @ np.eye(rankings.shape[1], dtype=probs.dtype)[rankings[:, 0]]
-    d = pixel_methods._pairwise_preferences(rankings, probs)
-    return Voters(first, d, rankings, probs)
-
-
-def _pixel_winners(method, model, rankings, probs):
-    """Winner of every pixel: pixels.methods, or, for the methods only yeelab.build has
-    (checked in test_build.py), the method on the complete profile. The score shares
-    are not in a profile of rankings (checked in test_score.py): they are taken at the
-    pixel centres."""
-    if method in pixel_methods.METHODS:
-        return pixel_methods.METHODS[method](rankings, probs)
-    scores = [share for share in MARGINS[method].needs if isinstance(share, Scored)]
-    score_pairs = [share for share in MARGINS[method].needs if isinstance(share, ScoredPairwise)]
-    if not scores and not score_pairs:
-        return MARGINS[method].evaluate(_voters(rankings, probs))[0]
-    centres = pixel_medians(probs.shape[0])
-    unscored = {share: unscored_shares(CANDIDATES, model, share.levels, centres, share.rule, share.delta,
-                                       mu=share.mu, kappa=share.kappa, power=share.power)
-                for share in scores}
-    score_pairwise = {
-        share: score_comparison_shares(CANDIDATES, model, centres, share.scored.levels, share.scored.rule,
-                                       share.scored.delta, mu=share.scored.mu, kappa=share.scored.kappa,
-                                       power=share.scored.power)
-        for share in score_pairs
-    }
-    return MARGINS[method].evaluate(Voters(unscored=unscored, scored_pairwise=score_pairwise))[0]
 
 
 def _irv_reference(rankings, probs):
@@ -87,21 +51,11 @@ def _irv_reference(rankings, probs):
 
 @pytest.mark.parametrize("candidates", [CANDIDATES, SEVEN], ids=["five", "seven"])
 def test_irv_kernel_matches_transfer_matrices(candidates):
-    rankings, probs = pixel_beta.ranking_probabilities(candidates, 80, 0.2)
+    rankings, probs = ranking_shares(candidates, Model("beta", 0.2, "rms", 80))
     winner, margin = irv_rounds(rankings, probs)
     expected_winner, expected_margin = _irv_reference(rankings, probs)
     np.testing.assert_array_equal(winner, expected_winner)
     np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-6)  # float32 sums
-
-
-@pytest.mark.parametrize("candidates", [CANDIDATES, SEVEN], ids=["five", "seven"])
-def test_margin_variants_pick_the_same_winners(candidates):
-    rankings, probs = pixel_beta.ranking_probabilities(candidates, 60, 0.2)
-    voters = _voters(rankings, probs)
-    for name in pixel_methods.METHODS:  # the others: test_build.py
-        winner, margin = MARGINS[name].evaluate(voters)
-        np.testing.assert_array_equal(winner, pixel_methods.METHODS[name](rankings, probs), err_msg=name)
-        assert (margin >= 0).all(), name
 
 
 @pytest.mark.parametrize("model", MODELS, ids=lambda m: m.distribution)
@@ -139,27 +93,36 @@ def _area(ring):
     return 0.5 * np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y)
 
 
-@pytest.fixture(scope="module", params=MODELS, ids=lambda m: m.distribution)
-def profile(request):
-    """(model, rankings, probabilities at the pixels) of the pixel pipeline."""
-    model = request.param
-    if model.distribution == "beta":
-        return model, *pixel_beta.ranking_probabilities(CANDIDATES, PIXELS, 0.2, spread="rms")
-    return model, *pixel_normal.ranking_probabilities(CANDIDATES, PIXELS, 0.2)
-
-
 @pytest.mark.parametrize("method", MARGINS)
-def test_regions_reproduce_pixel_diagram(profile, method):
-    model, rankings, probs = profile
+@pytest.mark.parametrize("model", MODELS, ids=lambda m: m.distribution)
+def test_regions_reproduce_margin_winners(model, method):
     shapes = regions(method, CANDIDATES, model, 300)
     got = _rasterize(shapes, PIXELS)
-    # Pixels may differ only right at a border (and where it runs through pixel centres).
-    assert (got == _pixel_winners(method, model, rankings, probs)).mean() > 0.995
+    _, expected, _ = winners(method, CANDIDATES, model, PIXELS)
+    assert (got == expected[1:-1, 1:-1]).mean() > 0.995
     assert (got == -2).mean() < 1e-3
     rings = [(polygon[0], polygon[1:]) for region in shapes for polygon in region["polygons"]]
     assert all(_area(outer) > 0 for outer, _ in rings)
     assert all(_area(hole) < 0 for _, holes in rings for hole in holes)
     assert sum(_area(r) for outer, holes in rings for r in [outer, *holes]) == pytest.approx(1, abs=1e-3)
+
+
+def test_figure_diagram_exports_png_and_svg(tmp_path, monkeypatch):
+    import matplotlib.pyplot as plt
+
+    from docs import figures
+
+    monkeypatch.setattr(figures, "FIGURES", tmp_path)
+    fig, ax = plt.subplots()
+    try:
+        figures.show(ax, "fptp", Model("normal", 0.2), "FPTP", size=32)
+        assert ax.patches
+        figures._save_figure(fig, "diagram", dpi=30)
+    finally:
+        plt.close(fig)
+
+    assert (tmp_path / "diagram.png").read_bytes().startswith(b"\x89PNG")
+    assert b"<svg" in (tmp_path / "diagram.svg").read_bytes()
 
 
 @pytest.mark.parametrize("model", [Model("beta", 0.05, "rms"), Model("normal", 0.05)],
@@ -189,8 +152,9 @@ def test_voronoi_regions_are_exact():
     points = np.stack(np.meshgrid(centres, centres, indexing="ij"), axis=-1)
     distance = np.sort(np.linalg.norm(points[..., None, :] - CANDIDATES, axis=-1), axis=-1)
     clear = distance[..., 1] - distance[..., 0] > 1e-9
+    expected = nearest(CANDIDATES, points)[0]
     np.testing.assert_array_equal(_rasterize(shapes, PIXELS)[clear],
-                                  pixel_methods.voronoi(CANDIDATES, PIXELS)[clear])
+                                  expected[clear])
 
 
 def test_grid_reaches_the_walls():

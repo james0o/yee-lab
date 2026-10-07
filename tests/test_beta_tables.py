@@ -7,12 +7,76 @@ rule), and the edge integrals built on them with the exact ones.
 
 import numpy as np
 import pytest
-from scipy.special import expit
+from scipy.special import betainc, betaincinv, expit
 
 from yeelab.margin.beta_tables import TabulatedBeta
 from yeelab.margin.shares import PIXELS, node_count
-from yeelab.pixels.beta import ExactBeta, _edge_integral
 from yeelab.ranking_cells import SPREADS, node_params
+
+
+class ExactBeta:
+    """Direct scipy CDF/quantile reference for the compiled tabulated implementation."""
+
+    def __init__(self, params):
+        self.a, self.b = params[:, 0], params[:, 1]
+
+    def __len__(self):
+        return len(self.a)
+
+    def cdf(self, values):
+        values = np.asarray(values)
+        shape = (-1,) + (1,) * values.ndim
+        return betainc(self.a.reshape(shape), self.b.reshape(shape), values)
+
+    def ppf(self, values):
+        values = np.asarray(values)
+        shape = (-1,) + (1,) * (values.ndim - 1)
+        return betaincinv(self.a.reshape(shape), self.b.reshape(shape), values)
+
+    def cdf_sums(self, points, weights):
+        return np.einsum("rq,nrq->rn", weights, self.cdf(points), optimize=True)
+
+
+def _on(value, target):
+    return abs(value - target) < 1e-9
+
+
+def _touches_x(point):
+    return _on(point[0], 0.0) or _on(point[0], 1.0)
+
+
+def _touches_y(point):
+    return _on(point[1], 0.0) or _on(point[1], 1.0)
+
+
+def _edge_integral(start, end, beta, nodes, weights):
+    """Independent scipy quadrature for one Beta-voter polygon edge."""
+    (xs, ys), (xe, ye) = start, end
+    if _on(xs, xe):
+        return np.zeros((len(beta), len(beta)))
+    if _on(ys, ye):
+        return -np.outer(beta.cdf(xe) - beta.cdf(xs), beta.cdf(ys))
+    touches_x = _touches_x(start) or _touches_x(end)
+    touches_y = _touches_y(start) or _touches_y(end)
+    corner = (_touches_x(start) and _touches_y(start)) or (_touches_x(end) and _touches_y(end))
+    if touches_x and touches_y and not corner:
+        middle = 0.5 * (np.asarray(start) + np.asarray(end))
+        return (_edge_integral(start, middle, beta, nodes, weights)
+                + _edge_integral(middle, end, beta, nodes, weights))
+    half = 0.5 * (nodes + 1)
+    if not touches_y:
+        us, ue = beta.cdf(xs), beta.cdf(xe)
+        u = us[:, None] + (ue - us)[:, None] * half
+        w = 0.5 * (ue - us)[:, None] * weights
+        x = beta.ppf(u)
+        y = np.clip(ys + (x - xs) * (ye - ys) / (xe - xs), 0, 1)
+        return -beta.cdf_sums(y, w)
+    vs, ve = beta.cdf(ys), beta.cdf(ye)
+    v = vs[:, None] + (ve - vs)[:, None] * half
+    w = 0.5 * (ve - vs)[:, None] * weights
+    y = beta.ppf(v)
+    x = np.clip(xs + (y - ys) * (xe - xs) / (ye - ys), 0, 1)
+    return beta.cdf_sums(x, w).T - (np.outer(beta.cdf(xe), ve) - np.outer(beta.cdf(xs), vs))
 
 # every double y in (0, 1), including the tails below the table, and both walls
 POINTS = np.concatenate([expit(np.linspace(-745, 37, 4001)), [0.0, 1.0]])
@@ -58,8 +122,7 @@ EDGES = {
 
 
 def test_edge_integrals_match_exact(betas):
-    """The compiled edge integrals of the tables against pixels.beta._edge_integral
-    with scipy, for every kind of edge at once."""
+    """Check compiled edge integrals against the independent scipy reference."""
     exact, table = betas
     nodes, weights = np.polynomial.legendre.leggauss(24)
     edges = np.array(list(EDGES.values()), dtype=np.float64)

@@ -19,7 +19,7 @@ $(a, b)$ are chosen per pixel so that
 1. the pixel centre is the **median**: $F(m; a, b) = \tfrac12$,
 2. the spread is the same for every pixel: $\sqrt{\mathbb{E}(X - m)^2}$ equals its value at the centre pixel, where $\mathbb{E}|X - \tfrac12| = D$.
 
-$D$ is the `--deviation` of the plots and the *Deviation* slider of the UI (default $0.2$).
+$D$ is the model's deviation parameter and the *Deviation* slider of the UI (default $0.2$).
 
 Why it matters: with normal voters every Condorcet method draws exactly the Voronoi diagram of the candidates. With Beta voters the median is a median only along the axes, so the skew of the distribution decides diagonal head-to-head races. Condorcet regions get pulled towards the centre and Condorcet cycles appear.
 
@@ -29,19 +29,17 @@ Voting methods: FPTP, IRV, Borda, Schulze, and `condorcet`, which marks pixels w
 
 Requires [uv](https://docs.astral.sh/uv/).
 
-### Plots
+### Documentation figures
 
-[yeelab/pixels/plot.py](src/yeelab/pixels/plot.py) saves one PNG per method into `src/yeelab/pixels/plots/`:
+[docs/figures.py](docs/figures.py) regenerates the figures of [docs/math.pdf](docs/math.pdf)
+as PNG and SVG. Yee diagrams are drawn from the same margin-traced regions as the web UI:
 
 ```sh
-uv run python -m yeelab.pixels.plot                         # all methods, Beta voters
-uv run python -m yeelab.pixels.plot -m irv -m schulze       # only some methods
-uv run python -m yeelab.pixels.plot --distribution normal   # original Yee model
-uv run python -m yeelab.pixels.plot -d 0.3 -p 800           # deviation 0.3, 800x800 pixels
-uv run python -m yeelab.pixels.plot -h                      # all options
+uv run python docs/figures.py
 ```
 
-Ranking probabilities are cached in `src/yeelab/pixels/cache/`, so a second run with the same settings is fast (`--regenerate` ignores the cache). Candidates are set in [yeelab/pixels/plot.py](src/yeelab/pixels/plot.py).
+The SVGs preserve vector region boundaries; the PNGs are raster exports of those same
+figures.
 
 ### Web UI
 
@@ -67,14 +65,16 @@ docker run -p 8000:8000 yee-lab
 
 ## Code
 
-The code is the package `yeelab` in [src/yeelab/](src/yeelab/). It computes a diagram in two ways, which never import each other:
+The code is the package `yeelab` in [src/yeelab/](src/yeelab/). There is one calculation path:
 
-- `yeelab/margin/` — the web UI's way: only the shares each method needs, a winner with a margin that is 0 on every border, and the regions as polygons traced along that zero set. Its methods are built from blocks in `yeelab/build/` (below).
-- `yeelab/pixels/` — the original way: the complete ranking profile of every pixel, cached on disk, the winner of every pixel, and the plot CLI. [docs/figures.py](docs/figures.py) and the tests use it, the tests as the reference for `margin/` and `build/`.
+- `yeelab/margin/` computes only the shares each method needs, gives the winner with a margin that is 0 on every border, and traces the regions as polygons. Its methods are built from blocks in `yeelab/build/` (below).
+- [docs/figures.py](docs/figures.py) uses the same regions for diagrams and exports them as PNG/SVG. The tests check the region geometry and its underlying shares against analytical and Monte Carlo references.
 
-`pixels/methods.py` has the methods on the complete profile. The web UI's are in `build/`. What `margin/` and `pixels/` both use is at the top of the package: the voter models and ranking cells (`ranking_cells.py`, `normal.py`), `voting.py` (the IRV rounds and the Condorcet-cycle code) and `threads.py`. `yeelab/web/` is the FastAPI app and the page, on top of `margin/`.
+The voter distributions and ranking cells are defined in `ranking_cells.py` and `normal.py`; `voting.py` supplies shared IRV-round and Condorcet-cycle logic. `yeelab/web/` is the FastAPI app and page, on top of `margin/`.
 
-`uv run pytest` runs the tests (GitHub Actions runs them on every push and pull request, and builds the Docker image); `uv run python docs/figures.py` regenerates the figures of [docs/math.pdf](docs/math.pdf).
+`uv run pytest` runs the tests (GitHub Actions runs them on every push and pull request, and builds the Docker image); `uv run python docs/figures.py` regenerates the figures of [docs/math.pdf](docs/math.pdf) as PNG and SVG.
+Yee diagrams in these figures are drawn from the margin-traced regions; the tests validate
+shares against analytical and Monte Carlo references.
 
 ### Methods from blocks
 

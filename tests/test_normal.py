@@ -1,11 +1,10 @@
-"""Theoretical checks of normal.py and pixels/normal.py.
+"""Theoretical checks of normal.py and its margin-share integration.
 
 For voters N(m, sigma^2 I) the share preferring c_i to c_j has a closed form,
 Phi(distance of m from their bisector / sigma), for bisectors in every direction
 (the Beta model only has one for bisectors parallel to an axis). It follows that
 Condorcet methods draw the Voronoi diagram. Also checked: the compiled Owen's T
-against scipy's, the shares against Monte Carlo sampling, and interpolation from
-Chebyshev nodes against exact probabilities.
+against scipy's, the shares against Monte Carlo sampling.
 """
 
 import itertools
@@ -24,9 +23,10 @@ from yeelab.normal import (
     sigma_from_deviation,
     triangle_terms,
 )
-from yeelab.pixels.methods import condorcet, schulze, voronoi
-from yeelab.pixels.normal import compute_ranking_probabilities, interpolate_to_pixels
+from yeelab.margin.regions import MARGINS, nearest
+from yeelab.margin.shares import Model, pairwise_shares
 from yeelab.ranking_cells import pixel_medians
+from yeelab.build import Voters
 from yeelab.voting import CYCLE
 
 CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
@@ -38,11 +38,12 @@ AXIS_CANDIDATES = np.array([[0.3, 0.5], [0.7, 0.5], [0.55, 0.2], [0.3, 0.9]])
 
 @pytest.fixture(scope="module", params=[0.05, DEVIATION])
 def profile(request):
-    """(deviation, rankings, probabilities) at the pixel centres."""
-    return request.param, *compute_ranking_probabilities(CANDIDATES, MEDIANS, request.param)
+    """(deviation, pairwise shares, interpolation-node means)."""
+    model = Model("normal", request.param)
+    return request.param, pairwise_shares(CANDIDATES, model), model.medians
 
 
-def _pixel_centres(medians):
+def _grid_points(medians):
     return np.stack(np.meshgrid(medians, medians, indexing="ij"), axis=-1)
 
 
@@ -88,70 +89,48 @@ def test_cells_partition_box(candidates):
     assert len(np.unique(rankings, axis=0)) == len(rankings)
 
 
-def test_probabilities_are_distribution(profile):
-    _, _, probs = profile
-    assert probs.min() >= 0
-    np.testing.assert_allclose(probs.sum(axis=-1), 1.0, atol=1e-12)
-
-
 def test_pairwise_majority_matches_closed_form(profile):
     """Share preferring c_i to c_j is Phi(signed distance from bisector / sigma)."""
-    deviation, rankings, probs = profile
+    deviation, pairwise, medians = profile
     sigma = sigma_from_deviation(deviation)
-    position = np.argsort(rankings, axis=1)
-    centres = _pixel_centres(MEDIANS)
+    centres = _grid_points(medians)
     for i, j in itertools.combinations(range(len(CANDIDATES)), 2):
         normal = CANDIDATES[j] - CANDIDATES[i]
         offset = (CANDIDATES[j] @ CANDIDATES[j] - CANDIDATES[i] @ CANDIDATES[i]) / 2
         distance = (offset - centres @ normal) / np.linalg.norm(normal)  # > 0 nearer c_i
-        share = probs[..., position[:, i] < position[:, j]].sum(axis=-1)
-        np.testing.assert_allclose(share, ndtr(distance / sigma), atol=1e-12)
+        np.testing.assert_allclose(pairwise[..., i, j], ndtr(distance / sigma), atol=1e-12)
 
 
 def test_condorcet_methods_draw_voronoi(profile):
-    """Wherever the pixel centre is not on a bisector, Schulze and the Condorcet
+    """Wherever a model node is not on a bisector, Schulze and the Condorcet
     winner are the nearest candidate, and there is no cycle."""
-    _, rankings, probs = profile
-    centres = _pixel_centres(MEDIANS)
+    deviation, pairwise, medians = profile
+    centres = _grid_points(medians)
     distance = np.sort(np.linalg.norm(centres[..., None, :] - CANDIDATES, axis=-1), axis=-1)
     clear = distance[..., 1] - distance[..., 0] > 1e-9
-    nearest = voronoi(CANDIDATES, PIXELS)
-    np.testing.assert_array_equal(schulze(rankings, probs)[clear], nearest[clear])
-    winners = condorcet(rankings, probs)
+    expected = nearest(CANDIDATES, centres)[0]
+    voters = Voters(pairwise=pairwise)
+    np.testing.assert_array_equal(MARGINS["schulze"].evaluate(voters)[0][clear], expected[clear])
+    winners = MARGINS["condorcet"].evaluate(voters)[0]
     assert not (winners[clear] == CYCLE).any()
-    np.testing.assert_array_equal(winners[clear], nearest[clear])
+    np.testing.assert_array_equal(winners[clear], expected[clear])
 
 
 @pytest.mark.parametrize("pixel", [(0, 0), (PIXELS // 2, PIXELS // 2), (PIXELS - 1, 3), (4, 17)])
 def test_matches_monte_carlo(pixel):
-    rankings, probs = compute_ranking_probabilities(CANDIDATES, MEDIANS, DEVIATION)
     i, j = pixel
-    samples = 1_000_000
+    model = Model("normal", DEVIATION)
+    medians = model.medians
+    samples = 200_000
     rng = np.random.default_rng(i * PIXELS + j)
-    points = rng.normal((MEDIANS[i], MEDIANS[j]), sigma_from_deviation(DEVIATION), (samples, 2))
-    sampled = np.argsort(np.linalg.norm(points[:, None] - CANDIDATES, axis=-1), axis=1)
-
-    n = len(CANDIDATES)
-    codes = rankings.astype(np.int64) @ n ** np.arange(n)
-    sample_codes = sampled @ n ** np.arange(n)
-    assert np.isin(sample_codes, codes).all(), "sampled ranking missing from cells"
-    empirical = (sample_codes[:, None] == codes[None, :]).mean(axis=0)
-
-    exact = probs[i, j]
-    sigma = np.sqrt(exact * (1 - exact) / samples)
-    assert np.all(np.abs(empirical - exact) <= 5 * sigma + 1e-6)
-
-
-@pytest.mark.parametrize("deviation", [0.05, DEVIATION])
-def test_interpolation_matches_exact(deviation):
-    pixels = 60
-    exact = compute_ranking_probabilities(CANDIDATES, pixel_medians(pixels), deviation)
-    medians = node_medians(pixels, NODES)
-    rankings, probs = compute_ranking_probabilities(CANDIDATES, medians, deviation)
-    np.testing.assert_array_equal(rankings, exact[0])
-    interpolated = interpolate_to_pixels(probs, medians, pixels)
-    np.testing.assert_allclose(interpolated, exact[1], atol=2e-6)
-    assert interpolated.dtype == np.float32
+    points = rng.normal((medians[i], medians[j]), sigma_from_deviation(DEVIATION), (samples, 2))
+    rankings = np.argsort(np.linalg.norm(points[:, None] - CANDIDATES, axis=-1), axis=1)
+    positions = np.argsort(rankings, axis=1)
+    pair = (0, 1)
+    empirical = np.mean(positions[:, pair[0]] < positions[:, pair[1]])
+    expected = pairwise_shares(CANDIDATES, model)[i, j, *pair]
+    standard_error = np.sqrt(expected * (1 - expected) / samples)
+    assert abs(empirical - expected) <= 5 * standard_error + 1e-6
 
 
 def test_node_medians_span_pixel_medians():

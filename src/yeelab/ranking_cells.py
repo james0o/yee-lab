@@ -14,10 +14,9 @@ out, "rms" by sqrt(2) (docs/math.typ).
 A voter's strict ranking of the candidates changes only when the voter crosses
 the perpendicular bisector of some pair of candidates. The bisectors cut the unit
 square into convex cells, each cell has one fixed ranking, and the cells are the
-same for every pixel. Only the probability of each cell changes between pixels.
+same for every median. Only the probability of each cell changes with the median.
 (Ties have probability zero and are ignored.) The probabilities are edge integrals
-over the cell boundaries: exact for every cell in pixels/beta.py, from tables and
-compiled in margin/beta_tables.py.
+over the cell boundaries, evaluated from tables and compiled in margin/beta_tables.py.
 
 The probabilities are smooth in the pixel median (only the winners jump), so they
 are computed exactly on NODES x NODES Chebyshev-Lobatto points in logit(median) and

@@ -1,7 +1,7 @@
 """Beta CDF and quantile of the node distributions from tables.
 
-The edge integrals of pixels/beta.py evaluate, for a fixed list of N Beta
-distributions (the voters of the interpolation nodes along one axis), the CDF of
+The edge integrals evaluate, for a fixed list of N Beta distributions (the voters
+of the interpolation nodes along one axis), the CDF of
 every node at every quadrature point: O(N^2) `betainc` calls per edge, which is
 nearly all of their cost. The N distributions never change for a given deviation
 and spread rule, so their CDFs can be tabulated once.
@@ -118,8 +118,7 @@ def _on_wall(v):
 def _edge_part(xs, ys, xe, ye, out, cdf, tail_a, tail_scale, ppf, left, right, nodes,
                weights, scratch):
     """out += integral of omega over (xs, ys) -> (xe, ye), a segment that is not
-    vertical and does not touch both kinds of wall: the forms of
-    pixels.beta._edge_integral with the same quadrature, on the tables."""
+    vertical and does not touch both kinds of wall, using the tabulated CDFs."""
     size = out.shape[0]
     start, end, values = scratch[0], scratch[1], scratch[2]
     if abs(ys - ye) < 1e-9:  # horizontal: -G(y) (F(xe) - F(xs))
@@ -168,8 +167,7 @@ def _edge_part(xs, ys, xe, ye, out, cdf, tail_a, tail_scale, ppf, left, right, n
 
 @_kernel
 def _edge_terms(segments, out, cdf, tail_a, tail_scale, ppf, left, right, nodes, weights):
-    """out[e] += integral of omega over segment e = (xs, ys, xe, ye), each (N, N):
-    pixels.beta._edge_integral for many edges at once."""
+    """out[e] += integral of omega over segment e = (xs, ys, xe, ye), each (N, N)."""
     scratch = np.empty((5, cdf.shape[1]))
     for e in range(segments.shape[0]):
         xs, ys, xe, ye = segments[e, 0], segments[e, 1], segments[e, 2], segments[e, 3]
@@ -235,8 +233,8 @@ def _hermite(values, slopes, step):
 
 
 class TabulatedBeta:
-    """Beta CDF and quantile of the nodes from the tables; same interface as
-    pixels.beta.ExactBeta, absolute error below 1e-7 (tests/test_beta_tables.py)."""
+    """Beta CDF and quantile of the node distributions; absolute error below 1e-7
+    against the independent scipy reference in tests/test_beta_tables.py."""
 
     def __init__(self, params):
         a, b = params[:, 0:1], params[:, 1:2]
@@ -268,8 +266,7 @@ class TabulatedBeta:
 
     def edge_terms(self, segments, nodes, weights):
         """Integrals of omega over the segments (E, 4) = (xs, ys, xe, ye), shape
-        (E, N, N): pixels.beta._edge_integral with the Gauss-Legendre `nodes` and
-        `weights`, compiled, on chunks of the edges in parallel threads."""
+        (E, N, N), with Gauss-Legendre `nodes` and `weights`."""
         segments = np.ascontiguousarray(segments, dtype=np.float64).reshape(-1, 4)
         out = np.zeros((len(segments), self._size, self._size))
         chunk = max(1, -(-len(segments) // (os.cpu_count() or 1)))

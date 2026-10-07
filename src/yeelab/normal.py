@@ -14,7 +14,7 @@ symmetric about m, so every line through m has half of the voters on each side.
 A voter prefers c_i to c_j on c_i's side of their bisector, so a majority prefers
 c_i to c_j exactly when m is closer to c_i. The pairwise majorities rank the
 candidates by distance from m: there is never a Condorcet cycle and the
-Condorcet winner is the candidate nearest to m (pixels.methods.voronoi), for any sigma.
+Condorcet winner is the candidate nearest to m, for any sigma.
 The Beta median halves the voters only along lines parallel to the axes, so
 there the majorities between candidates on a diagonal differ from the distance.
 

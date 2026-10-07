@@ -14,7 +14,7 @@ wheels/
 tests/__pycache__/
 .pytest_cache/
 
-# output of the pixel pipeline
+# Outputs from the retired pixel renderer may remain in existing worktrees.
 src/yeelab/pixels/plots/
 src/yeelab/pixels/cache/
 

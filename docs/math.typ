@@ -46,12 +46,12 @@ package `src/yeelab/`):
   table.hline(),
   [quantity], [symbol], [set by], [default],
   table.hline(stroke: 0.5pt),
-  [pixels per axis], [$n$], [`--pixels` (`pixels/plot.py`), `PIXELS` (`margin/shares.py`)], [400 / 300],
-  [deviation], [$D$], [`--deviation`, _Deviation_ slider], [0.2],
-  [voter distribution], [], [`--distribution`, _Voters_], [Beta],
-  [Beta spread rule], [], [`--spread`; the web UI always uses `rms`], [`rms`],
+  [medians per axis], [$n$], [`PIXELS` (`margin/shares.py`)], [300],
+  [deviation], [$D$], [Model parameter, _Deviation_ slider], [0.2],
+  [voter distribution], [], [Model parameter, _Voters_ control], [Beta],
+  [Beta spread rule], [], [Model parameter; the web UI always uses `rms`], [`rms`],
   [what a pixel is (Beta, UI)], [], [_Pixel is_, `PIXEL_MEDIAN` (`margin/geometric.py`)], [median along each axis],
-  [interpolation nodes per axis], [$N$], [`--nodes` (`NODES`)], [49],
+  [interpolation nodes per axis], [$N$], [`NODES`], [49],
   [Gauss–Legendre points per edge], [$Q$], [`QUAD_NODES`], [24],
   [score levels (UI)], [$L$], [_Score categories_, `SCORE_LEVELS` (`web/app.py`)], [6],
   [power of the score ballot (UI)], [$p$], [_Score power p_, `SCORE_POWER` (`build/methods.py`)], [1.5],
@@ -91,7 +91,7 @@ have no Monte Carlo noise. A voter can only be tied between two candidates on a 
 
 If every voter sat exactly at the pixel centre, every method would elect the candidate
 nearest to $m$, and the diagram would be the *Voronoi diagram* of the candidates
-(`pixels.methods.voronoi`, _Voronoi_ in the web UI). It is the reference against which
+(_Voronoi_ in the web UI). It is the reference against which
 the other diagrams are compared.
 
 == Normal voters <sec-normal-model>
@@ -215,7 +215,7 @@ wall the far half of the voters is pushed twice as far out, towards the opposite
 At median $0.98$ the share of voters below $0.1$ is back at $0.192$, more than at the
 centre, where `rms` has $0.049$ (@fig-densities). This push bends Condorcet borders,
 adds cycles and gives IRV a round edge that `rms` does not have (@ch-spread). It is not
-offered in the web UI; `--spread mean_abs` selects it for the plots.
+offered in the web UI; it remains available as a model spread rule.
 
 #figure(
   image("figures/spread_densities.png", width: 100%),
@@ -294,9 +294,9 @@ symmetry, and that a lone median gets the same parameters as a full sweep.
 
 = Exact ranking probabilities <ch-compute>
 
-This chapter computes the shares (@eq-share) for Beta voters (`ranking_cells.py` and
-`pixels/beta.py`, @sec-cells to @sec-interpolation) and for normal voters (`normal.py`
-and `pixels/normal.py`, @sec-normal).
+This chapter describes how the margin pipeline computes the shares (@eq-share) for
+Beta voters (`ranking_cells.py` and `margin/beta_tables.py`, @sec-cells to
+@sec-interpolation) and for normal voters (`normal.py`, @sec-normal).
 The only approximations are Gauss–Legendre quadrature and polynomial interpolation,
 both of which converge exponentially fast; the normal model needs no quadrature at all.
 For Beta voters the steps are:
@@ -307,7 +307,7 @@ For Beta voters the steps are:
 + Write the probability of each cell as a sum of integrals over its edges; each edge is
   shared by two cells (@sec-green).
 + Compute every edge integral for all pairs of node parameters (@sec-edges).
-+ Interpolate from the $N times N$ nodes to the $n times n$ pixels (@sec-interpolation).
++ Interpolate from the $N times N$ nodes to the $n times n$ evaluated medians (@sec-interpolation).
 
 == Ranking cells (`ranking_cells`) <sec-cells>
 
@@ -463,7 +463,7 @@ once in each direction and cancel, leaving the boundary of the square. On it
 $dif x = 0$ on the vertical sides, $G(0) = 0$ on the bottom, and the top ($y = 1$,
 traversed from $x = 1$ to $x = 0$) gives $-integral_1^0 f(x) dif x = 1$.
 
-=== Sharing edges (`compute_ranking_probabilities`)
+=== Sharing edges (`margin/shares.py`)
 
 Every edge is stored once under a canonical orientation (lexicographically smaller
 endpoint first). A cell that traverses the edge in the canonical direction adds its
@@ -471,13 +471,13 @@ integral with sign $+1$; the neighbouring cell traverses it the other way and ad
 sign $-1$. The edges are integrated in parallel threads (`betainc` / `betaincinv`
 release the GIL).
 
-The result of each edge integral is a matrix: entry $[k, l]$ uses the $X$-parameters
-of pixel column $k$ and the $Y$-parameters of pixel row $l$. Because $X$ and $Y$ are
-independent, one set of $n$ parameter pairs serves both axes, and the whole
-$n times n$ grid of pixels comes out of $O(n)$ one-dimensional quantities combined in
-an outer-product fashion.
+The result of each edge integral is a matrix over the interpolation nodes: entry
+$[k, l]$ uses the $X$-parameters of node $k$ and the $Y$-parameters of node $l$.
+Because $X$ and $Y$ are independent, one set of $N$ parameter pairs serves both axes,
+and the whole $N times N$ grid of node shares comes out of $O(N)$ one-dimensional
+quantities combined in an outer-product fashion.
 
-== Edge integrals (`_edge_integral`) <sec-edges>
+== Edge integrals (`TabulatedBeta.edge_terms`) <sec-edges>
 
 Let the edge go from $s = (x_s, y_s)$ to $e = (x_e, y_e)$.
 
@@ -529,29 +529,29 @@ integral_(u_s)^(u_e) h(u) dif u approx (u_e - u_s)/2 sum_(q=1)^Q w_q h(u_s + (u_
 $
 
 with Legendre nodes $t_q$ and weights $w_q$ on $[-1, 1]$. Note that the interval
-$[F_k (x_s), F_k (x_e)]$ depends on the pixel column $k$, so the nodes are placed per
-pixel.
+$[F_k (x_s), F_k (x_e)]$ depends on the node parameter $k$, so the quadrature nodes
+are placed separately for every interpolation node.
 
-*Cost.* For the $u$ form, $F_k^(-1)$ is evaluated at $Q$ nodes for each of the $n$
-column-parameters ($Q n$ calls of `betaincinv`), then $G_l$ is evaluated at each resulting
-$y$ for each of the $n$ row-parameters ($Q n^2$ calls of `betainc`). An edge therefore
-costs $O(Q n^2)$ Beta CDF evaluations, and the total cost is
-$O(E dot Q dot n^2)$ for $E$ distinct edges.
+*Cost.* For the $u$ form, $F_k^(-1)$ is evaluated at $Q$ nodes for each of the $N$
+column-parameters ($Q N$ quantile evaluations), then $G_l$ is evaluated at each resulting
+$y$ for each of the $N$ row-parameters ($Q N^2$ CDF evaluations). An edge therefore
+costs $O(Q N^2)$ Beta CDF evaluations, and the total cost is
+$O(E dot Q dot N^2)$ for $E$ distinct edges.
 
-== Interpolation in the pixel median <sec-interpolation>
+== Interpolation in the median <sec-interpolation>
 
-With $n$ large, $O(Q n^2)$ per edge is still costly. But the cell probabilities are
+Evaluating all $n$ medians directly, $O(Q n^2)$ per edge would be costly. But the cell probabilities are
 *smooth* functions of the medians $(m_x, m_y)$: $(a, b)$ depends smoothly on $m$, and
 the integrals @eq-cell-prob depend smoothly on $(a, b)$. (The *winner* of a voting
-method jumps between pixels, but the probabilities do not.) So they are computed
+method jumps between evaluation points, but the probabilities do not.) So they are computed
 exactly only on an $N times N$ grid of medians (`NODES`, default $N = 49$) and
-interpolated to all $n times n$ pixels. If $N >= n$ no interpolation is used.
+interpolated to the $n times n$ evaluation grid. If $N >= n$ no interpolation is used.
 
 === Nodes (`node_medians`)
 
 The interpolation variable is $z = logit(m) = log(m slash (1 - m))$. It stretches the
 regions near $0$ and $1$, where $(a, b)$ change fastest. The nodes are the
-Chebyshev–Lobatto points in $z$ spanning the first and last pixel median:
+Chebyshev–Lobatto points in $z$ spanning the first and last target median:
 
 $
 t_j = -cos(pi j / (N - 1)), quad
@@ -576,30 +576,29 @@ $
 
 where $h_j$ are the values at the nodes. (The weights are invariant under the affine map
 $t -> Z t$, up to a common factor that cancels.) When a target coincides with a node,
-the node value is used directly. Evaluated at all $n$ pixel medians this is a fixed
+the node value is used directly. Evaluated at all $n$ target medians this is a fixed
 $n times N$ matrix $L$, and on the 2-D tensor grid
 
-$ P_("pixels")[dot, dot, r] = L thin P_("nodes")[dot, dot, r] thin L^T , $
+$ P_("grid")[dot, dot, r] = L thin P_("nodes")[dot, dot, r] thin L^T , $
 
-applied as two matrix products (`interpolate_to_pixels`). The final product is carried
+applied as two matrix products (`ranking_cells.interpolate_to`). The final product is carried
 out in `float32` because the result is by far the largest array; the rounding
-($approx 10^(-7)$) can only affect pixels whose winning margin is equally small.
+($approx 10^(-7)$) can only affect evaluation points whose winning margin is equally small.
 Values are finally clipped to $[0, 1]$.
 
 Because the probabilities are analytic in $z$, the interpolation error decreases
 exponentially in $N$. The interpolation reproduces constants exactly, so the
-probabilities of each pixel still sum to one up to rounding. Narrow voters change
-faster with the median: for Beta voters with $D < 0.1$ the web UI uses $2N - 1 = 97$
-nodes, because with $49$ the shares of a pixel at $D = 0.05$ would sum to up to $1.025$.
+probabilities at each evaluation point still sum to one up to rounding. Narrow voters
+change faster with the median: for Beta voters with $D < 0.1$ the web UI uses
+$2N - 1 = 97$ nodes, because with $49$ the shares at a target median with $D = 0.05$
+would sum to up to $1.025$.
 
-Only the node probabilities are cached on disk (`pixels/cache/beta/<spread>/`,
-`pixels/cache/normal/`), together with the medians, the parameters and the settings they were
-made with; interpolation happens on every load.
+Edge integrals are cached in memory between requests. Interpolation to the evaluation
+grid happens after the node shares have been computed.
 
 == Normal voters (`normal.py`) <sec-normal>
 
-`normal.py` and `pixels/normal.py` compute the same shares for normal voters
-(@sec-normal-model), with the same interface as for Beta voters.
+`normal.py` computes the shares for normal voters (@sec-normal-model).
 
 === Cells in a larger box (`normal_cells`)
 
@@ -648,9 +647,9 @@ where $rho > 0$ when $m$ lies left of the edge, i.e. inside a CCW cell. Then
 
 $ P_plus.minus (m, s, e) = R(rho, t_e) - R(rho, t_s), $
 
-and $0$ when $rho = 0$ (the triangle degenerates). For the $N times N$ grid of pixel
-centres $rho$, $t_s$, $t_e$ are outer sums, so each edge costs two evaluations of Owen's
-T per pixel. They are compiled (@sec-compiled): for $0 <= a <= 1$ the integral above with
+and $0$ when $rho = 0$ (the triangle degenerates). For the $N times N$ grid of node
+medians $rho$, $t_s$, $t_e$ are outer sums, so each edge costs two evaluations of Owen's
+T per node. They are compiled (@sec-compiled): for $0 <= a <= 1$ the integral above with
 12-point Gauss–Legendre, which agrees with scipy's `owens_t` to $10^(-16)$ for every $h$
 (the integrand is analytic in $x$), and for $a > 1$ the identity
 
@@ -665,7 +664,7 @@ Unlike the Beta parameters, nothing changes faster near $0$ or $1$, so the nodes
 Chebyshev–Lobatto points in the median itself,
 $m_j = 1/2 + (1/2 - 1/(2n)) t_j$, and the barycentric interpolation of
 @sec-interpolation is applied in $m$ instead of $logit(m)$
-(`interpolate_to_pixels(..., transform=...)`). The logit nodes would be far too
+(`ranking_cells.interpolate_to(..., transform=...)`). The logit nodes would be far too
 sparse in the middle for small $sigma$ (maximum error at $120$ pixels, $N = 49$):
 
 #align(center, table(
@@ -689,7 +688,7 @@ independently:
 
 - the cells partition the square (or the box) and every point inside a cell has the
   cell's ranking;
-- the shares of every pixel sum to one (to $10^(-12)$ before interpolation);
+- the shares at every evaluated median sum to one (to $10^(-12)$ before interpolation);
 - for a bisector parallel to an axis the share preferring one candidate is a Beta CDF,
   and at median $1/2$ it is exactly one half (to $10^(-8)$);
 - for normal voters the pairwise shares match their closed form (@eq-normal-pairwise)
@@ -697,18 +696,17 @@ independently:
 - the shares match $10^6$ sampled voters within five standard errors
   (`monte_carlo_check` does the same for any pixels, with $2 dot 10^6$ voters, whose
   standard error is at most $1 slash (2 sqrt(M)) approx 3.5 dot 10^(-4)$);
-- interpolated shares match the exact ones at every pixel (to $2 dot 10^(-5)$ for Beta
+- interpolated shares match the exact ones at evaluated medians (to $2 dot 10^(-5)$ for Beta
   voters with 33 nodes, $2 dot 10^(-6)$ for normal voters with 49 nodes).
 
 #pagebreak()
 
-= Voting methods (`pixels/methods.py`) <ch-methods>
+= Voting methods (`yeelab.build`) <ch-methods>
 
-Every method receives the rankings (an $R times C$ array, best first, one row per
-cell) and the shares $P(r)$ of every pixel (an $n times n times R$ array), and returns
-the winner of every pixel. Because an electorate is a distribution, a method works with
-shares instead of vote counts; every step is a matrix product over the $R$ rankings,
-done for all pixels at once.
+For each evaluated median, a method operates on the voter shares it needs and returns
+the winner and its margin. Most methods need only pairwise or first-choice shares;
+IRV needs the complete ranking profile. Because an electorate is a distribution, the
+calculations use shares instead of vote counts.
 
 == First past the post (`fptp`)
 
@@ -1842,8 +1840,7 @@ pixels on average (90th percentile 3.1 pixels, the single worst border 4.9 pixel
   has no round IRV edge, and its borders bend by 1.5 pixels on average at $D = 0.3$; of
   the rules compared, only power means slightly below $2$ bend less, and only at larger
   spreads.
-- *`mean_abs`* is kept to reproduce results made with it (caches and plots are kept
-  apart per rule, `pixels/cache/beta/<spread>/`, `pixels/plots/beta/<spread>/`). By @eq-push it
+- *`mean_abs`* is kept to reproduce and compare results made with it. By @eq-push it
   pushes the far half of the voters out twice as far near a wall, which bends borders
   the most, adds cycles and makes the round IRV edge.
 
@@ -2124,24 +2121,23 @@ takes too long for that:
   table.hline(),
   [step ($D = 0.2$, `rms`, $49 times 49$ nodes)], [5 candidates], [8 candidates],
   table.hline(stroke: 0.5pt),
-  [ranking shares at the nodes (`compute_ranking_probabilities`)], [333 ms], [2878 ms],
+  [ranking shares at the nodes (`margin/shares.py`)], [333 ms], [2878 ms],
   [bisector arrangement (`ranking_cells`)], [8 ms], [99 ms],
-  [interpolation to $300 times 300$ pixels], [12 ms], [88 ms],
-  [IRV / Schulze on the pixels], [61 / 64 ms], [703 / 358 ms],
+  [interpolation to a $300 times 300$ evaluation grid], [12 ms], [88 ms],
+  [IRV / Schulze on the grid], [61 / 64 ms], [703 / 358 ms],
   table.hline(),
 ))
 
 Almost all of the time goes to the shares at the $N times N$ nodes, which do not depend
-on the number of pixels at all. Drawing the diagram as curves instead of pixels
+on the resolution of the evaluation grid. Drawing the diagram as curves
 (@sec-zero-sets) is the right output, but on its own it saves little. The speed comes
 from computing fewer integrals (@sec-needs), keeping those a drag does not change
 (@sec-edge-cache), making each one cheaper (@sec-tables), and compiling the loops that
 remain (@sec-compiled). This chapter describes `margin/` (`shares.py`, `beta_tables.py`
 and `regions.py`; `geometric.py` is the subject of @ch-geometric) and the methods built
-from blocks in `build/`, which `web/app.py` uses for the UI.
-`docs/figures.py` (apart from the examples of @sec-zero-sets), the plots and the tests of
-@sec-validation still use the pipeline of @ch-compute, which is in `pixels/`. The two never import each other; what both need
-(`ranking_cells.py`, `normal.py`, `voting.py`, `threads.py`) is at the top of the package.
+from blocks in `build/`, which `web/app.py` uses for the UI. `docs/figures.py` uses
+these same polygon regions and exports the diagrams as PNG/SVG. The tests validate the
+margin pipeline against analytical and Monte Carlo references.
 
 == What each method needs (`margin/shares.py`) <sec-needs>
 

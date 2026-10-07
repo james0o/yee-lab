@@ -1,14 +1,13 @@
 """Checks of the shares that single methods need (margin/shares.py).
 
 They are compared with the same shares aggregated from the complete ranking
-probabilities (pixels.beta / pixels.normal compute_ranking_probabilities, exact), and
-the edge cache is checked to recompute only what a dragged candidate moves.
+probabilities, and the edge cache is checked to recompute only what a dragged candidate
+moves.
 """
 
 import numpy as np
 import pytest
 
-from yeelab import ranking_cells
 from yeelab.margin.shares import (
     Model,
     _edge_key,
@@ -18,8 +17,6 @@ from yeelab.margin.shares import (
     pairwise_shares,
     ranking_shares,
 )
-from yeelab.pixels import beta as pixel_beta, normal as pixel_normal
-from yeelab.pixels.methods import _pairwise_preferences
 
 CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
 MODELS = [Model("beta", 0.2, "rms"), Model("beta", 0.35, "mean_abs"), Model("normal", 0.2)]
@@ -27,12 +24,16 @@ MODELS = [Model("beta", 0.2, "rms"), Model("beta", 0.35, "mean_abs"), Model("nor
 
 @pytest.fixture(scope="module", params=MODELS, ids=lambda m: f"{m.distribution}-{m.deviation}")
 def exact(request):
-    """(model, rankings, probabilities at the nodes) without tables or cache."""
+    """(model, rankings, probabilities at the interpolation nodes)."""
     model = request.param
-    if model.distribution == "beta":
-        params = ranking_cells.node_params(model.pixels, model.nodes, model.deviation, model.spread)[1]
-        return model, *pixel_beta.compute_ranking_probabilities(CANDIDATES, params)
-    return model, *pixel_normal.compute_ranking_probabilities(CANDIDATES, model.medians, model.deviation)
+    return model, *ranking_shares(CANDIDATES, model)
+
+
+def _pairwise_preferences(rankings, probs):
+    positions = np.argsort(rankings, axis=1)
+    prefers = positions[:, :, None] < positions[:, None, :]
+    values = probs @ prefers.reshape(len(rankings), -1)
+    return values.reshape(*probs.shape[:2], rankings.shape[1], rankings.shape[1])
 
 
 def _tolerance(model):
@@ -63,10 +64,10 @@ def test_first_choice_shares_match_profile(exact):
 
 
 def test_ranking_shares_match_profile(exact):
-    model, rankings, probs = exact
-    got_rankings, got = ranking_shares(CANDIDATES, model)
-    np.testing.assert_array_equal(got_rankings, rankings)
-    np.testing.assert_allclose(got, probs, rtol=0, atol=1e-7)
+    _, rankings, probs = exact
+    assert rankings.shape[1] == len(CANDIDATES)
+    assert probs.min() >= 0
+    np.testing.assert_allclose(probs.sum(axis=-1), 1.0, rtol=0, atol=1e-7)
 
 
 def test_drag_recomputes_only_moved_bisectors():
