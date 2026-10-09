@@ -107,7 +107,7 @@ def test_regions_reproduce_margin_winners(model, method):
     assert sum(_area(r) for outer, holes in rings for r in [outer, *holes]) == pytest.approx(1, abs=1e-3)
 
 
-def test_figure_diagram_exports_png_and_svg(tmp_path, monkeypatch):
+def test_figure_diagram_exports_png(tmp_path, monkeypatch):
     import matplotlib.pyplot as plt
 
     from docs import figures
@@ -122,7 +122,21 @@ def test_figure_diagram_exports_png_and_svg(tmp_path, monkeypatch):
         plt.close(fig)
 
     assert (tmp_path / "diagram.png").read_bytes().startswith(b"\x89PNG")
-    assert b"<svg" in (tmp_path / "diagram.svg").read_bytes()
+    assert not (tmp_path / "diagram.svg").exists()
+
+
+def test_plot_cli_defaults_to_png_and_can_export_svg(tmp_path, monkeypatch):
+    from yeelab.plot import main
+
+    monkeypatch.chdir(tmp_path)
+    png_path = tmp_path / "voronoi.png"
+    main(["--method", "voronoi"])
+    assert png_path.read_bytes().startswith(b"\x89PNG")
+
+    svg_path = tmp_path / "voronoi.svg"
+    main(["--method", "voronoi", "--svg", "--output", str(svg_path)])
+    assert svg_path.read_bytes().lstrip().startswith(b"<?xml")
+    assert b"<svg" in svg_path.read_bytes()
 
 
 @pytest.mark.parametrize("model", [Model("beta", 0.05, "rms"), Model("normal", 0.05)],

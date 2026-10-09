@@ -32,14 +32,21 @@ Requires [uv](https://docs.astral.sh/uv/).
 ### Documentation figures
 
 [docs/figures.py](docs/figures.py) regenerates the figures of [docs/math.pdf](docs/math.pdf)
-as PNG and SVG. Yee diagrams are drawn from the same margin-traced regions as the web UI:
+as PNG. Yee diagrams are drawn from the same margin-traced regions as the web UI:
 
 ```sh
 uv run python docs/figures.py
 ```
 
-The SVGs preserve vector region boundaries; the PNGs are raster exports of those same
-figures.
+To export an individual diagram independently as PNG (the default) or SVG:
+
+```sh
+uv run python -m yeelab.plot --method irv
+uv run python -m yeelab.plot --method irv --format svg --output irv.svg
+```
+
+Pass `--svg` as a short form of `--format svg`. The default output is `irv.png`;
+`--output` chooses a different path.
 
 ### Web UI
 
@@ -72,7 +79,7 @@ The code is the package `yeelab` in [src/yeelab/](src/yeelab/). There is one cal
 
 The voter distributions and ranking cells are defined in `ranking_cells.py` and `normal.py`; `voting.py` supplies shared IRV-round and Condorcet-cycle logic. `yeelab/web/` is the FastAPI app and page, on top of `margin/`.
 
-`uv run pytest` runs the tests (GitHub Actions runs them on every push and pull request, and builds the Docker image); `uv run python docs/figures.py` regenerates the figures of [docs/math.pdf](docs/math.pdf) as PNG and SVG.
+`uv run pytest` runs the tests (GitHub Actions runs them on every push and pull request, and builds the Docker image); `uv run python docs/figures.py` regenerates the figures of [docs/math.pdf](docs/math.pdf) as PNG.
 Yee diagrams in these figures are drawn from the margin-traced regions; the tests validate
 shares against analytical and Monte Carlo references.
 

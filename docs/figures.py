@@ -3,11 +3,8 @@
 Run from the repository root: `uv run python docs/figures.py`.
 Writes docs/figures/*.png and prints the numbers quoted in the text. Beta voters use
 the default spread rule (ranking_cells.SPREAD) except where the rules are compared.
-`uv run python docs/figures.py search` runs only the slow search over random candidate
-layouts of the chapter on the shapes of win regions.
 """
 
-import sys
 from itertools import combinations
 from pathlib import Path
 
@@ -99,10 +96,9 @@ def show(ax, method: str | Winner, model: Model | None, title, alpha=1.0, *,
 
 
 def _save_figure(fig, name, dpi=150):
-    """Write the document figure as a raster PNG and a vector SVG."""
+    """Write the document figure as a raster PNG."""
     FIGURES.mkdir(exist_ok=True)
     fig.savefig(FIGURES / f"{name}.png", dpi=dpi)
-    fig.savefig(FIGURES / f"{name}.svg", format="svg")
 
 
 def first_choice_shares(rankings, probs, alive):
@@ -990,9 +986,6 @@ def score_against_voronoi(layouts=60, size=64):
 
 if __name__ == "__main__":
     FIGURES.mkdir(exist_ok=True)
-    if sys.argv[1:] == ["search"]:
-        shape_search()
-        sys.exit()
     spread_shapes()
     spread_densities()
     cycle_counts()
