@@ -107,6 +107,24 @@ def test_regions_reproduce_margin_winners(model, method):
     assert sum(_area(r) for outer, holes in rings for r in [outer, *holes]) == pytest.approx(1, abs=1e-3)
 
 
+def test_figure_diagram_exports_png_and_svg(tmp_path, monkeypatch):
+    import matplotlib.pyplot as plt
+
+    from docs import figures
+
+    monkeypatch.setattr(figures, "FIGURES", tmp_path)
+    fig, ax = plt.subplots()
+    try:
+        figures.show(ax, "fptp", Model("normal", 0.2), "FPTP", size=32)
+        assert ax.patches
+        figures._save_figure(fig, "diagram", dpi=30)
+    finally:
+        plt.close(fig)
+
+    assert (tmp_path / "diagram.png").read_bytes().startswith(b"\x89PNG")
+    assert b"<svg" in (tmp_path / "diagram.svg").read_bytes()
+
+
 @pytest.mark.parametrize("model", [Model("beta", 0.05, "rms"), Model("normal", 0.05)],
                          ids=lambda m: m.distribution)
 @pytest.mark.parametrize("method", ["score", Highest(Tally(Score(2))), Highest(Tally(Score(2, power=1.5))),
