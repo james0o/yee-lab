@@ -12,6 +12,9 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
                                       remaining set)
     king_runoff                       all three: koth against irv, the duel by pairwise
                                       shares
+    irv_set_koth_score                the whole profile for every elimination schedule,
+                                      the shares of koth, and the score shares below for
+                                      the final
     score                             the part of the top score a candidate does not
                                       get, and STAR the strict cardinal comparisons of
                                       each pair: these voters have curved borders, so

@@ -16,8 +16,8 @@ from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import AfterValidator, BaseModel, Field, field_validator
 
-from yeelab.build import Highest, Score, ScoreComparisons, Tally, Unbeaten, Winner
-from yeelab.build.methods import SCORE_POWER
+from yeelab.build import Highest, Plurality, Schedules, Score, ScoreComparisons, Tally, Unbeaten, Winner
+from yeelab.build.methods import SCORE_POWER, koth
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
 from yeelab.margin.regions import MARGINS, regions
@@ -39,14 +39,13 @@ DIAGRAMS = [*MARGINS, *IDEALS]
 # is the default.
 DEVIATIONS = [round(0.05 * k, 2) for k in range(1, 9)]
 assert DEVIATION in DEVIATIONS
-# The two sliders of Score and STAR: the number of scores on their ballot
+# The two sliders of the score methods: the number of scores on their ballot
 # (categories), from 2 to MAX_LEVELS (scores 0 to 10), and the power p of the part of the
 # way, from MIN_POWER (in proportion to the distance) to MAX_POWER by POWER_STEP.
-# SCORE_LEVELS and SCORE_POWER are their defaults, the ones the method is listed with.
+# SCORE_LEVELS and SCORE_POWER are their defaults, the ones the methods are listed with.
 SCORE_LEVELS = 6
 MAX_LEVELS = 11
 MIN_POWER, MAX_POWER, POWER_STEP = 1.0, 2.0, 0.05
-SCORES = ["score", "star"]
 
 
 def build_score(levels: int, power: float) -> Winner:
@@ -60,8 +59,14 @@ def build_star(levels: int, power: float) -> Winner:
     return Unbeaten(ScoreComparisons(ballot), among=Highest(Tally(ballot), n=2))
 
 
-assert MARGINS["score"] == build_score(SCORE_LEVELS, SCORE_POWER)
-assert MARGINS["star"] == build_star(SCORE_LEVELS, SCORE_POWER)
+def build_irv_set_koth_score(levels: int, power: float) -> Winner:
+    """IRV set + KOTH + Score with the sliders' settings."""
+    return Highest(Tally(Score(levels, power=power)), among=Schedules(Tally(Plurality())) | koth)
+
+
+# the methods of the sliders, built with their settings
+SCORES = {"score": build_score, "star": build_star, "irv_set_koth_score": build_irv_set_koth_score}
+assert all(MARGINS[name] == build(SCORE_LEVELS, SCORE_POWER) for name, build in SCORES.items())
 assert MIN_POWER <= SCORE_POWER <= MAX_POWER
 # Win regions are traced on a grid of this many points per axis: coarser while a
 # candidate is dragged, finer once it is dropped (see margin/regions.py).
@@ -111,6 +116,13 @@ METHOD_INFO = {
              "score advance to a runoff. Each voter gives the runoff vote to the finalist they "
              "scored higher; voters who gave both finalists the same score abstain. The score "
              "categories and power use the same sliders as Score."},
+    "irv_set_koth_score": {"label": "IRV set + KOTH + Score", "description": "IRV set + KOTH + "
+                           "Score: the candidates with the fewest first choices among the "
+                           "remaining ones are eliminated, any number of them in a round, in every "
+                           "possible way: one at a time (IRV), all at once (FPTP), all but two and "
+                           "then one (two-round) and all between. Of the winners of all these and "
+                           "the King of the hill winner, the highest mean score wins. The score "
+                           "categories and power use the same sliders as Score."},
     "voronoi": {"label": "Voronoi", "description": "The nearest candidate to the pixel, without "
                 "voters: what the ranked methods draw when all voters are at their pixel. With "
                 "pixels at geometric medians it is drawn only where the voters above have one, "
@@ -241,7 +253,7 @@ def config():
         "deviations": DEVIATIONS,
         "deviation": DEVIATION,
         # the methods of the categories and power sliders, their defaults and ranges
-        "scores": SCORES,
+        "scores": list(SCORES),
         "levels": SCORE_LEVELS,
         "max_levels": MAX_LEVELS,
         "power": SCORE_POWER,
@@ -262,10 +274,8 @@ def diagram_regions(request: DiagramRequest):
     start = time.perf_counter()
     spread = SPREAD if request.distribution == "beta" else None
     model = Model(request.distribution, request.deviation, spread)
-    if request.method == "score":
-        method = build_score(request.levels, request.power)
-    elif request.method == "star":
-        method = build_star(request.levels, request.power)
+    if request.method in SCORES:
+        method = SCORES[request.method](request.levels, request.power)
     else:
         method = request.method
     shapes = regions(method, request.candidates, model, request.grid, request.pixel_median, request.shift)

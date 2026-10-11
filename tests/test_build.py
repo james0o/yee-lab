@@ -15,6 +15,13 @@ Python reference of its duel between the built finalists: king_runoff on the pro
 other finalists (with cycles and ties) on random shares, and two_round and STAR, whose
 finalists are Highest(totals, n=2), likewise. Highest is Eliminate(totals, how="all"),
 and every elimination down to two candidates must keep those of the reference.
+Schedules, the winners of every elimination schedule, is checked against a Python
+reference that runs every schedule from its definition, both by the compiled
+voting.irv_schedules and by one tally per round; Highest(totals, among=finalists) against
+the highest total among the finalists, and irv_set_koth_score, the highest mean score
+among the schedules' winners and king of the hill, against both with the reference of
+king of the hill. Highest among
+the two with the most first choices, counted again among them, is the two-round system.
 The score ballots tally the parts of the top score not given they are given, which
 test_score.py checks; here the highest mean score must win (with two levels: the most
 approved candidate), with its lead as the margin. A Mix of two ballots must tally the
@@ -44,6 +51,7 @@ from yeelab.build import (
     Mix,
     Pairwise,
     Plurality,
+    Schedules,
     Score,
     ScoreComparisons,
     ScoreAvg,
@@ -291,6 +299,69 @@ def _finalists(totals):
     ranked = np.take_along_axis(totals, order, axis=-1)
     gap = ranked[..., 1] - ranked[..., 2] if totals.shape[-1] > 2 else np.full(totals.shape[:-1], np.inf)
     return (order[..., 0], gap), (order[..., 1], gap)
+
+
+def _compositions(total):
+    """Every way to write total as an ordered sum of whole numbers of at least 1."""
+    if total == 0:
+        yield ()
+    for first in range(1, total + 1):
+        for rest in _compositions(total - first):
+            yield (first, *rest)
+
+
+def _schedules_reference(ballot, rankings, probs):
+    """Schedules(Tally(ballot)) point by point, from its definition: for every way to
+    split the C - 1 eliminations into rounds, each round drops that many of the lowest
+    totals of the remaining candidates (ties: the lowest index stays), tallied again
+    among them. The winners of all schedules (..., C) and the smallest gap of any round:
+    the lowest total kept minus the highest dropped."""
+    n = rankings.shape[1]
+    schedules = list(_compositions(n - 1))
+    assert len(schedules) == 2 ** (n - 2)
+    weights = {}  # by the remaining candidates
+    chosen = np.zeros(probs.shape[:-1] + (n,), dtype=bool)
+    margin = np.empty(probs.shape[:-1])
+    for point in np.ndindex(*probs.shape[:-1]):
+        shares, gaps, tallied = probs[point].astype(np.float64), [np.inf], {}
+        for schedule in schedules:
+            alive = np.ones(n, dtype=bool)
+            for drop in schedule:
+                key = alive.tobytes()
+                if key not in weights:
+                    weights[key] = _weights(ballot, rankings, alive)
+                if key not in tallied:  # the schedules share their first rounds
+                    tallied[key] = shares @ weights[key]
+                remaining = np.flatnonzero(alive)
+                totals = tallied[key][remaining]
+                highest = np.argsort(-totals, kind="stable")  # ties: the lowest index first
+                keep = len(remaining) - drop
+                gaps.append(totals[highest[keep - 1]] - totals[highest[keep]])
+                alive[remaining[highest[keep:]]] = False
+            chosen[point + (np.flatnonzero(alive)[0],)] = True
+        margin[point] = min(gaps)
+    return chosen, margin
+
+
+@pytest.fixture(scope="module")
+def plurality_schedules(profile):
+    """_schedules_reference on first choices, once per profile: (chosen, margin)."""
+    return _schedules_reference(Plurality(), *profile)
+
+
+def _highest_among_reference(totals, chosen, margin):
+    """The highest of the totals (..., C) among the candidates in chosen (ties: the
+    lowest index), CYCLE where there are none, and the smaller of margin and its lead
+    over the next of them (inf if it is alone)."""
+    winner = np.empty(margin.shape, dtype=np.int64)
+    expected = np.empty(margin.shape)
+    for point in np.ndindex(*margin.shape):
+        running = np.flatnonzero(chosen[point])
+        order = running[np.argsort(-totals[point][running], kind="stable")]
+        winner[point] = order[0] if len(order) else CYCLE
+        lead = totals[point][order[0]] - totals[point][order[1]] if len(order) > 1 else np.inf
+        expected[point] = min(margin[point], lead)
+    return winner, expected
 
 
 # finalists that agree, differ and tie, one that elects no one in a cycle (condorcet),
@@ -573,6 +644,113 @@ def test_star_matches_reference_on_random_scores():
     assert (winner == CYCLE).any() and (winner != unscored.argmin(axis=-1)).any()  # not vacuous
 
 
+@pytest.mark.parametrize("ballot", BALLOTS, ids=repr)
+def test_schedules_match_reference(profile, plurality_schedules, ballot):
+    """Every schedule's winner and the smallest gap of all their rounds: on first choices
+    by the compiled voting.irv_schedules, and by one tally per round of every schedule."""
+    rankings, probs = profile
+    voters = _voters(rankings, probs)
+    if isinstance(ballot, Plurality):
+        expected, expected_margin = plurality_schedules
+    else:
+        expected, expected_margin = _schedules_reference(ballot, rankings, probs)
+    clear = expected_margin > TOLERANCE
+    assert clear.mean() > 0.5  # not vacuous
+    method = Schedules(Tally(ballot))
+    for chosen, margin in (method.select(voters), method.rounds(voters)):
+        np.testing.assert_array_equal(chosen[clear], expected[clear])
+        np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-5)
+
+
+def test_schedules_are_fptp_irv_two_round_and_all_between(profile):
+    """The winners of FPTP (all at once), IRV (one at a time) and the two-round system (all
+    but two, then one) are always among them, with three candidates nothing else, and
+    a candidate with a majority of the first choices wins every schedule."""
+    voters = _voters(*profile)
+    chosen, margin = Schedules(Tally(Plurality())).select(voters)
+    clear = margin > TOLERANCE
+    for name in ("fptp", "irv", "two_round"):
+        winner = METHODS[name].evaluate(voters)[0]
+        assert np.take_along_axis(chosen, winner[..., None], axis=-1)[clear].all(), name
+    if voters.n_candidates == 3:
+        np.testing.assert_array_equal(chosen[clear], (METHODS["fptp"] | METHODS["irv"]).select(voters)[0][clear])
+    majority = voters.first.max(axis=-1) > 0.5
+    assert majority.any()
+    np.testing.assert_array_equal(chosen.sum(axis=-1)[majority & clear], 1)
+
+
+def test_highest_among_the_finalists(profile):
+    """The highest total among the candidates a Winner chooses, with the smaller margin;
+    a Tally counted again among them, other totals as they are. The most first choices
+    between the two with the most is the one more voters rank above the other: the
+    two-round system (where its duel ties, a draw, the lower index)."""
+    rankings, probs = profile
+    voters = _voters(rankings, probs)
+    weakest = Weakest(Margins(Pairwise()))
+    for among in (METHODS["fptp"] | METHODS["irv"], Highest(Tally(BordaCount()), n=3), METHODS["koth"]):
+        chosen, gap = among.select(voters)
+        for totals, counted in ((Tally(BordaCount()), BordaCount().tally(voters, chosen)),
+                                (weakest, weakest.evaluate(voters))):
+            winner, margin = Highest(totals, among=among).evaluate(voters)
+            expected, expected_margin = _highest_among_reference(counted, chosen, gap)
+            clear = expected_margin > TOLERANCE
+            np.testing.assert_array_equal(winner[clear], expected[clear])
+            np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-5)
+
+    runoff = Highest(Tally(Plurality()), among=Highest(Tally(Plurality()), n=2))
+    winner, margin = runoff.evaluate(voters)
+    expected, expected_margin = METHODS["two_round"].evaluate(voters)
+    clear = expected_margin > TOLERANCE
+    assert clear.mean() > 0.5  # not vacuous
+    np.testing.assert_array_equal(winner[clear], expected[clear])
+    np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-5)
+
+
+@pytest.mark.parametrize("d", TOURNAMENTS, ids=lambda d: f"{d.shape[-1]}-candidates")
+def test_highest_among_no_one_is_no_one(d):
+    """Among the Condorcet winner: it wins alone, with its own margin; in a cycle no one
+    runs and no one wins, with the margin of the cycle."""
+    if d.shape[-1] < 3:
+        return
+    unscored = np.random.default_rng(0).random(d.shape[:-1])
+    voters = Voters(pairwise=d, unscored={Scored(6): unscored})
+    winner, margin = Highest(Tally(Score(6)), among=METHODS["condorcet"]).evaluate(voters)
+    expected, expected_margin = METHODS["condorcet"].evaluate(voters)
+    assert (expected == CYCLE).any() and (expected != CYCLE).any()  # not vacuous
+    np.testing.assert_array_equal(winner, expected)
+    np.testing.assert_array_equal(margin, expected_margin)
+
+
+def test_irv_set_koth_score_matches_reference(profile, plurality_schedules):
+    """The highest mean score among the winners of every schedule and king of the hill,
+    with the smallest margin of them all; and without the king, among the winners of
+    every schedule alone."""
+    rankings, probs = profile
+    n = rankings.shape[1]
+    unscored = np.random.default_rng(n).random(probs.shape[:-1] + (n,))
+    voters = _voters(rankings, probs)
+    voters = Voters(voters.first, voters.pairwise, rankings, probs, unscored={Scored(6, power=1.5): unscored})
+    chosen, gap = plurality_schedules
+    king, king_margin = _koth_reference(voters.first.astype(np.float64), voters.pairwise.astype(np.float64))
+    with_king = chosen | (np.arange(n) == king[..., None])
+    irv_set_score = Highest(Tally(Score(6, power=1.5)), among=Schedules(Tally(Plurality())))
+    results = []
+    for method, finalists, finalists_margin in ((irv_set_score, chosen, gap),
+                                                (METHODS["irv_set_koth_score"], with_king,
+                                                 np.minimum(gap, king_margin))):
+        expected, expected_margin = _highest_among_reference(-unscored, finalists, finalists_margin)
+        winner, margin = method.evaluate(voters)
+        results.append((winner, margin))
+        clear = expected_margin > TOLERANCE
+        assert clear.mean() > 0.5, method  # not vacuous
+        np.testing.assert_array_equal(winner[clear], expected[clear], err_msg=repr(method))
+        np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-5, err_msg=repr(method))
+    # the king is the one finalist more: where the winner changes, the king wins
+    (without, _), (with_, margin) = results
+    changed = (without != with_) & (margin > TOLERANCE)
+    np.testing.assert_array_equal(with_[changed], king[changed])
+
+
 @pytest.mark.parametrize("d", TOURNAMENTS, ids=lambda d: f"{d.shape[-1]}-candidates")
 def test_unbeaten_among(d):
     """Among all candidates (margin inf) it is Unbeaten itself, bit for bit; among the
@@ -636,8 +814,10 @@ def test_a_method_chooses_one_candidate():
     assert [block.seats for block in (two, irv, two | irv, Fallback(two, two), Fallback(irv, two))] \
         == [2, 1, None, 2, None]
     assert all(method.seats == 1 for method in METHODS.values())
+    assert Schedules(Tally(Plurality())).seats is None
     for block, chooses in ((two, "2 candidates"), (two | irv, "a number of candidates"),
-                           (Eliminate(Tally(Plurality()), how="min", until=3), "3 candidates")):
+                           (Eliminate(Tally(Plurality()), how="min", until=3), "3 candidates"),
+                           (Schedules(Tally(Plurality())), "a number of candidates")):
         with pytest.raises(ValueError, match=re.escape(f"{block!r} chooses {chooses}, not a winner")):
             block.evaluate(Voters(first=np.full((2, 4), 0.25)))
 
@@ -940,7 +1120,7 @@ def test_condorcet_ties():
         np.testing.assert_array_equal(margin, 0.0, err_msg=name)
 
 
-def test_methods_are_the_fourteen_expressions():
+def test_methods_are_the_fifteen_expressions():
     pairwise = Pairwise()
     margins = Margins(pairwise)
     koth = Unbeaten(margins, against=Highest(Tally(Plurality())), order=Tally(Plurality()))
@@ -960,9 +1140,11 @@ def test_methods_are_the_fourteen_expressions():
         "king_runoff": Unbeaten(margins, among=Union(koth, Eliminate(Tally(Plurality()), how="min"))),
         "score": score,
         "star": Unbeaten(ScoreComparisons(Score(6, power=1.5)), among=Highest(Tally(Score(6, power=1.5)), n=2)),
+        "irv_set_koth_score": Highest(Tally(Score(6, power=1.5)), among=Union(Schedules(Tally(Plurality())), koth)),
     }
     assert list(METHODS) == ["fptp", "two_round", "irv", "borda", "baldwin", "nanson", "schulze",
-                             "condorcet", "minimax", "black", "koth", "king_runoff", "score", "star"]
+                             "condorcet", "minimax", "black", "koth", "king_runoff", "score", "star",
+                             "irv_set_koth_score"]
 
 
 def test_repr_is_the_expression():
@@ -983,14 +1165,20 @@ def test_repr_is_the_expression():
     assert repr(METHODS["score"]) == "Highest(Tally(Score(6, power=1.5)))"
     assert repr(METHODS["star"]) == (
         "Unbeaten(ScoreComparisons(Score(6, power=1.5)), among=Highest(Tally(Score(6, power=1.5)), n=2))")
+    assert repr(METHODS["irv_set_koth_score"]) == (
+        f"Highest(Tally(Score(6, power=1.5)), among=Schedules(Tally(Plurality())) | {koth})")
     assert repr(Eliminate(Tally(BordaCount()), how="mean", until=2)) == 'Eliminate(Tally(BordaCount()), how="mean", until=2)'
+    assert repr(Eliminate(Weakest(Margins(Pairwise())), how="all", among=METHODS["fptp"])) == (
+        'Eliminate(Weakest(Margins(Pairwise())), how="all", among=Highest(Tally(Plurality())))')
     fptp, irv, borda = METHODS["fptp"], METHODS["irv"], METHODS["borda"]
     assert repr(fptp | (irv | borda)) == f"{fptp!r} | ({irv!r} | {borda!r})"
     challenged =Unbeaten(StrongestPaths(Margins(Pairwise())), against=METHODS["black"],
                           order=Weakest(Margins(Pairwise())))
     unions = [fptp | irv | borda, fptp | (irv | borda), Fallback(Highest(Tally(BY_MEAN), n=3), fptp | irv)]
+    among = [Schedules(Tally(BordaCount())), Highest(Weakest(Margins(Pairwise())), among=fptp | irv),
+             Eliminate(Tally(Plurality()), how="all", among=Schedules(Tally(Plurality())))]
     for method in [*METHODS.values(), *ELIMINATIONS, *FINALISTS, *BALLOTS, *PAIR_BLOCKS, challenged, *RUNOFFS,
-                   *unions]:
+                   *unions, *among]:
         assert eval(repr(method)) == method
 
 
@@ -1033,6 +1221,14 @@ def test_needs():
     assert Highest(Tally(ScoreCluster(6))).needs == {Scored(6, "cluster")}
     assert Eliminate(Tally(BY_GAP), how="min").needs == {Scored(2, "dhondt")}
     assert Fallback(METHODS["condorcet"], Highest(Tally(BY_MEAN))).needs == {PAIRWISE, Scored(2, "avg")}
+    assert Highest(Tally(Score(6, power=1.5)), among=Schedules(Tally(Plurality()))).needs == {
+        PROFILE, Scored(6, power=1.5)}
+    assert METHODS["irv_set_koth_score"].needs == {PROFILE, FIRST, PAIRWISE, Scored(6, power=1.5)}
+    assert Schedules(Tally(Plurality())).needs == {PROFILE}
+    assert Schedules(Tally(BordaCount())).needs == {PAIRWISE}
+    # among the finalists: a Tally counted again among them, other totals as they are
+    assert Highest(Tally(Plurality()), among=Highest(Tally(Plurality()), n=2)).needs == {FIRST, PROFILE}
+    assert Highest(Weakest(Margins(Pairwise())), among=METHODS["fptp"]).needs == {PAIRWISE, FIRST}
 
 
 def test_fallback_needs_the_shares_of_both():
@@ -1096,10 +1292,26 @@ def test_unbeaten_against_needs_the_shares_of_all_three():
      "Unbeaten expects a Winner as among, got CandidateTotals: Tally(Plurality())"),
     (lambda: Highest(BordaCount(), n=2), "Highest expects CandidateTotals, got a Ballot: BordaCount()"),
     (lambda: Eliminate(BordaCount(), how="all"), "Eliminate expects CandidateTotals, got a Ballot"),
+    (lambda: Highest(Tally(Plurality()), among=Tally(Plurality())),
+     "Highest expects a Winner as among, got CandidateTotals: Tally(Plurality())"),
+    (lambda: Schedules(BordaCount()),
+     "Schedules expects a Tally (it tallies the remaining candidates again), got a Ballot: BordaCount()"),
+    (lambda: Schedules(Weakest(Margins(Pairwise()))),
+     "Schedules expects a Tally (it tallies the remaining candidates again), got CandidateTotals"),
 ])
 def test_wrong_blocks_fail_when_built(build, message):
     with pytest.raises(TypeError, match=re.escape(message)):
         build()
+
+
+def test_among_is_only_for_one_winner_of_the_highest_totals():
+    irv = METHODS["irv"]
+    for build, name in ((lambda: Highest(Tally(Plurality()), n=2, among=irv), "Highest"),
+                        (lambda: Eliminate(Tally(Plurality()), how="min", among=irv), "Eliminate"),
+                        (lambda: Eliminate(Tally(BordaCount()), how="mean", among=irv), "Eliminate")):
+        with pytest.raises(ValueError, match=re.escape(f"{name} takes among only for one winner of the highest "
+                                                       "totals: Highest(totals, among=...)")):
+            build()
 
 
 def test_unknown_how_fails():

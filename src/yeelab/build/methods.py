@@ -9,6 +9,7 @@ from yeelab.build.blocks import (
     Margins,
     Pairwise,
     Plurality,
+    Schedules,
     Score,
     ScoreComparisons,
     StrongestPaths,
@@ -45,6 +46,10 @@ score = Highest(Tally(score_ballot))
 # STAR: the two highest mean scores, head to head on the scores of each ballot (equal
 # scores abstain); a tie is a draw
 star = Unbeaten(ScoreComparisons(score_ballot), among=Highest(Tally(score_ballot), n=2))
+# the highest mean score among the winners of every elimination schedule (the fewest
+# first choices out, any number at a time: IRV, FPTP, the top two and all between) and
+# the king of the hill
+irv_set_koth_score = Highest(Tally(score_ballot), among=Schedules(Tally(Plurality())) | koth)
 
 METHODS: dict[str, Winner] = {
     "fptp": fptp,
@@ -61,4 +66,5 @@ METHODS: dict[str, Winner] = {
     "king_runoff": king_runoff,
     "score": score,
     "star": star,
+    "irv_set_koth_score": irv_set_koth_score,
 }
