@@ -30,13 +30,19 @@ The score ballots tally the parts of the top score not given they are given, whi
 test_score.py checks; here the highest mean score must win (with two levels: the most
 approved candidate), with its lead as the margin. A Mix of two ballots must tally the
 mix of their voters, and be the one ballot itself where all voters mark it.
+Bullet(method, share) is checked against the references above run on the weak orders
+themselves: the rankings, and for every candidate a ballot ranking it first and all
+others equal below it, where equal candidates share the mean points of their positions
+and acquiesce to every set that holds the first choice. No bullet voters must be the
+method itself, bit for bit, and where all voters bullet vote every method must elect the
+candidate with the most first choices.
 
 Wrong blocks must fail when built, and every method must print as the expression
 that builds it.
 """
 
 import re
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from itertools import permutations, product
 
 import numpy as np
@@ -48,6 +54,7 @@ from yeelab.build import (
     PAIRWISE,
     PROFILE,
     BordaCount,
+    Bullet,
     DescendingCoalitions,
     Eliminate,
     Fallback,
@@ -124,9 +131,51 @@ def _weights(ballot, rankings, alive):
     return weights
 
 
-def _reference(ballot, how, rankings, probs, until=1):
+def _levels(rankings):
+    """The rankings (R, C), best first, as weak orders: L[r, c] = position of c."""
+    return np.argsort(rankings, axis=1)
+
+
+def _tied_weights(ballot, levels, alive):
+    """W[b, c] = points the weak order b gives c, with L[b, c] the level of c, lower
+    better and equal for equal candidates: among the candidates in alive (C,), equal
+    candidates share the mean of weight(k, number of them) over the positions k they
+    take; 0 for the others. On a ranking (_levels) it is _weights."""
+    n = int(alive.sum())
+    live = levels[:, alive]
+    above = (live[:, None, :] < live[:, :, None]).sum(axis=-1)  # [b, c]: ranked above c
+    equal = (live[:, None, :] == live[:, :, None]).sum(axis=-1)  # [b, c]: with c itself
+    points = np.concatenate([[0.0], np.cumsum([ballot.weight(k, n) for k in range(n)])])
+    weights = np.zeros(levels.shape)
+    weights[:, alive] = (points[above + equal] - points[above]) / equal
+    return weights
+
+
+def _bullet_ballots(rankings, probs, share):
+    """The weak orders (R + C, C) of the voters of whom `share` bullet vote, and their
+    shares (..., R + C): the rankings with the rest of the voters, then for every
+    candidate c a ballot with c first and all others equal below it, with `share` of the
+    voters whose first choice c is."""
+    n = rankings.shape[1]
+    probs = probs.astype(np.float64)
+    first = probs @ np.eye(n)[rankings[:, 0]]
+    levels = np.concatenate([_levels(rankings), 1 - np.eye(n, dtype=np.int64)])
+    return levels, np.concatenate([(1 - share) * probs, share * first], axis=-1)
+
+
+def _tied_pairwise(levels, shares):
+    """d[..., c, e] = share of the weak orders ranking c above e, and half of those
+    ranking them equal; d[..., c, c] = 0."""
+    above = levels[:, :, None] < levels[:, None, :]
+    equal = (levels[:, :, None] == levels[:, None, :]) & ~np.eye(levels.shape[1], dtype=bool)
+    d = shares @ (above + equal / 2).reshape(len(levels), -1)
+    return d.reshape(*shares.shape[:-1], levels.shape[1], levels.shape[1])
+
+
+def _reference(ballot, how, rankings, probs, until=1, weigh=_weights):
     """Eliminate(Tally(ballot), how, until) point by point, straight from its
-    definition: the candidates left (..., C) and the margin."""
+    definition: the candidates left (..., C) and the margin. With weigh=_tied_weights,
+    rankings are the levels of weak orders."""
     n = rankings.shape[1]
     weights = {}  # by the remaining candidates
     left = np.empty(probs.shape[:-1] + (n,), dtype=bool)
@@ -136,7 +185,7 @@ def _reference(ballot, how, rankings, probs, until=1):
         while alive.sum() > until:
             key = alive.tobytes()
             if key not in weights:
-                weights[key] = _weights(ballot, rankings, alive)
+                weights[key] = weigh(ballot, rankings, alive)
             remaining = np.flatnonzero(alive)
             totals = (probs[point].astype(np.float64) @ weights[key])[remaining]
             highest = np.argsort(-totals, kind="stable")  # ties: the lowest index first
@@ -315,12 +364,13 @@ def _compositions(total):
             yield (first, *rest)
 
 
-def _schedules_reference(ballot, rankings, probs):
+def _schedules_reference(ballot, rankings, probs, weigh=_weights):
     """Schedules(Tally(ballot)) point by point, from its definition: for every way to
     split the C - 1 eliminations into rounds, each round drops that many of the lowest
     totals of the remaining candidates (ties: the lowest index stays), tallied again
     among them. The winners of all schedules (..., C) and the smallest gap of any round:
-    the lowest total kept minus the highest dropped."""
+    the lowest total kept minus the highest dropped. With weigh=_tied_weights, rankings
+    are the levels of weak orders."""
     n = rankings.shape[1]
     schedules = list(_compositions(n - 1))
     assert len(schedules) == 2 ** (n - 2)
@@ -334,7 +384,7 @@ def _schedules_reference(ballot, rankings, probs):
             for drop in schedule:
                 key = alive.tobytes()
                 if key not in weights:
-                    weights[key] = _weights(ballot, rankings, alive)
+                    weights[key] = weigh(ballot, rankings, alive)
                 if key not in tallied:  # the schedules share their first rounds
                     tallied[key] = shares @ weights[key]
                 remaining = np.flatnonzero(alive)
@@ -756,27 +806,28 @@ def test_irv_set_koth_score_matches_reference(profile, plurality_schedules):
     np.testing.assert_array_equal(with_[changed], king[changed])
 
 
-def _acquiescing(rankings):
-    """A[r, s]: ranking r (R, C) ranks no candidate outside the set s (a bit mask, 2^C of
-    them) above a candidate in it, (R, 2^C)."""
-    n = rankings.shape[1]
-    position = np.argsort(rankings, axis=1)  # [r, c]
+def _acquiescing(levels):
+    """A[b, s]: the weak order b (levels L[b, c], lower better, _levels for rankings)
+    ranks no candidate outside the set s (a bit mask, 2^C of them) above a candidate in
+    it, (B, 2^C)."""
+    n = levels.shape[1]
     inside = ((np.arange(1 << n)[:, None] >> np.arange(n)) & 1).astype(bool)  # [s, c]
-    worst_inside = np.where(inside, position[:, None, :], -1).max(axis=-1)
-    best_outside = np.where(inside, n, position[:, None, :]).min(axis=-1)
-    return worst_inside < best_outside
+    worst_inside = np.where(inside, levels[:, None, :], -1).max(axis=-1)
+    best_outside = np.where(inside, n, levels[:, None, :]).min(axis=-1)
+    return worst_inside <= best_outside
 
 
-def _dac_reference(rankings, probs):
+def _dac_reference(levels, probs):
     """DescendingCoalitions point by point, from its definition: every set scores the
     share of the voters who acquiesce to it, and from the highest score down (ties: the
     lowest mask first) each set makes the candidates outside it ineligible, unless that
     would leave no one. The margin is the smallest gap of a set that changes the
     eligible candidates E: its score minus the highest score of a set that would change
-    them too, but keep none of the candidates it keeps."""
-    n = rankings.shape[1]
+    them too, but keep none of the candidates it keeps. levels are the weak orders of
+    the voters (_levels for rankings)."""
+    n = levels.shape[1]
     masks = np.arange(1 << n)
-    scores = probs.astype(np.float64) @ _acquiescing(rankings)
+    scores = probs.astype(np.float64) @ _acquiescing(levels)
     winner = np.empty(probs.shape[:-1], dtype=np.int64)
     margin = np.empty(probs.shape[:-1])
     for point in np.ndindex(*probs.shape[:-1]):
@@ -795,7 +846,7 @@ def _dac_reference(rankings, probs):
 
 def test_dac_matches_reference(profile):
     rankings, probs = profile
-    expected, expected_margin = _dac_reference(rankings, probs)
+    expected, expected_margin = _dac_reference(_levels(rankings), probs)
     winner, margin = METHODS["dac"].evaluate(_voters(rankings, probs))
     clear = expected_margin > TOLERANCE
     assert clear.mean() > 0.9  # not vacuous
@@ -810,7 +861,7 @@ def test_dac_elects_the_candidate_of_every_majority(profile):
     voters = _voters(rankings, probs)
     winner, margin = METHODS["dac"].evaluate(voters)
     masks = np.arange(1 << rankings.shape[1])
-    majority = probs @ _acquiescing(rankings) > 0.5 + TOLERANCE
+    majority = probs @ _acquiescing(_levels(rankings)) > 0.5 + TOLERANCE
     majority[..., 0] = False  # the empty set: every voter acquiesces to it
     holds = ((masks >> winner[..., None]) & 1).astype(bool)
     assert not (majority & ~holds).any()
@@ -1129,6 +1180,178 @@ def test_a_mix_share_is_a_share(share):
         Mix(BY_GAP, BY_MEAN, share=share)
 
 
+BULLET = 0.3  # the share of the voters who bullet vote, where any share will do
+# the score ballot of the methods, and the eliminations and the one-round methods of
+# ranked ballots with bullet voters
+SCORE_BALLOT = Score(6, power=1.5)
+BULLET_ELIMINATIONS = [*ELIMINATIONS, METHODS["borda"], METHODS["fptp"]]
+
+
+def _every_share(rankings, probs, seed=0):
+    """Every share a method may need: those of a complete profile (_voters), and random
+    score shares of SCORE_BALLOT."""
+    voters = _voters(rankings, probs)
+    rng = np.random.default_rng(seed)
+    n = rankings.shape[1]
+    above = rng.random((*voters.shape, n, n))
+    return replace(voters, unscored={SCORE_BALLOT.scored: rng.random((*voters.shape, n))},
+                   scored_pairwise={ScoredPairwise(SCORE_BALLOT.scored): above - np.swapaxes(above, -1, -2)})
+
+
+@pytest.mark.parametrize("name", METHODS)
+def test_no_bullet_voters_is_the_method_itself(profile, name):
+    """Bit for bit, from the same shares."""
+    voters, method = _every_share(*profile), METHODS[name]
+    assert Bullet(method, 0).needs == method.needs
+    for result, expected in zip(Bullet(method, 0).evaluate(voters), method.evaluate(voters)):
+        np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("name", METHODS)
+def test_where_all_voters_bullet_vote_the_most_first_choices_win(profile, name):
+    """Every bullet ballot ranks its first choice above all others and the others equal,
+    so the candidate with the most first choices beats every other head to head, has
+    the most points and the highest mean score, and outlasts every elimination."""
+    voters = _every_share(*profile)
+    fptp, lead = METHODS["fptp"].evaluate(voters)
+    winner, margin = Bullet(METHODS[name], 1).evaluate(voters)
+    clear = lead > TOLERANCE
+    assert clear.mean() > 0.9  # not vacuous
+    np.testing.assert_array_equal(winner[clear], fptp[clear])
+
+
+def test_the_shares_of_bullet_voters(profile):
+    """The first choices stay; a pair of equal candidates counts half for each, so that
+    d[c, e] + d[e, c] = 1; the profile keeps the rest of the voters and the bullet
+    ballots the others of each first choice; a bullet voter gives the top score to their
+    first choice and 0 to the others, and of a pair scores only their first choice
+    higher."""
+    rankings, probs = profile
+    voters = _every_share(rankings, probs)
+    bulleted = voters.bulleted(BULLET)
+    levels, shares = _bullet_ballots(rankings, probs, BULLET)
+    n = rankings.shape[1]
+    np.testing.assert_array_equal(bulleted.first, voters.first)
+    np.testing.assert_allclose(bulleted.pairwise, _tied_pairwise(levels, shares), rtol=0, atol=1e-6)
+    pairs = bulleted.pairwise + np.swapaxes(bulleted.pairwise, -1, -2)
+    np.testing.assert_allclose(pairs, np.broadcast_to(1 - np.eye(n), pairs.shape), rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(bulleted.rankings, rankings)
+    np.testing.assert_allclose(bulleted.probs, (1 - BULLET) * probs, rtol=1e-6, atol=0)
+    np.testing.assert_allclose(bulleted.bullet, BULLET * voters.first, rtol=0, atol=1e-6)
+    f = voters.first
+    unscored = (1 - BULLET) * voters.unscored[SCORE_BALLOT.scored] + BULLET * (f.sum(axis=-1, keepdims=True) - f)
+    np.testing.assert_allclose(bulleted.unscored[SCORE_BALLOT.scored], unscored, rtol=0, atol=1e-12)
+    key = ScoredPairwise(SCORE_BALLOT.scored)
+    lead = f[..., :, None] - f[..., None, :]
+    np.testing.assert_allclose(bulleted.scored_pairwise[key], (1 - BULLET) * voters.scored_pairwise[key]
+                               + BULLET * lead, rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize("ballot", BALLOTS, ids=repr)
+def test_bullet_ballots_are_tallied_with_equal_candidates_sharing(profile, ballot):
+    """Among any remaining candidates: equal candidates share the mean points of the
+    positions they take, so a bullet ballot whose first choice is out counts equally for
+    all the remaining ones, and every ballot still hands out all its points."""
+    rankings, probs = profile
+    voters, n = _voters(rankings, probs).bulleted(BULLET), rankings.shape[1]
+    levels, shares = _bullet_ballots(rankings, probs, BULLET)
+    rng = np.random.default_rng(n)
+    alive = rng.random(probs.shape[:-1] + (n,)) < 0.5
+    alive |= np.arange(n) == rng.integers(n, size=probs.shape[:-1] + (1,))
+    codes = alive @ (1 << np.arange(n))
+    expected = np.empty(alive.shape)
+    for code in np.unique(codes):
+        at = codes == code
+        expected[at] = shares[at] @ _tied_weights(ballot, levels, ((code >> np.arange(n)) & 1).astype(bool))
+    totals = ballot.tally(voters, alive)
+    np.testing.assert_allclose(totals, expected, rtol=0, atol=1e-5)
+    if isinstance(ballot, Plurality):
+        np.testing.assert_allclose(totals.sum(axis=-1), 1, rtol=0, atol=1e-5)
+
+
+@pytest.mark.parametrize("method", BULLET_ELIMINATIONS, ids=repr)
+def test_bullet_eliminations_match_reference(profile, method):
+    """On the weak orders themselves; for irv by the compiled voting.irv_rounds, which
+    leave out the equal share of a bullet ballot whose first choice is out, the same
+    for all remaining candidates, and by one tally per round, which counts it."""
+    rankings, probs = profile
+    voters = _voters(rankings, probs)
+    levels, shares = _bullet_ballots(rankings, probs, BULLET)
+    left, expected_margin = _reference(method.totals.ballot, method.how, levels, shares, weigh=_tied_weights)
+    expected_winner = left.argmax(axis=-1)
+    clear = expected_margin > TOLERANCE
+    assert clear.mean() > 0.5  # not vacuous
+    results = [Bullet(method, BULLET).evaluate(voters)]
+    if method.how != "all":
+        results.append(method.rounds(voters.bulleted(BULLET)))
+    for winner, margin in results:
+        np.testing.assert_array_equal(winner[clear], expected_winner[clear])
+        np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-5)
+
+
+def test_bullet_schedules_match_reference(profile):
+    """Every schedule's winner on the weak orders, by the compiled voting.irv_schedules and
+    by one tally per round of every schedule."""
+    rankings, probs = profile
+    if rankings.shape[1] > 5:
+        pytest.skip("the reference runs every schedule at every point")
+    voters = _voters(rankings, probs)
+    levels, shares = _bullet_ballots(rankings, probs, BULLET)
+    expected, expected_margin = _schedules_reference(Plurality(), levels, shares, weigh=_tied_weights)
+    clear = expected_margin > TOLERANCE
+    assert clear.mean() > 0.5  # not vacuous
+    method = Schedules(Tally(Plurality()))
+    for chosen, margin in (Bullet(method, BULLET).select(voters), method.rounds(voters.bulleted(BULLET))):
+        np.testing.assert_array_equal(chosen[clear], expected[clear])
+        np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-5)
+
+
+def test_bullet_dac_matches_reference(profile):
+    """A bullet ballot acquiesces to every set that holds its first choice."""
+    rankings, probs = profile
+    levels, shares = _bullet_ballots(rankings, probs, BULLET)
+    expected, expected_margin = _dac_reference(levels, shares)
+    winner, margin = Bullet(METHODS["dac"], BULLET).evaluate(_voters(rankings, probs))
+    clear = expected_margin > TOLERANCE
+    assert clear.mean() > 0.9  # not vacuous
+    np.testing.assert_array_equal(winner[clear], expected[clear])
+    np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-6)
+
+
+def test_bullet_voters_of_bullet_voters(profile):
+    """b of the voters bullet vote, and a of the rest: 1 - (1 - a)(1 - b) of them do."""
+    voters = _every_share(*profile)
+    for name in ("irv", "dac", "borda", "schulze", "star", "irv_set_koth_score"):
+        winner, margin = Bullet(METHODS[name], 0.6).evaluate(voters)
+        nested, nested_margin = Bullet(Bullet(METHODS[name], 0.2), 0.5).evaluate(voters)
+        clear = margin > TOLERANCE
+        np.testing.assert_array_equal(nested[clear], winner[clear])
+        np.testing.assert_allclose(nested_margin, margin, rtol=0, atol=1e-6)
+
+
+def test_a_lead_among_candidates_nearly_all_give_the_top_score_is_kept_with_few_bullet_voters():
+    """3e-30 and 1e-30 of the sincere voters do not give two candidates the top score,
+    and 1e-31 of the voters bullet vote, for each in proportion to its first choices."""
+    unscored = np.array([[3e-30, 1e-30, 0.4]])
+    voters = Voters(first=np.array([[0.6, 0.4, 0.0]]), unscored={SCORE_BALLOT.scored: unscored})
+    winner, margin = Bullet(METHODS["score"], 1e-31).evaluate(voters)
+    np.testing.assert_array_equal(winner, [1])
+    np.testing.assert_allclose(margin, [(3e-30 + 0.4e-31) - (1e-30 + 0.6e-31)], rtol=1e-12, atol=0)
+
+
+@pytest.mark.parametrize("share", [-0.1, 1.5, float("nan")])
+def test_a_bullet_share_is_a_share(share):
+    with pytest.raises(ValueError, match=re.escape(f"Bullet share must be between 0 and 1, got {share!r}")):
+        Bullet(METHODS["irv"], share=share)
+
+
+def test_bullet_voting_on_pairwise_shares_needs_the_first_choices():
+    d = np.full((1, 3, 3), 0.5) * (1 - np.eye(3))
+    with pytest.raises(ValueError, match="needs the first-choice shares"):
+        Voters(pairwise=d).bulleted(0.5)
+    np.testing.assert_array_equal(Voters(pairwise=d).bulleted(0).pairwise, d)
+
+
 def test_score_takes_the_number_of_levels():
     assert Score(3) == Score(levels=3) != Score(4)
     assert ScoreAvg(3) == ScoreAvg(levels=3) != ScoreAvg(4)
@@ -1279,8 +1502,10 @@ def test_repr_is_the_expression():
     unions = [fptp | irv | borda, fptp | (irv | borda), Fallback(Highest(Tally(BY_MEAN), n=3), fptp | irv)]
     among = [Schedules(Tally(BordaCount())), Highest(Weakest(Margins(Pairwise())), among=fptp | irv),
              Eliminate(Tally(Plurality()), how="all", among=Schedules(Tally(Plurality())))]
+    bullets = [Bullet(METHODS["irv"], 0.3), Bullet(fptp | irv, share=1), Bullet(Bullet(METHODS["star"], 0.5), 0.25)]
+    assert repr(bullets[0]) == 'Bullet(Eliminate(Tally(Plurality()), how="min"), share=0.3)'
     for method in [*METHODS.values(), *ELIMINATIONS, *FINALISTS, *BALLOTS, *PAIR_BLOCKS, challenged, *RUNOFFS,
-                   *unions, *among]:
+                   *unions, *among, *bullets]:
         assert eval(repr(method)) == method
 
 
@@ -1332,6 +1557,20 @@ def test_needs():
     # among the finalists: a Tally counted again among them, other totals as they are
     assert Highest(Tally(Plurality()), among=Highest(Tally(Plurality()), n=2)).needs == {FIRST, PROFILE}
     assert Highest(Weakest(Margins(Pairwise())), among=METHODS["fptp"]).needs == {PAIRWISE, FIRST}
+
+
+def test_bullet_needs_the_first_choices_for_pairwise_and_score_shares():
+    """The bullet voters' pairwise and score shares come from the first choices; the
+    profile has its own."""
+    for name, needs in (("fptp", {FIRST}), ("irv", {PROFILE}), ("dac", {PROFILE}), ("borda", {PAIRWISE, FIRST}),
+                        ("schulze", {PAIRWISE, FIRST}), ("koth", {PAIRWISE, FIRST}),
+                        ("score", {Scored(6, power=1.5), FIRST}),
+                        ("star", {Scored(6, power=1.5), ScoredPairwise(Scored(6, power=1.5)), FIRST}),
+                        ("irv_set_koth_score", {PROFILE, FIRST, PAIRWISE, Scored(6, power=1.5)})):
+        assert Bullet(METHODS[name], 0.5).needs == needs, name
+        assert Bullet(METHODS[name], 0).needs == METHODS[name].needs, name
+    assert Bullet(METHODS["fptp"] | METHODS["irv"], 0.5).seats is None
+    assert Bullet(Highest(Tally(Plurality()), n=2), 0.5).seats == 2
 
 
 def test_fallback_needs_the_shares_of_both():
@@ -1401,6 +1640,8 @@ def test_unbeaten_against_needs_the_shares_of_all_three():
      "Schedules expects a Tally (it tallies the remaining candidates again), got a Ballot: BordaCount()"),
     (lambda: Schedules(Weakest(Margins(Pairwise()))),
      "Schedules expects a Tally (it tallies the remaining candidates again), got CandidateTotals"),
+    (lambda: Bullet(Tally(Plurality()), share=0.5), "Bullet expects a Winner, got CandidateTotals: Tally(Plurality())"),
+    (lambda: Bullet(Plurality(), share=0.5), "Bullet expects a Winner, got a Ballot: Plurality()"),
 ])
 def test_wrong_blocks_fail_when_built(build, message):
     with pytest.raises(TypeError, match=re.escape(message)):

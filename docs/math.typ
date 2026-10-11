@@ -29,7 +29,8 @@ This document explains what YeeLab computes and why. @ch-model defines the model
 Yee diagram, the two voter distributions (normal and Beta) and the spread rules that
 fix the Beta distributions. @ch-compute shows how the share of every ranking of the
 candidates is computed exactly for every pixel, and @ch-methods how the voting methods
-turn these shares into winners. @ch-compare explains why Beta and normal voters give
+turn these shares into winners. @ch-strategy lets a share of the voters vote
+strategically, by bullet voting. @ch-compare explains why Beta and normal voters give
 different diagrams. @ch-spread compares the spread rules and explains why `rms` is the
 default. @ch-shapes asks when a candidate's region is convex or in one piece, and how
 that relates to the monotonicity of the method. @ch-realtime shows how the web UI draws
@@ -55,6 +56,7 @@ package `src/yeelab/`):
   [Gauss–Legendre points per edge], [$Q$], [`QUAD_NODES`], [24],
   [score levels (UI)], [$L$], [_Score categories_, `SCORE_LEVELS` (`web/app.py`)], [6],
   [power of the score ballot (UI)], [$p$], [_Score power p_, `SCORE_POWER` (`build/methods.py`)], [1.5],
+  [strategy and share of its voters (UI)], [$b$], [_Strategy_, _Strategic voters_, `STRATEGIC` (`web/app.py`)], [sincere; 50%],
   [voter grid of the score shares], [$K$], [`GRID_CELLS`, `GRID_SUB` (`margin/shares.py`)], [256, 8],
   [contour grid per axis (UI)], [$G$], [`DRAG_GRID` / `FINAL_GRID` (`web/app.py`)], [160 / 320],
   table.hline(),
@@ -1440,6 +1442,129 @@ neither candidate beats the other (the dotted black lines in @fig-compare).
 
 #pagebreak()
 
+= Strategic voting <ch-strategy>
+
+Everywhere else every voter votes sincerely: they rank the candidates by distance and
+score them by distance. A strategy changes the ballots of some of the voters, not the
+method. `Bullet(method, share)` evaluates any method of @ch-methods on voters of whom a
+share $b$ vote strategically at every pixel, the same share among the voters of every
+first choice, while the others vote sincerely. Every share a method reads is a sum over
+the voters, so the shares of these voters are $(1 - b)$ times those of the sincere
+voters plus $b$ times those of the strategic ones. They are as smooth in the median as
+before, and the margins and borders are traced the same way (@sec-zero-sets). In the web
+UI, _Strategy_ picks the strategy and the slider _Strategic voters_ sets $b$.
+
+== Bullet voting (`Bullet`) <sec-bullet>
+
+*The ballot.* A bullet voter whose first choice is $c_k$ ranks $c_k$ first and all other
+candidates equal below it. On a score ballot they give $c_k$ the top score and every
+other candidate 0. The ballot is complete: every candidate has a place on it, the
+others all share the second one. A method reads equal candidates as follows:
+
+- where it gives points by position, equal candidates share the mean of the points of
+  the positions they take;
+- head to head, a voter who ranks two candidates equal abstains;
+- in an elimination, once the first choice is out, the ballot counts equally for all
+  remaining candidates, which it ranks equal.
+
+*Shares.* With $s_i$ the first-choice shares (@eq-first-choice), which bullet voting
+does not change, the bullet voters with first choice $c_i$ rank $c_i$ above $c_j$, those
+with $c_j$ the other way round, and the rest abstain, half for each:
+
+$ pi'_(i j) = (1 - b) pi_(i j) + b (1 + s_i - s_j) / 2, quad pi'_(i j) + pi'_(j i) = 1, quad
+  pi'_(i j) - pi'_(j i) = (1 - b) (pi_(i j) - pi_(j i)) + b (s_i - s_j) . $ <eq-bullet-pairwise>
+
+The Borda score is still $sum_(j != i) pi'_(i j)$ (@sec-needs): a bullet ballot gives its
+first choice $C - 1$ points and every other candidate the mean $(C - 2) slash 2$ of the
+points $C - 2, dots, 0$ of the positions they share. Baldwin and Nanson take the same sum
+over the remaining candidates. On a score ballot the part of the top score that a bullet
+voter does not give $c_i$ is 1 unless $c_i$ is their first choice, so the part not given
+of Score (@sec-score) becomes $(1 - b) u_i + b sum_(j != i) s_j$, and the strict score
+comparisons of STAR $(1 - b) x_(i j) + b (s_i - s_j)$. These need the first-choice shares
+next to the pairwise or score shares; `Bullet` adds them to what the method needs
+(@sec-needs).
+
+The methods on the whole profile keep the rankings with $(1 - b) P(r)$, and the bullet
+ballots with $b s_k$ for every first choice $c_k$, taken from the profile itself.
+
+- *IRV* (and every schedule of @sec-irv-set). A bullet ballot counts for its first
+  choice while that remains. Once it is out, the ballot counts $1 slash abs(cal(R))$ for each of
+  the remaining candidates $cal(R)$. That adds the same to every remaining tally, so it
+  changes no elimination and no gap, and the compiled rounds leave it out: the ballot
+  acts as if it were exhausted.
+- *DAC*. A bullet ballot for $c_k$ ranks no candidate outside a set above one in it
+  exactly when the set holds $c_k$, so it acquiesces to every such set, and
+  (@eq-coalition)
+
+  $ a'_T = (1 - b) a_T + b sum_(k in T) s_k . $
+
+  The compiled loop adds these sums for all $2^C$ sets per pixel, each set's from that of
+  the set without its lowest candidate.
+
+*Equal places and truncation.* Leaving the others off the ballot would give the same
+winners everywhere but in Borda count and the methods built on it: Baldwin, Nanson and
+Black where there is no Condorcet winner. Head to head, unranked candidates abstain as
+equal ones do; in IRV the equal split changes nothing, as shown above; on a score
+ballot an unranked candidate gets 0 as well; and DAC counts a truncated ballot by the same
+rule of acquiescing. In Borda count a truncated ballot usually gives the others 0
+points, here they share $(C - 2) slash 2$ each, so a bullet voter's first choice gains
+less on them.
+
+*All voters.* At $b = 1$ every method elects the candidate with the most first choices,
+the FPTP winner:
+
+- by @eq-bullet-pairwise it beats every other candidate head to head, so the Condorcet
+  methods, the runoffs of the two-round system and STAR, and king of the hill elect it;
+- its Borda score $(C - 1) slash 2 + (C s_i - 1) slash 2$ and its mean score are the
+  highest;
+- IRV and every schedule drop the fewest first choices, never the most;
+- in DAC the set of all eligible candidates but the one with the fewest first choices has
+  the highest score among those that cut them, round after round.
+
+The tests check this for all fifteen methods.
+
+#figure(
+  image("figures/bullet.png", width: 100%),
+  caption: [Borda count, Schulze and Score (six levels, $p = 1.5$) with no, half and all
+    voters bullet voting (candidates A–E, Beta voters, `rms`, $D = 0.2$). At $b = 1$
+    all three are the FPTP diagram.],
+) <fig-bullet>
+
+*The default candidates.* Bullet voting takes the second preferences out of the
+ballots, and the second preferences are what a centrist wins on. In @fig-bullet the
+region of D, in the middle of A–E, shrinks from 31% of the square to 23% (Borda count),
+25% to 21% (Schulze) and 24% to 19% (Score) at $b = 0.5$, and to the 14% of FPTP at
+$b = 1$. The part of the square with another winner than with sincere voters:
+
+#align(center, table(
+  columns: 3,
+  align: (left, right, right),
+  stroke: none,
+  table.hline(),
+  [method], [$b = 0.25$], [$b = 0.5$],
+  table.hline(stroke: 0.5pt),
+  [FPTP], [0], [0],
+  [Two-round], [2.1%], [4.7%],
+  [Baldwin, Nanson, Schulze, Minimax, KOTH], [2.2%], [4.9%],
+  [Condorcet, Black], [2.3%], [5.0%],
+  [STAR], [2.4%], [5.2%],
+  [IRV], [3.3%], [6.4%],
+  [IRV set + KOTH + Score], [3.5%], [7.1%],
+  [DAC], [3.3%], [7.6%],
+  [Score], [4.5%], [8.3%],
+  [Borda], [5.4%], [10.6%],
+  table.hline(),
+))
+
+FPTP reads only first choices, which bullet voting keeps. Borda count changes the most:
+it is the method that rewards the second place the most. DAC goes the other way: three
+quarters of the pixels that change at $b = 0.5$ go to D, whose region grows from 16% to
+21%, before it falls to the 14% of FPTP at $b = 1$. A bullet ballot acquiesces to every
+set that holds its first choice, which gives the large sets with D in them the support
+of every bullet voter of their members.
+
+#pagebreak()
+
 = Beta versus normal voters <ch-compare>
 
 With the same candidates the two voter models give visibly different diagrams, and the
@@ -2314,6 +2439,9 @@ ranking.
 
 All three are sums of edge terms: the Green integrals of @sec-edges for Beta voters and
 the signed triangles of @sec-normal for normal voters.
+
+*Bullet voters* (@sec-bullet) need the shares of their method, and next to pairwise or
+score shares also the first-choice shares; the profile has its own.
 
 *Score shares.* Score uses the part of the top score the voters do not give
 each candidate. The regions of these voters have curved borders, so their shares have no

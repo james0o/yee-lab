@@ -9,14 +9,14 @@ import threading
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import numpy as np
 from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import AfterValidator, BaseModel, Field, field_validator
 
-from yeelab.build import Highest, Plurality, Schedules, Score, ScoreComparisons, Tally, Unbeaten, Winner
+from yeelab.build import Bullet, Highest, Plurality, Schedules, Score, ScoreComparisons, Tally, Unbeaten, Winner
 from yeelab.build.methods import SCORE_POWER, koth
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
@@ -68,6 +68,22 @@ def build_irv_set_koth_score(levels: int, power: float) -> Winner:
 SCORES = {"score": build_score, "star": build_star, "irv_set_koth_score": build_irv_set_koth_score}
 assert all(MARGINS[name] == build(SCORE_LEVELS, SCORE_POWER) for name, build in SCORES.items())
 assert MIN_POWER <= SCORE_POWER <= MAX_POWER
+# How the voters vote: label and tooltip of each strategy, in the order the UI lists them.
+# All but "sincere" are voted by a share of the voters set by a slider, from 0 to 1 by
+# STRATEGIC_STEP; STRATEGIC is its default.
+STRATEGY_INFO = {
+    "sincere": {"label": "Sincere", "description": "Every voter ranks all candidates by distance, "
+                "closest first, and scores them by distance."},
+    "bullet": {"label": "Bullet", "description": "Bullet voting: the share of the voters set below "
+               "rank their first choice first and all other candidates equal below it, and on a "
+               "score ballot give their first choice the top score and all others 0. Equal "
+               "candidates share the mean points of their positions (Borda), abstain head to head, "
+               "and once the first choice is eliminated, the ballot counts equally for all "
+               "remaining candidates. The others vote sincerely."},
+}
+Strategy = Literal["sincere", "bullet"]
+assert set(STRATEGY_INFO) == set(Strategy.__args__)
+STRATEGIC, STRATEGIC_STEP = 0.5, 0.05
 # Win regions are traced on a grid of this many points per axis: coarser while a
 # candidate is dragged, finer once it is dropped (see margin/regions.py).
 DRAG_GRID = 160
@@ -189,6 +205,8 @@ class DiagramRequest(BaseModel):
     deviation: float = DEVIATION
     levels: int = Field(SCORE_LEVELS, ge=2, le=MAX_LEVELS)  # SCORES only
     power: float = Field(SCORE_POWER, ge=MIN_POWER, le=MAX_POWER)  # SCORES only
+    strategy: Strategy = "sincere"
+    strategic: float = Field(STRATEGIC, ge=0, le=1)  # the share of the voters of a strategy
     grid: int = Field(FINAL_GRID, ge=32, le=512)
 
     @field_validator("deviation")
@@ -261,6 +279,10 @@ def config():
         "min_power": MIN_POWER,
         "max_power": MAX_POWER,
         "power_step": POWER_STEP,
+        # how the voters vote, and the slider of the share who vote strategically
+        "strategies": [{"name": name, **info} for name, info in STRATEGY_INFO.items()],
+        "strategic": STRATEGIC,
+        "strategic_step": STRATEGIC_STEP,
         # for the voter distribution plots of the hovered pixel
         "voters": _voters(),
     }
@@ -271,7 +293,8 @@ def diagram_regions(request: DiagramRequest):
     """Win region of every winner as polygons in the unit square (y up):
     {"regions": [{"winner": c, "polygons": [[outer, hole, ...], ...]}], "ms": ...},
     rings flat [x0, y0, x1, y1, ...], outer rings counter-clockwise and holes
-    clockwise. winner is -1 (voting.CYCLE) for a Condorcet cycle."""
+    clockwise. winner is -1 (voting.CYCLE) for a Condorcet cycle. With strategy "bullet",
+    `strategic` of the voters bullet vote (yeelab.build.Bullet)."""
     start = time.perf_counter()
     spread = SPREAD if request.distribution == "beta" else None
     model = Model(request.distribution, request.deviation, spread)
@@ -279,6 +302,8 @@ def diagram_regions(request: DiagramRequest):
         method = SCORES[request.method](request.levels, request.power)
     else:
         method = request.method
+    if request.strategy == "bullet" and method != "voronoi":
+        method = Bullet(MARGINS[method] if isinstance(method, str) else method, request.strategic)
     shapes = regions(method, request.candidates, model, request.grid, request.pixel_median, request.shift)
     payload = {"regions": shapes, "ms": round(1000 * (time.perf_counter() - start), 1)}
     # json.dumps directly: FastAPI's encoder is slow on thousands of vertices

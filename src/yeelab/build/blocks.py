@@ -21,7 +21,8 @@ Every block has one type of output:
                      DescendingCoalitions(),
                      Unbeaten(diffs, among=...),
                      Unbeaten(diffs, against=winner, order=totals),
-                     Fallback(first, second), first | second
+                     Fallback(first, second), first | second,
+                     Bullet(method, share=...)
 
 A ranked ballot gives weight(k, C) points to the candidate at position k (0 = closest)
 of C; both count only the remaining candidates, and a higher total is better. A score
@@ -89,6 +90,11 @@ as its zero set. Each decision a block takes has a gap, 0 where the decision fli
 the margin is the smallest gap of all of them. A voting method chooses one candidate
 (seats == 1), and evaluate() gives its (winner, margin); where no one is chosen, in a
 cycle or a draw, the winner is voting.CYCLE.
+
+Bullet(method, share=s) is the method where s of the voters bullet vote: they rank their
+first choice first and all other candidates equal below it (Voters.bulleted). Equal
+candidates share the mean points of their positions, abstain in a pair, and share a
+ballot equally in an elimination once its first choice is out.
 
 Blocks are frozen dataclasses, so equal blocks are equal methods and hash alike, and
 repr(block) is the expression that builds it: eval(repr(block)) == block.
@@ -241,7 +247,9 @@ class Plurality(Ballot):
 
     def tally(self, voters: Voters, alive: np.ndarray | None) -> np.ndarray:
         """The first-choice shares, or, among the remaining candidates, the shares of the
-        rankings whose first remaining candidate each one is."""
+        rankings whose first remaining candidate each one is. A bullet ballot
+        (Voters.bullet) counts for its first choice while it remains, and then equally
+        for every remaining candidate, which it ranks all equal."""
         if alive is None:
             return voters.first
         rankings, probs = voters.rankings, voters.probs
@@ -250,17 +258,22 @@ class Plurality(Ballot):
         choice = rankings[np.arange(n_ballots), top].reshape(-1, n_ballots)
         index = choice + n * np.arange(len(choice))[:, None]  # (point, candidate), flat
         votes = np.bincount(index.ravel(), probs.reshape(-1), n * len(choice))
-        return votes.reshape(*probs.shape[:-1], n)
+        votes = votes.reshape(*probs.shape[:-1], n)
+        if voters.bullet is None:
+            return votes
+        out = np.where(alive, 0.0, voters.bullet).sum(axis=-1, keepdims=True)
+        split = out / np.maximum(alive.sum(axis=-1, keepdims=True), 1)
+        return votes + np.where(alive, voters.bullet + split, 0.0)
 
     def eliminate(self, voters: Voters, how: str) -> Result | None:
         """Instant runoff (how="min") by the compiled rounds of voting.irv_rounds, which
         move only the ballots of the eliminated candidate."""
-        return irv_rounds(voters.rankings, voters.probs) if how == "min" else None
+        return irv_rounds(voters.rankings, voters.probs, voters.bullet) if how == "min" else None
 
     def schedules(self, voters: Voters) -> Result | None:
         """Every elimination schedule by the compiled voting.irv_schedules, which tallies
         each set of remaining candidates that a schedule reaches once."""
-        return irv_schedules(voters.rankings, voters.probs)
+        return irv_schedules(voters.rankings, voters.probs, voters.bullet)
 
 
 @dataclass(frozen=True)
@@ -948,7 +961,7 @@ class DescendingCoalitions(Winner):
     needs = frozenset({PROFILE})
 
     def evaluate(self, voters: Voters) -> Result:
-        return descending_coalitions(voters.rankings, voters.probs)
+        return descending_coalitions(voters.rankings, voters.probs, voters.bullet)
 
 
 @dataclass(frozen=True)
@@ -1111,3 +1124,49 @@ class Union(Winner):
     def __repr__(self):
         second = f"({self.second!r})" if isinstance(self.second, Union) else repr(self.second)
         return f"{self.first!r} | {second}"
+
+# ---------------------------------------------------------------- Strategy
+
+
+@dataclass(frozen=True)
+class Bullet(Winner):
+    """`method` where `share` of the voters of every point bullet vote and the others
+    vote sincerely (Voters.bulleted). A bullet voter still marks a complete ballot:
+    their first choice first and all other candidates equal below it, and on a score
+    ballot the top score for their first choice and 0 for all others. Where a method
+    gives points by position, equal candidates share the mean of the points of the
+    positions they take (BordaCount: (C - 2) / 2 each); in a pair they abstain, and in
+    an elimination a ballot whose first choice is out counts equally for all the
+    remaining candidates. Share 0 is the method itself, and at share 1 every method
+    elects the candidate with the most first choices."""
+
+    method: Winner
+    share: float
+
+    def __post_init__(self):
+        _expect(self, self.method, Winner, "a Winner")
+        if not 0 <= self.share <= 1:
+            raise ValueError(f"Bullet share must be between 0 and 1, got {self.share!r}")
+
+    @property
+    def seats(self) -> int | None:
+        return self.method.seats
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        """The method's, and the first-choice shares the bullet voters' pairwise and score
+        shares come from; the profile has its own."""
+        needs = self.method.needs
+        if self.share > 0 and any(share == PAIRWISE or isinstance(share, Scored | ScoredPairwise)
+                                  for share in needs):
+            needs |= {FIRST}
+        return needs
+
+    def select(self, voters: Voters) -> Result:
+        return self.method.select(voters.bulleted(self.share))
+
+    def evaluate(self, voters: Voters) -> Result:
+        return self.method.evaluate(voters.bulleted(self.share))
+
+    def __repr__(self):
+        return f"Bullet({self.method!r}, share={self.share!r})"

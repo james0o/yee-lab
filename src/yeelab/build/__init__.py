@@ -1,6 +1,6 @@
 """Voting methods built from small blocks, like in Scratch but with Python constructors:
 
-    from yeelab.build import (BordaCount, DescendingCoalitions, Eliminate, Fallback,
+    from yeelab.build import (BordaCount, Bullet, DescendingCoalitions, Eliminate, Fallback,
                               Highest, Margins, Mix, Pairwise, Plurality, Schedules, Score,
                               ScoreAvg, ScoreCluster, ScoreComparisons, ScoreDH, ScoreHybrid,
                               StrongestPaths, Tally, Unbeaten, Weakest)
@@ -29,6 +29,9 @@
     # the highest mean score among the winners of every elimination schedule (IRV, FPTP,
     # the top two and all between) and the king of the hill
     irv_set_koth_score = Highest(Tally(ballot), among=Schedules(Tally(Plurality())) | koth)
+    # any of them where 30% of the voters bullet vote: their first choice first and all
+    # other candidates equal below it
+    Bullet(borda, share=0.3)
     # the other ways to score of yeelab.score, for comparisons (not in the web UI)
     ScoreAvg(6), ScoreDH(6, delta=0.8), ScoreHybrid(6, delta=0.8), ScoreCluster(6, mu=0.1, kappa=2.0)
 
@@ -45,6 +48,7 @@
 from yeelab.build.blocks import (
     Ballot,
     BordaCount,
+    Bullet,
     CandidateTotals,
     DescendingCoalitions,
     Eliminate,
@@ -74,7 +78,7 @@ from yeelab.build.methods import METHODS
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Scored, ScoredPairwise, Share, Voters
 
 __all__ = [
-    "Ballot", "BordaCount", "CandidateTotals", "DescendingCoalitions", "Eliminate", "Fallback", "Highest",
+    "Ballot", "BordaCount", "Bullet", "CandidateTotals", "DescendingCoalitions", "Eliminate", "Fallback", "Highest",
     "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise", "Plurality", "Schedules", "Score",
     "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH", "ScoreHybrid", "StrongestPaths", "Tally",
     "Unbeaten", "Union", "Weakest", "Winner", "METHODS", "FIRST", "PAIRWISE", "PROFILE", "Scored",

@@ -22,7 +22,8 @@ from scipy.special import betainc, ndtr, ndtri
 from scipy.stats import beta as beta_dist
 
 from yeelab import normal, ranking_cells
-from yeelab.build import Highest, Score, ScoreAvg, ScoreCluster, ScoreDH, ScoreHybrid, Tally, Voters, Winner
+from yeelab.build import (Bullet, Highest, Score, ScoreAvg, ScoreCluster, ScoreDH, ScoreHybrid, Tally, Voters,
+                          Winner)
 from yeelab.build.methods import METHODS as BUILD_METHODS
 from yeelab.margin.geometric import geometric_median_at, geometric_medians
 from yeelab.margin.regions import MARGINS, grid, nearest, regions, winners
@@ -984,6 +985,34 @@ def score_against_voronoi(layouts=60, size=64):
             print(f"  {levels} levels, {name:12s} {np.mean(wrong):.1%}  {np.mean(lost):.2f}")
 
 
+# the shares of bullet voters in the figure, and those the text quotes for every method
+BULLET_SHARES = (0, 0.5, 1)
+BULLET_QUOTED = (0.25, 0.5)
+
+
+def bullet():
+    """Borda, Schulze and Score where none, half and all of the voters bullet vote (the
+    voters of the UI), and for every method the part of the square where bullet voters
+    give the pixel another winner."""
+    rows = [("Borda", BUILD_METHODS["borda"]), ("Schulze", BUILD_METHODS["schulze"]),
+            ("Score", BUILD_METHODS["score"])]
+    fig, axes = plt.subplots(len(rows), len(BULLET_SHARES), figsize=(10, 10.2), layout="constrained")
+    for row, (label, method) in enumerate(rows):
+        for col, share in enumerate(BULLET_SHARES):
+            show(axes[row, col], Bullet(method, share), UI_MODEL, f"{label}, {share:.0%} bullet voters")
+    _save_figure(fig, "bullet")
+    plt.close(fig)
+    fptp = winners("fptp", CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+    for name, method in BUILD_METHODS.items():
+        sincere = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+        changed = [(winners(Bullet(method, share), CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1] != sincere).mean()
+                   for share in BULLET_QUOTED]
+        everyone = winners(Bullet(method, 1), CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+        print(f"bullet voting, {name}: another winner at " + "  ".join(
+            f"{share:.0%} {part:.3f}" for share, part in zip(BULLET_QUOTED, changed))
+            + f"; sincere not FPTP {(sincere != fptp).mean():.3f}; all bullet not FPTP {(everyone != fptp).mean():.3f}")
+
+
 if __name__ == "__main__":
     FIGURES.mkdir(exist_ok=True)
     spread_shapes()
@@ -1010,3 +1039,4 @@ if __name__ == "__main__":
     approval()
     score_voting()
     score_against_voronoi()
+    bullet()
