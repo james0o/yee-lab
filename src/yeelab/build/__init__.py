@@ -1,6 +1,6 @@
 """Voting methods built from small blocks, like in Scratch but with Python constructors:
 
-    from yeelab.build import (BordaCount, Bullet, DescendingCoalitions, Eliminate, Fallback,
+    from yeelab.build import (BordaCount, Bullet, Burial, DescendingCoalitions, Eliminate, Fallback,
                               Highest, Margins, Mix, Pairwise, Plurality, Schedules, Score,
                               ScoreAvg, ScoreCluster, ScoreComparisons, ScoreDH, ScoreHybrid,
                               StrongestPaths, Tally, Unbeaten, Weakest)
@@ -32,6 +32,9 @@
     # any of them where 30% of the voters bullet vote: their first choice first and all
     # other candidates equal below it
     Bullet(borda, share=0.3)
+    # 30% of the voters rank the frontrunner they like less of the two with the most
+    # first choices last
+    Burial(borda, share=0.3)
     # the other ways to score of yeelab.score, for comparisons (not in the web UI)
     ScoreAvg(6), ScoreDH(6, delta=0.8), ScoreHybrid(6, delta=0.8), ScoreCluster(6, mu=0.1, kappa=2.0)
 
@@ -49,6 +52,7 @@ from yeelab.build.blocks import (
     Ballot,
     BordaCount,
     Bullet,
+    Burial,
     CandidateTotals,
     DescendingCoalitions,
     Eliminate,
@@ -75,12 +79,12 @@ from yeelab.build.blocks import (
     Winner,
 )
 from yeelab.build.methods import METHODS
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Scored, ScoredPairwise, Share, Voters
+from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Buried, Scored, ScoredPairwise, Share, Voters
 
 __all__ = [
-    "Ballot", "BordaCount", "Bullet", "CandidateTotals", "DescendingCoalitions", "Eliminate", "Fallback", "Highest",
-    "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise", "Plurality", "Schedules", "Score",
-    "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH", "ScoreHybrid", "StrongestPaths", "Tally",
-    "Unbeaten", "Union", "Weakest", "Winner", "METHODS", "FIRST", "PAIRWISE", "PROFILE", "Scored",
-    "ScoredPairwise", "Share", "Voters",
+    "Ballot", "BordaCount", "Bullet", "Burial", "Buried", "CandidateTotals", "DescendingCoalitions",
+    "Eliminate", "Fallback", "Highest", "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise",
+    "Plurality", "Schedules", "Score", "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH",
+    "ScoreHybrid", "StrongestPaths", "Tally", "Unbeaten", "Union", "Weakest", "Winner", "METHODS",
+    "FIRST", "PAIRWISE", "PROFILE", "Scored", "ScoredPairwise", "Share", "Voters",
 ]

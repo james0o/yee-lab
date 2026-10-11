@@ -110,8 +110,9 @@ candidate crosses m, 2 r_i = r_min + r_max, and where a RANGE score of its lower
 half a score. A CLUSTER score changes where two choices of scores cost the same. Unlike
 the bisectors these are curves, so the mean score is not a sum
 over polygons. `unscored` gives, for a grid of rectangles, the mean points below the
-top score of each candidate in each rectangle; margin/shares.py weighs it with the
-voters of each rectangle.
+top score of each candidate in each rectangle, and `given` the mean points each
+candidate gets from the voters who rank another candidate above it (what burying it
+takes away); margin/shares.py weighs them with the voters of each rectangle.
 """
 
 import math
@@ -549,5 +550,104 @@ def comparisons(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
     threads.in_chunks(
         lambda a, b: _comparisons(xs, ys, candidates, levels - 1, RULES.index(rule), float(delta), float(mu),
                                  float(kappa), float(power), sub, a, b, out),
+        len(xs) - 1, ROWS)
+    return out
+
+
+@njit(inline="always", error_model="numpy")
+def _order_code(r, order):
+    """The candidates in order of the distances r (C,), closest first, into order (ties:
+    the lowest index first, like by_distance), and that order as a code of BITS bits per
+    position."""
+    code = 0
+    for c in range(r.size):  # insertion sort
+        k = c
+        while k > 0 and r[order[k - 1]] > r[c]:
+            order[k] = order[k - 1]
+            k -= 1
+        order[k] = c
+    for k in range(r.size):
+        code |= order[k] << (BITS * k)
+    return code
+
+
+@njit(cache=True, nogil=True, error_model="numpy")
+def _given(xs, ys, candidates, top, rule, delta, mu, kappa, power, sub, start, stop, out):
+    """given() of the cells [xs[i], xs[i + 1]] with start <= i < stop, into out (C, C, X, Y).
+    A cell counts as one ballot only if its four corners have the same ballot and the
+    same order of distance: the bisectors are straight, so then none crosses it. In the
+    others the points of the cell hold few ballots, each counted once with how often."""
+    n = candidates.shape[0]
+    r, order, steps = np.empty(n), np.empty(n, dtype=np.int64), np.empty(n, dtype=np.int64)
+    work, back = np.empty((4, max(n, top + 1))), np.empty((n, top + 1), dtype=np.int64)
+    codes, orders = np.empty(sub * sub, dtype=np.int64), np.empty(sub * sub, dtype=np.int64)
+    counts = np.empty(sub * sub, dtype=np.int64)
+    left, right = np.empty(ys.size, dtype=np.int64), np.empty(ys.size, dtype=np.int64)
+    left_order, right_order = np.empty(ys.size, dtype=np.int64), np.empty(ys.size, dtype=np.int64)
+    for j in range(ys.size):
+        left[j] = _ballot(xs[start], ys[j], candidates, top, rule, delta, mu, kappa, power, r, order, steps,
+                          work, back)
+        left_order[j] = _order_code(r, order)
+    for i in range(start, stop):
+        for j in range(ys.size):
+            right[j] = _ballot(xs[i + 1], ys[j], candidates, top, rule, delta, mu, kappa, power,
+                               r, order, steps, work, back)
+            right_order[j] = _order_code(r, order)
+        for j in range(ys.size - 1):
+            code, ranked = left[j], left_order[j]
+            if (code == left[j + 1] and code == right[j] and code == right[j + 1] and ranked == left_order[j + 1]
+                    and ranked == right_order[j] and ranked == right_order[j + 1]):
+                kinds, counts[0], codes[0], orders[0] = 1, sub * sub, code, ranked
+            else:
+                kinds = 0
+                for a in range(sub):
+                    x = xs[i] + (a + 0.5) / sub * (xs[i + 1] - xs[i])
+                    for b in range(sub):
+                        y = ys[j] + (b + 0.5) / sub * (ys[j + 1] - ys[j])
+                        code = _ballot(x, y, candidates, top, rule, delta, mu, kappa, power, r, order, steps,
+                                       work, back)
+                        ranked = _order_code(r, order)
+                        k = 0
+                        while k < kinds and (codes[k] != code or orders[k] != ranked):
+                            k += 1
+                        if k == kinds:
+                            codes[k], orders[k], counts[k] = code, ranked, 0
+                            kinds += 1
+                        counts[k] += 1
+            for c in range(n):
+                for e in range(n):
+                    out[c, e, i, j] = 0.0
+            for k in range(kinds):
+                weight = counts[k] / (sub * sub)
+                for above in range(n):  # the candidates in order: each gets from this ballot
+                    e = (orders[k] >> (BITS * above)) & MASK
+                    for below in range(above + 1, n):
+                        c = (orders[k] >> (BITS * below)) & MASK
+                        out[c, e, i, j] += weight * (top - ((codes[k] >> (BITS * c)) & MASK))
+        left, right = right, left
+        left_order, right_order = right_order, left_order
+
+
+def given(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
+          delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
+          power: float = POWER) -> np.ndarray:
+    """short[c, e, i, j] = mean points that the voters of the rectangle [xs[i], xs[i + 1]] x
+    [ys[j], ys[j + 1]] who rank e above c give c, from 0 to levels - 1 (0 for e = c), shape
+    (C, C, X, Y): what c loses if those voters bury it, giving it 0. A voter ranks e above c
+    if e is closer (ties: the lower index first). Rectangles as in unscored(), but one
+    holds one ballot only if its corners also have the same order of distance; the
+    others are averaged at sub x sub points."""
+    xs = np.ascontiguousarray(xs, dtype=np.float64)
+    ys = np.ascontiguousarray(ys, dtype=np.float64)
+    candidates = np.ascontiguousarray(candidates, dtype=np.float64)
+    if not 2 <= len(candidates) <= MAX_CANDIDATES:
+        raise ValueError(f"score ballots need 2 to {MAX_CANDIDATES} candidates, got {len(candidates)}")
+    if not 2 <= levels <= MAX_LEVELS:
+        raise ValueError(f"score ballots need 2 to {MAX_LEVELS} levels, got {levels}")
+    _check(rule, delta, mu, kappa, power)
+    out = np.empty((len(candidates), len(candidates), len(xs) - 1, len(ys) - 1), dtype=np.float32)
+    threads.in_chunks(
+        lambda a, b: _given(xs, ys, candidates, levels - 1, RULES.index(rule), float(delta), float(mu),
+                            float(kappa), float(power), sub, a, b, out),
         len(xs) - 1, ROWS)
     return out

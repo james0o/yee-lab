@@ -14,9 +14,10 @@ from typing import Annotated, Literal
 import numpy as np
 from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import AfterValidator, BaseModel, Field, field_validator
+from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
-from yeelab.build import Bullet, Highest, Plurality, Schedules, Score, ScoreComparisons, Tally, Unbeaten, Winner
+from yeelab.build import (Bullet, Burial, Highest, Plurality, Schedules, Score, ScoreComparisons, Tally, Unbeaten,
+                          Winner)
 from yeelab.build.methods import SCORE_POWER, koth
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
@@ -68,22 +69,42 @@ def build_irv_set_koth_score(levels: int, power: float) -> Winner:
 SCORES = {"score": build_score, "star": build_star, "irv_set_koth_score": build_irv_set_koth_score}
 assert all(MARGINS[name] == build(SCORE_LEVELS, SCORE_POWER) for name, build in SCORES.items())
 assert MIN_POWER <= SCORE_POWER <= MAX_POWER
-# How the voters vote: label and tooltip of each strategy, in the order the UI lists them.
-# All but "sincere" are voted by a share of the voters set by a slider, from 0 to 1 by
-# STRATEGIC_STEP; STRATEGIC is its default.
+# How the voters vote: label, tooltip and what the status line says of each strategy, in
+# the order the UI lists them. All but "sincere" are voted by a share of the voters set by
+# a slider, from 0 to 1 by STRATEGIC_STEP; STRATEGIC is its default.
 STRATEGY_INFO = {
-    "sincere": {"label": "Sincere", "description": "Every voter ranks all candidates by distance, "
-                "closest first, and scores them by distance."},
-    "bullet": {"label": "Bullet", "description": "Bullet voting: the share of the voters set below "
-               "rank their first choice first and all other candidates equal below it, and on a "
-               "score ballot give their first choice the top score and all others 0. Equal "
-               "candidates share the mean points of their positions (Borda), abstain head to head, "
-               "and once the first choice is eliminated, the ballot counts equally for all "
+    "sincere": {"label": "Sincere", "phrase": "", "description": "Every voter ranks all candidates by "
+                "distance, closest first, and scores them by distance."},
+    "bullet": {"label": "Bullet", "phrase": "bullet voting", "description": "Bullet voting: the share "
+               "of the voters set below rank their first choice first and all other candidates equal "
+               "below it, and on a score ballot give their first choice the top score and all others "
+               "0. Equal candidates share the mean points of their positions (Borda), abstain head to "
+               "head, and once the first choice is eliminated, the ballot counts equally for all "
                "remaining candidates. The others vote sincerely."},
+    "burial": {"label": "Burial", "phrase": "burying", "description": "Burial: the two candidates with "
+               "the most first choices of the pixel are the frontrunners. The share of the voters set "
+               "below rank the frontrunner they like less last, and on a score ballot give it 0; the "
+               "rest of their ballot stays. The others vote sincerely. Not for STAR."},
 }
-Strategy = Literal["sincere", "bullet"]
+Strategy = Literal["sincere", "bullet", "burial"]
 assert set(STRATEGY_INFO) == set(Strategy.__args__)
+STRATEGIES = {"bullet": Bullet, "burial": Burial}  # the block of each strategy but "sincere"
 STRATEGIC, STRATEGIC_STEP = 0.5, 0.05
+
+
+def _strategic(strategy: str, method: Winner, share: float) -> Winner | None:
+    """The method where `share` of the voters vote by the strategy, or None if the
+    strategy cannot do that method."""
+    try:
+        return STRATEGIES[strategy](method, share)
+    except ValueError:
+        return None
+
+
+# the methods each strategy cannot do (Burial: STAR's score comparisons)
+UNSUPPORTED = {strategy: [name for name, method in MARGINS.items()
+                          if _strategic(strategy, method, STRATEGIC) is None]
+               for strategy in STRATEGIES}
 # Win regions are traced on a grid of this many points per axis: coarser while a
 # candidate is dragged, finer once it is dropped (see margin/regions.py).
 DRAG_GRID = 160
@@ -214,6 +235,12 @@ class DiagramRequest(BaseModel):
     def offered(cls, deviation: float) -> float:
         return _offered(deviation)
 
+    @model_validator(mode="after")
+    def supported(self):
+        if self.method in UNSUPPORTED.get(self.strategy, []):
+            raise ValueError(f"{STRATEGY_INFO[self.strategy]['label']} cannot do {self.method}")
+        return self
+
 
 def _offered(deviation: float) -> float:
     if deviation not in DEVIATIONS:
@@ -230,6 +257,7 @@ def _warm_up():
         for method in DIAGRAMS:
             regions(method, CANDIDATES, model, 32)
     regions(DIAGRAMS[0], CANDIDATES, Model("beta", DEVIATION, SPREAD), 32, "geometric")
+    regions(Burial(MARGINS["score"], STRATEGIC), CANDIDATES, Model("beta", DEVIATION, SPREAD), 32)  # score.given
 
 
 threading.Thread(target=_warm_up, daemon=True).start()
@@ -281,6 +309,7 @@ def config():
         "power_step": POWER_STEP,
         # how the voters vote, and the slider of the share who vote strategically
         "strategies": [{"name": name, **info} for name, info in STRATEGY_INFO.items()],
+        "unsupported": UNSUPPORTED,
         "strategic": STRATEGIC,
         "strategic_step": STRATEGIC_STEP,
         # for the voter distribution plots of the hovered pixel
@@ -293,8 +322,8 @@ def diagram_regions(request: DiagramRequest):
     """Win region of every winner as polygons in the unit square (y up):
     {"regions": [{"winner": c, "polygons": [[outer, hole, ...], ...]}], "ms": ...},
     rings flat [x0, y0, x1, y1, ...], outer rings counter-clockwise and holes
-    clockwise. winner is -1 (voting.CYCLE) for a Condorcet cycle. With strategy "bullet",
-    `strategic` of the voters bullet vote (yeelab.build.Bullet)."""
+    clockwise. winner is -1 (voting.CYCLE) for a Condorcet cycle. With a strategy,
+    `strategic` of the voters vote by it (yeelab.build.Bullet, Burial)."""
     start = time.perf_counter()
     spread = SPREAD if request.distribution == "beta" else None
     model = Model(request.distribution, request.deviation, spread)
@@ -302,8 +331,9 @@ def diagram_regions(request: DiagramRequest):
         method = SCORES[request.method](request.levels, request.power)
     else:
         method = request.method
-    if request.strategy == "bullet" and method != "voronoi":
-        method = Bullet(MARGINS[method] if isinstance(method, str) else method, request.strategic)
+    if request.strategy != "sincere" and method != "voronoi":
+        method = STRATEGIES[request.strategy](MARGINS[method] if isinstance(method, str) else method,
+                                              request.strategic)
     shapes = regions(method, request.candidates, model, request.grid, request.pixel_median, request.shift)
     payload = {"regions": shapes, "ms": round(1000 * (time.perf_counter() - start), 1)}
     # json.dumps directly: FastAPI's encoder is slow on thousands of vertices

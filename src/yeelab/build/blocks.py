@@ -22,7 +22,7 @@ Every block has one type of output:
                      Unbeaten(diffs, among=...),
                      Unbeaten(diffs, against=winner, order=totals),
                      Fallback(first, second), first | second,
-                     Bullet(method, share=...)
+                     Bullet(method, share=...), Burial(method, share=...)
 
 A ranked ballot gives weight(k, C) points to the candidate at position k (0 = closest)
 of C; both count only the remaining candidates, and a higher total is better. A score
@@ -94,7 +94,9 @@ cycle or a draw, the winner is voting.CYCLE.
 Bullet(method, share=s) is the method where s of the voters bullet vote: they rank their
 first choice first and all other candidates equal below it (Voters.bulleted). Equal
 candidates share the mean points of their positions, abstain in a pair, and share a
-ballot equally in an elimination once its first choice is out.
+ballot equally in an elimination once its first choice is out. Burial(method, share=s) is
+the method where s of the voters bury: of the two frontrunners a poll names at every
+point, they rank the one they rank lower last, and give it 0 on a score ballot.
 
 Blocks are frozen dataclasses, so equal blocks are equal methods and hash alike, and
 repr(block) is the expression that builds it: eval(repr(block)) == block.
@@ -106,7 +108,7 @@ from typing import Literal
 import numpy as np
 
 from yeelab.build.rounds import drop_below_mean, drop_lowest
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Scored, ScoredPairwise, Share, Voters
+from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Buried, Scored, ScoredPairwise, Share, Voters
 from yeelab.score import AVG, CLUSTER, DELTA, DHONDT, HYBRID, KAPPA, MU, POWER, RANGE
 from yeelab.voting import CYCLE, descending_coalitions, irv_rounds, irv_schedules
 
@@ -1170,3 +1172,78 @@ class Bullet(Winner):
 
     def __repr__(self):
         return f"Bullet({self.method!r}, share={self.share!r})"
+
+
+@dataclass(frozen=True)
+class Burial(Winner):
+    """`method` where `share` of the voters of every point bury and the others vote
+    sincerely. A poll at every point names two frontrunners, by default the two with the
+    most first choices, Highest(Tally(Plurality()), n=2), and a burying voter ranks the
+    one of them they rank lower last, and on a score ballot gives it 0
+    (Voters.burying). The rest of the ballot stays, so no first choice changes, nor
+    the head-to-head of the two frontrunners.
+
+    The voters bury another candidate where the poll names other frontrunners, so the
+    method runs on the points of each pair of frontrunners apart, and the poll's margin
+    (the second most first choices minus the third) is a gap too: the method's margin
+    is the smaller of the two. Share 0 is the method itself. Score comparisons (STAR)
+    cannot be buried: that would need the comparisons of every pair among the voters on
+    each side of every bisector."""
+
+    method: Winner
+    share: float
+    poll: Winner = field(default=Highest(Tally(Plurality()), n=2), kw_only=True)
+
+    def __post_init__(self):
+        _expect(self, self.method, Winner, "a Winner")
+        if not 0 <= self.share <= 1:
+            raise ValueError(f"Burial share must be between 0 and 1, got {self.share!r}")
+        _expect(self, self.poll, Winner, "a Winner as poll")
+        if self.poll.seats != 2:
+            raise ValueError(f"Burial poll must choose two candidates, the frontrunners, not {self.poll!r}")
+        if any(isinstance(share, ScoredPairwise) for share in self.method.needs):
+            raise ValueError(f"Burial cannot bury on score comparisons (STAR): {self.method!r}")
+
+    @property
+    def seats(self) -> int | None:
+        return self.method.seats
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        """The method's and the poll's, the profile the buried pairwise shares come from,
+        and what burying takes back on every score ballot."""
+        needs = self.method.needs
+        if self.share == 0:
+            return needs
+        if PAIRWISE in needs:
+            needs |= {PROFILE}
+        return needs | self.poll.needs | {Buried(share) for share in needs if isinstance(share, Scored)}
+
+    def select(self, voters: Voters) -> Result:
+        return self._by_poll(voters, self.method.select)
+
+    def evaluate(self, voters: Voters) -> Result:
+        return self._by_poll(voters, self.method.evaluate)
+
+    def _by_poll(self, voters: Voters, decide) -> Result:
+        """decide() on the buried voters of the points of each pair of frontrunners."""
+        if self.share == 0:
+            return decide(voters)
+        chosen, gap = self.poll.select(voters)
+        n = voters.n_candidates
+        pairs = chosen @ (1 << np.arange(n))
+        results = None
+        for pair in np.unique(pairs):
+            at = pairs == pair
+            a, b = np.flatnonzero((int(pair) >> np.arange(n)) & 1)
+            part = decide(voters.at(at).burying(self.share, a, b))
+            if results is None:
+                results = [np.empty(pairs.shape + value.shape[1:], dtype=value.dtype) for value in part]
+            for result, value in zip(results, part):
+                result[at] = value
+        first, margin = results
+        return first, np.minimum(margin, gap)
+
+    def __repr__(self):
+        poll = f", poll={self.poll!r}" if self.poll != Highest(Tally(Plurality()), n=2) else ""
+        return f"Burial({self.method!r}, share={self.share!r}{poll})"

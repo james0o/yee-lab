@@ -22,12 +22,13 @@ from scipy.special import betainc, ndtr, ndtri
 from scipy.stats import beta as beta_dist
 
 from yeelab import normal, ranking_cells
-from yeelab.build import (Bullet, Highest, Score, ScoreAvg, ScoreCluster, ScoreDH, ScoreHybrid, Tally, Voters,
-                          Winner)
+from yeelab.build import (Bullet, Burial, Highest, Score, ScoreAvg, ScoreCluster, ScoreDH, ScoreHybrid, Tally,
+                          Voters, Winner)
 from yeelab.build.methods import METHODS as BUILD_METHODS
 from yeelab.margin.geometric import geometric_median_at, geometric_medians
 from yeelab.margin.regions import MARGINS, grid, nearest, regions, winners
 from yeelab.margin.shares import Model, pairwise_shares, ranking_shares
+from yeelab.margin.shares import first_choice_shares as first_choice_shares_at
 from yeelab.score import RANGE, unscored
 from yeelab.voting import CYCLE
 from yeelab.web.app import DEVIATION as UI_DEVIATION, DRAG_GRID, FINAL_GRID
@@ -1013,6 +1014,37 @@ def bullet():
             + f"; sincere not FPTP {(sincere != fptp).mean():.3f}; all bullet not FPTP {(everyone != fptp).mean():.3f}")
 
 
+def burial():
+    """Borda, the Condorcet winner and Score where none, half and all of the voters bury
+    (the voters of the UI), and for every method the part of the square where burying
+    voters give the pixel another winner, one who is neither frontrunner (a dark horse)
+    or, for the Condorcet winner, none."""
+    rows = [("Borda", BUILD_METHODS["borda"]), ("Condorcet winner", BUILD_METHODS["condorcet"]),
+            ("Score", BUILD_METHODS["score"])]
+    fig, axes = plt.subplots(len(rows), len(BULLET_SHARES), figsize=(10, 10.2), layout="constrained")
+    for row, (label, method) in enumerate(rows):
+        for col, share in enumerate(BULLET_SHARES):
+            show(axes[row, col], Burial(method, share), UI_MODEL, f"{label}, {share:.0%} burying")
+    _save_figure(fig, "burial")
+    plt.close(fig)
+    medians = grid(FINAL_GRID, PIXELS)[1]
+    first = ranking_cells.interpolate_to(
+        first_choice_shares_at(CANDIDATES, UI_MODEL), UI_MODEL.medians, medians, UI_MODEL.transform)[1:-1, 1:-1]
+    frontrunners = np.argsort(-first, axis=-1, kind="stable")[..., :2]
+    for name, method in BUILD_METHODS.items():
+        if name == "star":
+            continue
+        sincere = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+        parts = []
+        for share in (0.25, 0.5, 1):
+            winner = winners(Burial(method, share), CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+            dark = (winner[..., None] != frontrunners).all(axis=-1) & (winner != CYCLE)
+            parts.append(f"{share:.0%}: another winner {(winner != sincere).mean():.3f}, dark horse {dark.mean():.3f}, "
+                         f"no winner {(winner == CYCLE).mean():.3f}")
+        sincere_dark = ((sincere[..., None] != frontrunners).all(axis=-1) & (sincere != CYCLE)).mean()
+        print(f"burial, {name}: sincere dark horse {sincere_dark:.3f}; " + "; ".join(parts))
+
+
 if __name__ == "__main__":
     FIGURES.mkdir(exist_ok=True)
     spread_shapes()
@@ -1040,3 +1072,4 @@ if __name__ == "__main__":
     score_voting()
     score_against_voronoi()
     bullet()
+    burial()

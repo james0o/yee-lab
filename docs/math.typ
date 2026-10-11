@@ -30,7 +30,7 @@ Yee diagram, the two voter distributions (normal and Beta) and the spread rules 
 fix the Beta distributions. @ch-compute shows how the share of every ranking of the
 candidates is computed exactly for every pixel, and @ch-methods how the voting methods
 turn these shares into winners. @ch-strategy lets a share of the voters vote
-strategically, by bullet voting. @ch-compare explains why Beta and normal voters give
+strategically, by bullet voting or burial. @ch-compare explains why Beta and normal voters give
 different diagrams. @ch-spread compares the spread rules and explains why `rms` is the
 default. @ch-shapes asks when a candidate's region is convex or in one piece, and how
 that relates to the monotonicity of the method. @ch-realtime shows how the web UI draws
@@ -1446,13 +1446,18 @@ neither candidate beats the other (the dotted black lines in @fig-compare).
 
 Everywhere else every voter votes sincerely: they rank the candidates by distance and
 score them by distance. A strategy changes the ballots of some of the voters, not the
-method. `Bullet(method, share)` evaluates any method of @ch-methods on voters of whom a
-share $b$ vote strategically at every pixel, the same share among the voters of every
-first choice, while the others vote sincerely. Every share a method reads is a sum over
-the voters, so the shares of these voters are $(1 - b)$ times those of the sincere
-voters plus $b$ times those of the strategic ones. They are as smooth in the median as
-before, and the margins and borders are traced the same way (@sec-zero-sets). In the web
-UI, _Strategy_ picks the strategy and the slider _Strategic voters_ sets $b$.
+method. `Bullet(method, share)` and `Burial(method, share)` evaluate any method of
+@ch-methods on voters of whom a share vote strategically at every pixel, the same share
+among the voters of every first choice, while the others vote sincerely. Every share a
+method reads is a sum over the voters, so the shares of these voters are those of the
+sincere voters and of the strategic ones, weighted by their shares. In the web UI,
+_Strategy_ picks the strategy (sincere, bullet voting or burial) and the slider
+_Strategic voters_ sets the share.
+
+Bullet voting depends on the voter alone, so its shares are as smooth in the median as
+before, and the margins and borders are traced the same way (@sec-zero-sets). Burial
+depends on who the frontrunners are, which jumps from one pixel to the next, and that
+adds borders of its own (@sec-burial).
 
 == Bullet voting (`Bullet`) <sec-bullet>
 
@@ -1562,6 +1567,79 @@ quarters of the pixels that change at $b = 0.5$ go to D, whose region grows from
 21%, before it falls to the 14% of FPTP at $b = 1$. A bullet ballot acquiesces to every
 set that holds its first choice, which gives the large sets with D in them the support
 of every bullet voter of their members.
+
+== Burial (`Burial`) <sec-burial>
+
+*The ballot.* Burial needs a rival to bury. At every pixel a poll names two
+frontrunners, by default the two with the most first choices,
+`Highest(Tally(Plurality()), n=2)`, the same for every method. A burying voter ranks the
+one of them they like less last, and on a score ballot gives it 0; the rest of the
+ballot stays as it is. No one buries their first choice, so the first choices do not
+change, and neither does the head-to-head of the two frontrunners: whoever ranks $a$
+above $b$ still does. With $q$ the share of the voters who bury and $a$, $b$ the
+frontrunners of the pixel:
+
+- *Profile.* Every ranking comes twice: as it is, with $(1 - q) P(r)$, and with the one
+  of $a$ and $b$ it ranks lower moved last, with $q P(r)$. IRV, DAC and the schedules of
+  @sec-irv-set run on these $2 R$ rankings.
+- *Pairwise shares.* $pi'_(i j) = pi_(i j) + q sum_r P(r) ([i "above" j "in" r'] - [i
+  "above" j "in" r])$, with $r'$ the buried ranking. Only the pairs of $a$ or $b$ with a
+  third candidate change. The sum needs the profile, so burial makes the pairwise
+  methods read it (@sec-needs).
+- *Score shares.* With $t_(i j)$ the part of the top score that the voters who rank
+  $c_j$ above $c_i$ give $c_i$, the part not given (@sec-score) becomes
+  $u_a + q t_(a b)$ for $a$ and $u_b + q t_(b a)$ for $b$, and stays for the others:
+  a burying voter takes back what they gave the frontrunner they bury. $t$ is summed
+  over the voter grid like $u$; a cell counts as one ballot only if its corners also
+  rank the candidates in the same order, so that no bisector crosses it.
+  STAR is left out: its runoff would need the score comparisons of every pair among the
+  voters on each side of every bisector.
+
+*Poll lines.* Where the second and the third most first choices tie, the frontrunners
+change, and with them whom the voters bury, so the winner can jump although every share
+is smooth. The method runs on the pixels of each pair of frontrunners apart, and the
+poll's margin, $s_((2)) - s_((3))$ in the order of the first-choice shares, is a gap
+like any other: the margin is the smaller of the method's and the poll's. Like that of
+IRV, it also vanishes where the frontrunners change but the winner stays.
+
+#figure(
+  image("figures/burial.png", width: 100%),
+  caption: [Borda count, the Condorcet winner and Score (six levels, $p = 1.5$) with no,
+    half and all voters burying (candidates A–E, Beta voters, `rms`, $D = 0.2$). Black:
+    no Condorcet winner.],
+) <fig-burial>
+
+*The default candidates.* FPTP and the two-round system do not change at all: the
+first choices stay, and the two-round finalists are the frontrunners, whose head-to-head
+burial keeps. IRV hardly changes: a ballot reaches the buried candidate only once all
+candidates above it are out. Elsewhere burial backfires. Where the supporters of each
+frontrunner bury the other, a third candidate, a dark horse, gains on both: in the
+bands of @fig-burial that run out of the middle of the square, the frontrunners are the
+two candidates on either side and the winner is a third. With Borda count a dark horse
+wins 13% of the square at $q = 0.5$ and 70% at $q = 1$, against 2% with sincere voters.
+Burial also makes Condorcet cycles: the Condorcet winner is missing on 0.6% of the square
+at $q = 0.5$ and 3.2% at $q = 1$. A buried candidate loses only what the burying voters
+gave it on a score ballot, so Score changes less than the ranked methods with many
+burying voters. The part of the square with another winner than with sincere voters:
+
+#align(center, table(
+  columns: 4,
+  align: (left, right, right, right),
+  stroke: none,
+  table.hline(),
+  [method], [$q = 0.25$], [$q = 0.5$], [$q = 1$],
+  table.hline(stroke: 0.5pt),
+  [FPTP, Two-round], [0], [0], [0],
+  [IRV], [0.5%], [1.4%], [3.3%],
+  [KOTH], [0.8%], [3.4%], [33%],
+  [IRV set + KOTH + Score], [2.2%], [4.7%], [11%],
+  [Baldwin, Nanson, Schulze, Minimax], [1.5%], [5.5%], [43–44%],
+  [Condorcet, Black], [1.5–1.6%], [5.9%], [45%],
+  [DAC], [2.2%], [6.2%], [27%],
+  [Score], [3.4%], [6.3%], [14%],
+  [Borda], [7.6%], [17%], [69%],
+  table.hline(),
+))
 
 #pagebreak()
 
@@ -2441,7 +2519,12 @@ All three are sums of edge terms: the Green integrals of @sec-edges for Beta vot
 the signed triangles of @sec-normal for normal voters.
 
 *Bullet voters* (@sec-bullet) need the shares of their method, and next to pairwise or
-score shares also the first-choice shares; the profile has its own.
+score shares also the first-choice shares; the profile has its own. *Burying voters*
+(@sec-burial) need the first-choice shares of the poll, the profile for pairwise shares,
+and next to score shares what burying takes back, $t_(i j)$. That share costs a pass
+over the voter grid of its own, about 1.6 to 1.8 times that of the part not given, since
+the cells the bisectors cross are averaged too: with five candidates Score takes about
+0.1 s more with burying voters, with eight about 0.3 s.
 
 *Score shares.* Score uses the part of the top score the voters do not give
 each candidate. The regions of these voters have curved borders, so their shares have no

@@ -25,7 +25,10 @@ exact shares where there are some (two candidates get the top score from their f
 choices and 0 from the others, and with two levels the closest candidate is approved
 and the farthest is not) and with sampled voters elsewhere. They are computed as the
 part of the top score not given, which must stay exact where it is tiny: the lead
-between two candidates nearly all voters give the top score.
+between two candidates nearly all voters give the top score. What burying takes back,
+the points a candidate gets from the voters who rank another above it, is checked like
+the part not given: the mean of each rectangle, against sampled voters, and against
+exact bounds (with two candidates the one ranked lower gets nothing).
 """
 
 from itertools import combinations, combinations_with_replacement, product
@@ -35,10 +38,10 @@ import pytest
 from scipy.special import ndtr
 
 from yeelab import ranking_cells
-from yeelab.margin.shares import (GRID_CELLS, Model, _voter_grid, first_choice_shares, ranking_shares,
-                                  unscored_shares)
+from yeelab.margin.shares import (GRID_CELLS, Model, _voter_grid, buried_shares, first_choice_shares,
+                                  pairwise_shares, ranking_shares, unscored_shares)
 from yeelab.score import (AVG, CLUSTER, DELTA, DHONDT, HYBRID, KAPPA, MAX_CANDIDATES, MAX_LEVELS, MU, POWER, RANGE,
-                          RULES, comparisons, distances, from_distances, scored, unscored)
+                          RULES, comparisons, distances, from_distances, given, scored, unscored)
 
 FIVE = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
 CANDIDATES = {2: np.random.default_rng(5).random((2, 2)), 3: np.random.default_rng(3).random((3, 2)),
@@ -583,6 +586,41 @@ def test_unscored_is_the_mean_of_each_rectangle(levels, rule):
     assert (short[~whole] % 1 != 0).any()
 
 
+def _given_by(points, candidates, levels, rule=RANGE):
+    """G[..., c, e] = points the voter at each of the points gives c if they rank e above it
+    (closer, ties: the lower index first), else 0, from scored() and the order of
+    distance."""
+    rank = np.argsort(np.argsort(distances(points, candidates), axis=-1, kind="stable"), axis=-1)
+    points_ = scored(points, candidates, levels, rule)
+    return np.where(rank[..., None, :] < rank[..., :, None], points_[..., :, None], 0)
+
+
+@pytest.mark.parametrize("rule", RULES)
+@pytest.mark.parametrize("levels", [2, 6])
+def test_given_is_the_mean_of_each_rectangle(levels, rule):
+    """A rectangle with one ballot and one order of distance at its four corners holds
+    that ballot; the others the mean of the ballots at their sub x sub points."""
+    xs, ys, sub = np.linspace(0, 1, 41) ** 1.3, np.linspace(-0.2, 1.1, 31), 4
+    short = np.moveaxis(given(xs, ys, FIVE, levels, sub, rule), (0, 1), (-2, -1))
+    assert short.shape == (40, 30, 5, 5) and short.dtype == np.float32
+    grid_points = np.stack(np.meshgrid(xs, ys, indexing="ij"), axis=-1)
+    ballots = scored(grid_points, FIVE, levels, rule)
+    order = np.argsort(distances(grid_points, FIVE), axis=-1, kind="stable")
+    corners = np.concatenate([ballots, order], axis=-1)
+    whole = ((corners[:-1, :-1] == corners[1:, :-1]) & (corners[:-1, :-1] == corners[:-1, 1:])
+             & (corners[:-1, :-1] == corners[1:, 1:])).all(axis=-1)
+    assert 0.1 < whole.mean() < 1
+    np.testing.assert_array_equal(short[whole], _given_by(grid_points, FIVE, levels, rule)[:-1, :-1][whole])
+
+    at = (np.arange(sub) + 0.5) / sub
+    inner_x = (xs[:-1, None] + at * np.diff(xs)[:, None]).ravel()
+    inner_y = (ys[:-1, None] + at * np.diff(ys)[:, None]).ravel()
+    inner = _given_by(np.stack(np.meshgrid(inner_x, inner_y, indexing="ij"), axis=-1), FIVE, levels, rule)
+    mean = inner.reshape(40, sub, 30, sub, 5, 5).mean(axis=(1, 3))
+    np.testing.assert_allclose(short[~whole], mean[~whole], rtol=0, atol=1e-6)
+    assert (short[..., range(5), range(5)] == 0).all()
+
+
 def test_unscored_rejects_what_it_cannot_do():
     lines = np.linspace(0, 1, 5)
     with pytest.raises(ValueError, match="score ballots need 2 to 15 candidates, got 1"):
@@ -730,3 +768,32 @@ def test_more_levels_come_closer_to_the_part_of_the_way_itself(model):
             shares = unscored_shares(candidates, model, levels, model.medians)[node]
             assert np.abs(shares - exact).max() <= 0.5 / (levels - 1) + 5e-3
         assert np.abs(shares - exact).max() < 0.02  # 16 levels
+
+
+@pytest.mark.parametrize("model", MODELS, ids=_ids)
+def test_buried_shares_match_sampled_voters(model):
+    """The part of the top score that the voters who rank e above c give c."""
+    rng = np.random.default_rng(9)
+    for n, levels in ((5, 2), (5, 6), (7, 11)):
+        shares = buried_shares(CANDIDATES[n], model, model.medians, levels)
+        assert shares.shape == (model.nodes, model.nodes, n, n)
+        for node in NODES:
+            sampled = _given_by(_sample(model, node, rng), CANDIDATES[n], levels).mean(axis=0) / (levels - 1)
+            np.testing.assert_allclose(shares[node], sampled, rtol=0, atol=5e-3)  # 6 standard errors
+
+
+@pytest.mark.parametrize("model", MODELS, ids=_ids)
+def test_burying_takes_back_at_most_what_was_given_by_those_who_rank_another_higher(model):
+    """What c gets from the voters who rank e above it is at most their share, and at
+    most all c gets; with two candidates the one ranked lower is the farthest and gets
+    nothing, by every rule and at any number of levels."""
+    for levels, rule in product((2, 6), RULES):
+        assert np.abs(buried_shares(CANDIDATES[2], model, model.medians, levels, rule)).max() < 1e-12
+    candidates = CANDIDATES[5]
+    above = pairwise_shares(candidates, model)  # [c, e]: c ranked above e
+    for levels in (2, 6):
+        shares = buried_shares(candidates, model, model.medians, levels)
+        assert (shares >= 0).all()
+        assert (shares <= np.swapaxes(above, -1, -2) + TOLERANCE).all()
+        given_all = 1 - unscored_shares(candidates, model, levels, model.medians)
+        assert (shares <= given_all[..., :, None] + TOLERANCE).all()

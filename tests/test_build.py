@@ -36,6 +36,11 @@ others equal below it, where equal candidates share the mean points of their pos
 and acquiesce to every set that holds the first choice. No bullet voters must be the
 method itself, bit for bit, and where all voters bullet vote every method must elect the
 candidate with the most first choices.
+Burial(method, share) is checked against the method itself on the profile where every
+ranking comes twice, as it is and with the frontrunner it ranks lower moved last, on the
+points of each pair of frontrunners, the score shares taking back what the burying
+voters gave; its margin is at most the poll's. It changes no first choice and not the
+head-to-head of the frontrunners, so FPTP and the two-round system stay as they are.
 
 Wrong blocks must fail when built, and every method must print as the expression
 that builds it.
@@ -55,6 +60,8 @@ from yeelab.build import (
     PROFILE,
     BordaCount,
     Bullet,
+    Burial,
+    Buried,
     DescendingCoalitions,
     Eliminate,
     Fallback,
@@ -116,7 +123,7 @@ def _voters(rankings, probs):
     position = np.argsort(rankings, axis=1)
     prefers = position[:, :, None] < position[:, None, :]
     d = probs @ prefers.reshape(len(rankings), -1)
-    d = d.reshape(*probs.shape[:2], rankings.shape[1], rankings.shape[1])
+    d = d.reshape(*probs.shape[:-1], rankings.shape[1], rankings.shape[1])
     return Voters(first, d, rankings, probs)
 
 
@@ -1345,6 +1352,140 @@ def test_a_bullet_share_is_a_share(share):
         Bullet(METHODS["irv"], share=share)
 
 
+BURIAL = 0.4  # the share of the voters who bury, where any share will do
+POLL = Highest(Tally(Plurality()), n=2)
+BURIED_METHODS = [name for name in METHODS if name != "star"]
+
+
+def _burial_shares(rankings, probs, seed=0):
+    """_every_share, and random parts of the top score taken back by burying."""
+    voters = _every_share(rankings, probs, seed)
+    rng = np.random.default_rng(seed + 1)
+    n = rankings.shape[1]
+    taken = rng.random((*voters.shape, n, n)) * (1 - np.eye(n))
+    return replace(voters, buried={Buried(SCORE_BALLOT.scored): taken})
+
+
+def _buried_profile(rankings, probs, share, a, b):
+    """Every ranking twice: as it is with 1 - share of its voters, and with share of them
+    with the one of a and b it ranks lower moved last."""
+    buried = []
+    for ranking in rankings.tolist():
+        lower = a if ranking.index(a) > ranking.index(b) else b
+        buried.append([c for c in ranking if c != lower] + [lower])
+    return (np.concatenate([rankings, np.array(buried, dtype=rankings.dtype)]),
+            np.concatenate([(1 - share) * probs, share * probs], axis=-1))
+
+
+def _pairs(voters):
+    """The frontrunners of every point as a bit mask, and the poll's margin."""
+    chosen, gap = POLL.select(voters)
+    return chosen @ (1 << np.arange(voters.n_candidates)), gap
+
+
+@pytest.mark.parametrize("name", BURIED_METHODS)
+def test_burial_is_the_method_on_buried_rankings(profile, name):
+    """On the points of each pair of frontrunners a and b: the method on the profile of
+    every ranking as it is and buried, from which _voters derives the first-choice and
+    pairwise shares, and the part of the top score not given to a and b raised by what
+    the burying voters gave them. The margin is the smaller of that one and the poll's."""
+    rankings, probs = profile
+    voters, method, n = _burial_shares(rankings, probs), METHODS[name], rankings.shape[1]
+    winner, margin = Burial(method, BURIAL).evaluate(voters)
+    pairs, gap = _pairs(voters)
+    expected, expected_margin = np.empty_like(winner), np.empty_like(margin)
+    key = SCORE_BALLOT.scored
+    for pair in np.unique(pairs):
+        at = pairs == pair
+        a, b = np.flatnonzero((pair >> np.arange(n)) & 1)
+        unscored, taken = voters.unscored[key][at].copy(), voters.buried[Buried(key)][at]
+        unscored[:, a] += BURIAL * taken[:, a, b]
+        unscored[:, b] += BURIAL * taken[:, b, a]
+        buried = replace(_voters(*_buried_profile(rankings, probs[at], BURIAL, a, b)), unscored={key: unscored})
+        expected[at], expected_margin[at] = method.evaluate(buried)
+    expected_margin = np.minimum(expected_margin, gap)
+    clear = expected_margin > TOLERANCE
+    assert clear.mean() > 0.5  # not vacuous
+    np.testing.assert_array_equal(winner[clear], expected[clear])
+    np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-5)
+    assert (margin <= gap).all()
+
+
+def test_the_shares_of_burying_voters(profile):
+    """No first choice changes, nor the head-to-head of the frontrunners; the pairwise
+    shares are those of the buried rankings, and only the pairs of a frontrunner with a
+    third candidate change."""
+    rankings, probs = profile
+    voters, n = _voters(rankings, probs), rankings.shape[1]
+    for a, b in ((0, 1), (n - 1, 0)):
+        buried = voters.burying(BURIAL, a, b)
+        expected = _voters(*_buried_profile(rankings, probs, BURIAL, a, b))
+        np.testing.assert_array_equal(buried.first, voters.first)
+        np.testing.assert_allclose(expected.first, voters.first, rtol=0, atol=1e-6)
+        np.testing.assert_allclose(buried.pairwise, expected.pairwise, rtol=0, atol=1e-6)
+        np.testing.assert_array_equal(buried.pairwise[..., a, b], voters.pairwise[..., a, b])
+        others = np.setdiff1d(np.arange(n), [a, b])
+        np.testing.assert_array_equal(buried.pairwise[..., others[:, None], others], voters.pairwise[..., others[:, None], others])
+        np.testing.assert_array_equal(buried.rankings, expected.rankings)
+        np.testing.assert_allclose(buried.probs, expected.probs, rtol=1e-6, atol=0)
+
+
+@pytest.mark.parametrize("name", ["fptp", "two_round"])
+def test_burial_keeps_fptp_and_the_two_round_system(profile, name):
+    """Burial changes no first choice, and the frontrunners are the two-round system's
+    finalists, whose head-to-head it keeps: the same winners and, for the two-round
+    system, whose margin already holds the poll's, the same margins."""
+    voters, method = _voters(*profile), METHODS[name]
+    winner, margin = method.evaluate(voters)
+    buried, buried_margin = Burial(method, BURIAL).evaluate(voters)
+    np.testing.assert_array_equal(buried, winner)
+    expected = margin if name == "two_round" else np.minimum(margin, _pairs(voters)[1])
+    np.testing.assert_array_equal(buried_margin, expected)
+
+
+@pytest.mark.parametrize("name", BURIED_METHODS)
+def test_no_burying_voters_is_the_method_itself(profile, name):
+    voters, method = _burial_shares(*profile), METHODS[name]
+    assert Burial(method, 0).needs == method.needs
+    for result, expected in zip(Burial(method, 0).evaluate(voters), method.evaluate(voters)):
+        np.testing.assert_array_equal(result, expected)
+
+
+def test_burying_and_bullet_voting_go_together(profile):
+    """30% bullet vote and 40% of the rest bury: the bullet ballots, which rank all but
+    their first choice equal, stay as they are."""
+    voters = _burial_shares(*profile)
+    for name in ("irv", "dac", "borda", "score"):
+        method = METHODS[name]
+        for result, expected in zip(Burial(Bullet(method, 0.3), 0).evaluate(voters),
+                                    Bullet(method, 0.3).evaluate(voters)):
+            np.testing.assert_array_equal(result, expected)
+        for strategic in (Burial(Bullet(method, 0.3), BURIAL), Bullet(Burial(method, BURIAL), 0.3)):
+            winner, margin = strategic.evaluate(voters)
+            assert winner.shape == voters.shape and (margin >= 0).all()
+
+
+def test_burial_cannot_bury_on_score_comparisons():
+    with pytest.raises(ValueError, match=re.escape("Burial cannot bury on score comparisons (STAR)")):
+        Burial(METHODS["star"], 0.5)
+    assert _burial_shares(*_profiles(3, 2)).burying(0.5, 0, 1).scored_pairwise is None  # left out
+
+
+def test_the_poll_names_two_frontrunners():
+    with pytest.raises(ValueError, match=re.escape("Burial poll must choose two candidates, the frontrunners")):
+        Burial(METHODS["borda"], 0.5, poll=METHODS["fptp"])
+    with pytest.raises(TypeError, match=re.escape("Burial expects a Winner as poll, got CandidateTotals")):
+        Burial(METHODS["borda"], 0.5, poll=Tally(Plurality()))
+    other = Burial(METHODS["borda"], 0.5, poll=Highest(Tally(BordaCount()), n=2))
+    assert other.needs == {PAIRWISE, PROFILE}
+
+
+@pytest.mark.parametrize("share", [-0.1, 1.5, float("nan")])
+def test_a_burial_share_is_a_share(share):
+    with pytest.raises(ValueError, match=re.escape(f"Burial share must be between 0 and 1, got {share!r}")):
+        Burial(METHODS["irv"], share=share)
+
+
 def test_bullet_voting_on_pairwise_shares_needs_the_first_choices():
     d = np.full((1, 3, 3), 0.5) * (1 - np.eye(3))
     with pytest.raises(ValueError, match="needs the first-choice shares"):
@@ -1502,8 +1643,10 @@ def test_repr_is_the_expression():
     unions = [fptp | irv | borda, fptp | (irv | borda), Fallback(Highest(Tally(BY_MEAN), n=3), fptp | irv)]
     among = [Schedules(Tally(BordaCount())), Highest(Weakest(Margins(Pairwise())), among=fptp | irv),
              Eliminate(Tally(Plurality()), how="all", among=Schedules(Tally(Plurality())))]
-    bullets = [Bullet(METHODS["irv"], 0.3), Bullet(fptp | irv, share=1), Bullet(Bullet(METHODS["star"], 0.5), 0.25)]
+    bullets = [Bullet(METHODS["irv"], 0.3), Bullet(fptp | irv, share=1), Bullet(Bullet(METHODS["star"], 0.5), 0.25),
+               Burial(METHODS["borda"], 0.5), Burial(Bullet(irv, 0.2), 1, poll=Highest(Tally(BordaCount()), n=2))]
     assert repr(bullets[0]) == 'Bullet(Eliminate(Tally(Plurality()), how="min"), share=0.3)'
+    assert repr(bullets[3]) == "Burial(Highest(Tally(BordaCount())), share=0.5)"
     for method in [*METHODS.values(), *ELIMINATIONS, *FINALISTS, *BALLOTS, *PAIR_BLOCKS, challenged, *RUNOFFS,
                    *unions, *among, *bullets]:
         assert eval(repr(method)) == method
@@ -1570,6 +1713,19 @@ def test_bullet_needs_the_first_choices_for_pairwise_and_score_shares():
         assert Bullet(METHODS[name], 0.5).needs == needs, name
         assert Bullet(METHODS[name], 0).needs == METHODS[name].needs, name
     assert Bullet(METHODS["fptp"] | METHODS["irv"], 0.5).seats is None
+    assert Bullet(Burial(METHODS["score"], 0.5), 0.5).needs == {Scored(6, power=1.5), Buried(Scored(6, power=1.5)),
+                                                              FIRST}
+
+
+def test_burial_needs_the_poll_the_profile_for_pairwise_shares_and_what_burying_takes_back():
+    scored = Scored(6, power=1.5)
+    for name, needs in (("fptp", {FIRST}), ("irv", {PROFILE, FIRST}), ("dac", {PROFILE, FIRST}),
+                        ("borda", {PAIRWISE, PROFILE, FIRST}), ("koth", {PAIRWISE, PROFILE, FIRST}),
+                        ("score", {scored, Buried(scored), FIRST}),
+                        ("irv_set_koth_score", {PROFILE, FIRST, PAIRWISE, scored, Buried(scored)})):
+        assert Burial(METHODS[name], 0.5).needs == needs, name
+        assert Burial(METHODS[name], 0).needs == METHODS[name].needs, name
+    assert Burial(Highest(Tally(Plurality()), n=2), 0.5).seats == 2
     assert Bullet(Highest(Tally(Plurality()), n=2), 0.5).seats == 2
 
 
@@ -1642,6 +1798,7 @@ def test_unbeaten_against_needs_the_shares_of_all_three():
      "Schedules expects a Tally (it tallies the remaining candidates again), got CandidateTotals"),
     (lambda: Bullet(Tally(Plurality()), share=0.5), "Bullet expects a Winner, got CandidateTotals: Tally(Plurality())"),
     (lambda: Bullet(Plurality(), share=0.5), "Bullet expects a Winner, got a Ballot: Plurality()"),
+    (lambda: Burial(Tally(BordaCount()), share=0.5), "Burial expects a Winner, got CandidateTotals: Tally(BordaCount())"),
 ])
 def test_wrong_blocks_fail_when_built(build, message):
     with pytest.raises(TypeError, match=re.escape(message)):

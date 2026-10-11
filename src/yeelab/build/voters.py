@@ -18,6 +18,9 @@ only those at the points of its grid.
                 not kept itself: where nearly all voters give two candidates the top
                 score, both mean scores are the top score to rounding, and only the
                 parts not given tell them apart
+    buried      {Buried(scored): b[..., c, e] = mean part of the top score that the voters
+                who rank e above c give c on that score ballot (..., C, C)}: what c loses
+                where those voters bury it (Voters.burying)
 """
 
 from dataclasses import dataclass, replace
@@ -50,7 +53,15 @@ class ScoredPairwise:
     scored: Scored
 
 
-Share = Literal["first", "pairwise", "profile"] | Scored | ScoredPairwise
+@dataclass(frozen=True)
+class Buried:
+    """What each candidate loses on the score ballot `scored` where the voters who rank
+    another above it bury it, giving it 0."""
+
+    scored: Scored
+
+
+Share = Literal["first", "pairwise", "profile"] | Scored | ScoredPairwise | Buried
 FIRST: Share = "first"
 PAIRWISE: Share = "pairwise"
 PROFILE: Share = "profile"
@@ -67,6 +78,66 @@ class Voters:
     unscored: dict[Scored, np.ndarray] | None = None
     scored_pairwise: dict[ScoredPairwise, np.ndarray] | None = None
     bullet: np.ndarray | None = None
+    buried: dict[Buried, np.ndarray] | None = None
+
+    def at(self, points: np.ndarray) -> "Voters":
+        """The voters of the points marked in `points` (...,) bool, in a row (P,)."""
+        def pick(shares):
+            if shares is None:
+                return None
+            if isinstance(shares, dict):
+                return {key: value[points] for key, value in shares.items()}
+            return shares[points]
+
+        return Voters(pick(self.first), pick(self.pairwise), self.rankings, pick(self.probs), pick(self.unscored),
+                      pick(self.scored_pairwise), pick(self.bullet), pick(self.buried))
+
+    def burying(self, share: float, a: int, b: int) -> "Voters":
+        """These voters with `share` of them, at every point, burying whichever of the
+        frontrunners a and b they rank lower: they rank it last, and on a score ballot
+        give it 0. The rest, and the bullet ballots, which rank it among the last already,
+        vote as before; share 0 is these voters themselves. No first choice changes: no one buries
+        their first choice. With s the share:
+
+            profile   the rankings keep (1 - s) of their shares, and each also comes
+                      buried, with s of them
+            pairwise  d + s (the shares of the buried rankings minus those of the
+                      rankings, from the profile): only the pairs of a or b with a third
+                      candidate change
+            unscored  u[a] + s buried[a, b] and u[b] + s buried[b, a]: a burying voter
+                      takes back what they gave the frontrunner they rank lower
+
+        The pairwise shares need the profile and the score shares `buried`. Score
+        comparisons are not buried: they are left out."""
+        if share == 0:
+            return self
+        changed = {"scored_pairwise": None}  # not buried, so left out (blocks.Burial: no STAR)
+        if self.probs is not None:
+            rankings = np.asarray(self.rankings)
+            position = np.argsort(rankings, axis=1)
+            lower = np.where(position[:, a] > position[:, b], a, b)  # the one each ranking buries
+            keep = rankings != lower[:, None]
+            buried = np.column_stack([rankings[keep].reshape(len(rankings), -1), lower]).astype(rankings.dtype)
+            changed["rankings"] = np.concatenate([rankings, buried])
+            changed["probs"] = np.concatenate([(1 - share) * self.probs, share * self.probs], axis=-1)
+        if self.pairwise is not None:
+            if self.probs is None:
+                raise ValueError("burial on pairwise shares needs the profile")
+            moved = _prefers(changed["rankings"][len(rankings):]) - _prefers(rankings)
+            change = (self.probs @ moved.astype(self.probs.dtype)).reshape(self.pairwise.shape)
+            changed["pairwise"] = self.pairwise + share * change
+        if self.unscored:
+            unscored = {}
+            for key, u in self.unscored.items():
+                taken = self.buried.get(Buried(key)) if self.buried else None
+                if taken is None:
+                    raise ValueError(f"burial on score shares needs what burying takes back, {Buried(key)}")
+                u = np.array(u)
+                u[..., a] += share * taken[..., a, b]
+                u[..., b] += share * taken[..., b, a]
+                unscored[key] = u
+            changed["unscored"] = unscored
+        return replace(self, **changed)
 
     def bulleted(self, share: float) -> "Voters":
         """These voters with `share` of them, at every point, bullet voting: they rank
@@ -108,6 +179,8 @@ class Voters:
                 lead = f[..., :, None] - f[..., None, :]
                 changed["scored_pairwise"] = {key: (1 - share) * x + share * lead
                                               for key, x in self.scored_pairwise.items()}
+        if self.buried:  # a bullet voter gives no one but their first choice a point
+            changed["buried"] = {key: (1 - share) * b for key, b in self.buried.items()}
         return replace(self, **changed)
 
     @property
@@ -135,3 +208,9 @@ class Voters:
         if self.rankings is not None:
             return self.rankings.shape[1]
         return self._marked.shape[-1]
+
+
+def _prefers(rankings: np.ndarray) -> np.ndarray:
+    """P[r, c * C + e] = 1 where ranking r (R, C) ranks c above e, else 0, (R, C * C)."""
+    position = np.argsort(rankings, axis=1)
+    return (position[:, :, None] < position[:, None, :]).reshape(len(rankings), -1).astype(np.int8)

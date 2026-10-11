@@ -33,10 +33,11 @@ web UI steps through these to move the diagram between the two.
 import contourpy
 import numpy as np
 
-from yeelab.build import FIRST, METHODS, PAIRWISE, PROFILE, Scored, ScoredPairwise, Share, Voters, Winner
+from yeelab.build import FIRST, METHODS, PAIRWISE, PROFILE, Buried, Scored, ScoredPairwise, Share, Voters, Winner
 from yeelab.margin.geometric import PIXEL_MEDIAN, PixelMedian, geometric_medians
 from yeelab.margin.shares import (
     Model,
+    buried_shares,
     first_choice_shares,
     pairwise_shares,
     ranking_shares,
@@ -101,6 +102,14 @@ def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Vote
                                            share.scored.rule, share.scored.delta, mu=share.scored.mu,
                                            kappa=share.scored.kappa, power=share.scored.power)
             for share in score_pairs
+        }
+    taken = [share for share in needs if isinstance(share, Buried)]
+    if taken:
+        shares["buried"] = {
+            share: buried_shares(candidates, model, medians, share.scored.levels, share.scored.rule,
+                                 share.scored.delta, mu=share.scored.mu, kappa=share.scored.kappa,
+                                 power=share.scored.power)
+            for share in taken
         }
     return Voters(**shares)
 

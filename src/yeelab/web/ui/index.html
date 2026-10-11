@@ -143,7 +143,8 @@
     let power = 0;           // their part of the way is raised to this power
     let strategy = null;     // how the voters vote: "sincere", or a strategy of a share of them
     let strategic = 0;       // that share, from 0 to 1
-    let strategyLabels = {}; // strategy name -> label shown in the UI
+    let strategyPhrases = {}; // strategy name -> what the status line says of it
+    let unsupported = {};    // strategy name -> the methods it cannot do
     let voters = {};      // deviation -> {sigma, beta_params} from the backend, where
                           // beta_params is [a, b] along one axis, per pixel
     let hovered = [0.5, 0.5];  // point whose voters are shown in the strip and the shade
@@ -548,7 +549,7 @@
       if (scoreMethods.includes(method)) name += `, ${levels} categories${levels === 2 ? " (approval)" : ""}`;
       if (scoreMethods.includes(method)) name += `, p = ${power.toFixed(2)}`;
       if (strategy !== "sincere" && method !== "voronoi")
-        name += ` · ${Math.round(100 * strategic)}% ${strategyLabels[strategy].toLowerCase()} voting`;
+        name += ` · ${Math.round(100 * strategic)}% ${strategyPhrases[strategy]}`;
       if (method === "voronoi") {  // nearest candidate, no voters involved but for where it is drawn
         const where = geometric() ? " · only where voters have their geometric median" : "";
         message.textContent = `${name}${where}${tail}`;
@@ -628,6 +629,7 @@
     function choices(row, options, pick, group = [row]) {
       for (const { name, label = name, tex, description = "" } of options) {
         const button = document.createElement("button");
+        button.dataset.name = name;
         if (tex) typeset(button, { label, tex });
         else button.textContent = label;
         button.title = description;
@@ -655,9 +657,13 @@
     }
 
     // The voters vote by a strategy only in an election: not in the Voronoi diagram, which has
-    // none. The share slider only applies to a strategy other than sincere voting.
+    // none, and not in a method the strategy cannot do; neither can be picked while the other is.
+    // The share slider only applies to a strategy other than sincere voting.
     function updateStrategies() {
-      for (const button of strategies.querySelectorAll("button")) button.disabled = method === "voronoi";
+      for (const button of strategies.querySelectorAll("button"))
+        button.disabled = method === "voronoi" || (unsupported[button.dataset.name] ?? []).includes(method);
+      for (const button of methods.querySelectorAll("button"))
+        button.disabled = (unsupported[strategy] ?? []).includes(button.dataset.name);
       strategicSlider.disabled = strategy === "sincere" || method === "voronoi";
     }
 
@@ -719,7 +725,8 @@
     // The strategy of the voters, and the share of them who vote by it. The slider recomputes
     // like the others.
     choices(strategies, config.strategies, name => { strategy = name; updateStrategies(); });
-    strategyLabels = Object.fromEntries(config.strategies.map(({ name, label }) => [name, label]));
+    strategyPhrases = Object.fromEntries(config.strategies.map(({ name, phrase }) => [name, phrase]));
+    unsupported = config.unsupported;
     strategy = config.strategies[0].name;
     strategies.querySelector("button").classList.add("active");
     function pickStrategic() {

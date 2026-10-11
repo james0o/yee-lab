@@ -391,3 +391,23 @@ def score_comparison_shares(candidates, model: Model, medians, levels: int,
             comparisons[:, :, c, e] = mass @ short[c, e] @ mass.T
             comparisons[:, :, e, c] = -comparisons[:, :, c, e]
     return comparisons
+
+
+def buried_shares(candidates, model: Model, medians, levels: int,
+                  rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
+                  mu: float = score.MU, kappa: float = score.KAPPA,
+                  power: float = score.POWER) -> np.ndarray:
+    """buried[i, j, c, e] = mean part of the top score that the voters with median
+    (medians[i], medians[j]) who rank e above c give c (score.given), shape (M, M, C, C):
+    what the mean score of c loses where they bury it. 0 for e = c. On the voter grid,
+    like unscored_shares."""
+    lines, mass = _voter_grid(model, medians)
+    short = score.given(lines, lines, candidates, levels, GRID_SUB, rule, delta, mu=mu, kappa=kappa,
+                        power=power)
+    n, m = len(candidates), len(medians)
+    buried = np.zeros((m, m, n, n))
+    for c in range(n):
+        for e in range(n):
+            if e != c:
+                buried[:, :, c, e] = mass @ short[c, e].astype(np.float64) @ mass.T
+    return buried / (levels - 1)
