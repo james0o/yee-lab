@@ -11,7 +11,7 @@ against a Python reference of its definition, black against "the Condorcet winne
 else Borda". koth (king of the hill) is checked against a Python reference of its rule,
 winner and margin, on the profiles and on random first-choice and pairwise shares.
 A runoff, Unbeaten(diffs, among=first | second), is checked against a
-Python reference of its duel between the built finalists: king_runoff on the profiles,
+Python reference of its duel between the built finalists: koth against irv on the profiles,
 other finalists (with cycles and ties) on random shares, and two_round and STAR, whose
 finalists are Highest(totals, n=2), likewise. Highest is Eliminate(totals, how="all"),
 and every elimination down to two candidates must keep those of the reference.
@@ -530,14 +530,14 @@ def test_unbeaten_against_a_cycle_stays_a_cycle(d):
     assert (winner == CYCLE).any() and (winner != CYCLE).any()  # not vacuous
 
 
-def test_king_runoff_matches_reference(profile):
+def test_runoff_of_koth_and_irv_matches_reference(profile):
     """The built koth and irv as the finalists, their duel from its rule."""
     rankings, probs = profile
     voters = _voters(rankings, probs)
     koth, irv = METHODS["koth"].evaluate(voters), METHODS["irv"].evaluate(voters)
     d = voters.pairwise.astype(np.float64)
     expected_winner, expected_margin = _runoff_reference(d - np.swapaxes(d, -1, -2), koth, irv)
-    winner, margin = METHODS["king_runoff"].evaluate(voters)
+    winner, margin = _runoff(Margins(Pairwise()), METHODS["koth"], METHODS["irv"]).evaluate(voters)
     clear = expected_margin > TOLERANCE
     assert clear.mean() > 0.5  # not vacuous
     np.testing.assert_array_equal(winner[clear], expected_winner[clear])
@@ -1223,7 +1223,7 @@ def test_condorcet_ties():
         np.testing.assert_array_equal(margin, 0.0, err_msg=name)
 
 
-def test_methods_are_the_sixteen_expressions():
+def test_methods_are_the_fifteen_expressions():
     pairwise = Pairwise()
     margins = Margins(pairwise)
     koth = Unbeaten(margins, against=Highest(Tally(Plurality())), order=Tally(Plurality()))
@@ -1241,13 +1241,12 @@ def test_methods_are_the_sixteen_expressions():
         "minimax": Highest(Weakest(margins)),
         "black": Fallback(Unbeaten(margins), Highest(Tally(BordaCount()))),
         "koth": Unbeaten(margins, against=Highest(Tally(Plurality())), order=Tally(Plurality())),
-        "king_runoff": Unbeaten(margins, among=Union(koth, Eliminate(Tally(Plurality()), how="min"))),
         "score": score,
         "star": Unbeaten(ScoreComparisons(Score(6, power=1.5)), among=Highest(Tally(Score(6, power=1.5)), n=2)),
         "irv_set_koth_score": Highest(Tally(Score(6, power=1.5)), among=Union(Schedules(Tally(Plurality())), koth)),
     }
     assert list(METHODS) == ["fptp", "two_round", "irv", "dac", "borda", "baldwin", "nanson", "schulze",
-                             "condorcet", "minimax", "black", "koth", "king_runoff", "score", "star",
+                             "condorcet", "minimax", "black", "koth", "score", "star",
                              "irv_set_koth_score"]
 
 
@@ -1263,8 +1262,6 @@ def test_repr_is_the_expression():
     assert repr(METHODS["koth"]) == (
         "Unbeaten(Margins(Pairwise()), against=Highest(Tally(Plurality())), order=Tally(Plurality()))")
     koth = "Unbeaten(Margins(Pairwise()), against=Highest(Tally(Plurality())), order=Tally(Plurality()))"
-    assert repr(METHODS["king_runoff"]) == (
-        f'Unbeaten(Margins(Pairwise()), among={koth} | Eliminate(Tally(Plurality()), how="min"))')
     assert repr(METHODS["two_round"]) == (
         "Unbeaten(Margins(Pairwise()), among=Highest(Tally(Plurality()), n=2))")
     assert repr(METHODS["score"]) == "Highest(Tally(Score(6, power=1.5)))"
@@ -1311,7 +1308,7 @@ def test_needs():
     for name in ("borda", "baldwin", "nanson", "schulze", "condorcet", "minimax", "black"):
         assert METHODS[name].needs == {PAIRWISE}, name
     assert METHODS["koth"].needs == {FIRST, PAIRWISE}
-    assert METHODS["king_runoff"].needs == {FIRST, PAIRWISE, PROFILE}
+    assert _runoff(Margins(Pairwise()), METHODS["koth"], METHODS["irv"]).needs == {FIRST, PAIRWISE, PROFILE}
     assert _runoff(Margins(Pairwise()), METHODS["borda"], METHODS["minimax"]).needs == {PAIRWISE}
     assert METHODS["two_round"].needs == {FIRST, PAIRWISE}
     assert Eliminate(Tally(Plurality()), how="min", until=2).needs == {PROFILE}

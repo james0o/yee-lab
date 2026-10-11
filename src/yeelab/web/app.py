@@ -104,9 +104,6 @@ METHOD_INFO = {
     "koth": {"label": "King of the hill", "description": "King of the hill: the candidate with "
              "the most first choices, unless someone beats them head to head; then the one with "
              "the most first choices among those who do."},
-    "king_runoff": {"label": "King runoff", "description": "King runoff: the King of the hill "
-                    "winner against the IRV winner, head to head; the one more voters rank above "
-                    "the other wins."},
     "score": {"label": "Score", "description": "Score: a voter gives the closest candidate the "
               "top score, the farthest 0, and every other one a score by where its distance is "
               "between those two: its part of the way from the farthest to the closest, to the "

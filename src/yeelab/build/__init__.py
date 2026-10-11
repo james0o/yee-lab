@@ -19,8 +19,7 @@
     black   = Fallback(condorcet, borda)
     koth    = Unbeaten(M, against=fptp, order=Tally(Plurality()))  # king of the hill
     # the two finalists head to head; a tie is a draw (no one, voting.CYCLE)
-    two_round   = Unbeaten(M, among=Highest(Tally(Plurality()), n=2))
-    king_runoff = Unbeaten(M, among=koth | irv)
+    two_round = Unbeaten(M, among=Highest(Tally(Plurality()), n=2))
 
     # the highest mean score of 0 to 5, each voter's by where the distance is between the
     # closest and the farthest candidate, that part of the way to the power 1.5

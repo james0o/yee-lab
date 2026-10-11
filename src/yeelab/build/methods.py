@@ -37,8 +37,6 @@ minimax = Highest(Weakest(M))                        # the smallest worst defeat
 black = Fallback(condorcet, borda)                   # the Condorcet winner, else Borda
 # king of the hill: the fptp winner, or the most first choices among those who beat it
 koth = Unbeaten(M, against=fptp, order=Tally(Plurality()))
-# the king of the hill against the irv winner, head to head; a tie is a draw
-king_runoff = Unbeaten(M, among=koth | irv)
 
 # the highest mean score, of 0 to 5: each voter's by where the distance is between the
 # closest and the farthest candidate, that part of the way to the power SCORE_POWER
@@ -66,7 +64,6 @@ METHODS: dict[str, Winner] = {
     "minimax": minimax,
     "black": black,
     "koth": koth,
-    "king_runoff": king_runoff,
     "score": score,
     "star": star,
     "irv_set_koth_score": irv_set_koth_score,
