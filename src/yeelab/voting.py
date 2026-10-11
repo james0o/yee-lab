@@ -2,7 +2,8 @@
 
 The rounds give the IRV winner and its margin together; the margin costs nothing extra,
 and IRV methods built from yeelab.build return both. irv_schedules does the same for
-every way to split the eliminations into rounds (blocks.Schedules).
+every way to split the eliminations into rounds (blocks.Schedules), and
+descending_coalitions for descending acquiescing coalitions (blocks.DescendingCoalitions).
 """
 
 import numpy as np
@@ -107,6 +108,76 @@ def _schedule_points(rankings, probs, chosen, margin):
                     size += 1
                 kept |= 1 << order[k]
         margin[p] = gap
+
+
+@njit(cache=True, nogil=True, error_model="numpy")
+def _coalition_points(prefixes, probs, winner, margin):
+    """descending_coalitions for probs (P, R) into winner (P,) and margin (P,), with
+    prefixes (R, C - 1) the bit masks of the first 1, ..., C - 1 candidates of every
+    ranking.
+
+    A set (a bit mask) cuts the eligible candidates E if it holds some of them but not
+    all; only such a set changes E. Every set with a higher score than one that cuts E
+    holds all of E or none of it by then, so each round takes the highest score of a
+    set that cuts E (ties: the lowest mask) and keeps its part of E. A rival is a set
+    that cuts E and holds none of that part: had it come first, the winner would be one
+    of the candidates the round drops. The round's gap is the top score minus the
+    highest score of a rival; other sets that cut E can come first and leave the winner.
+    """
+    n_ballots, steps = prefixes.shape
+    full = (1 << (steps + 1)) - 1
+    score = np.empty(full)  # of every set but the full one, which never cuts E
+    for p in range(probs.shape[0]):
+        score[:] = 0.0
+        for r in range(n_ballots):
+            for k in range(steps):
+                score[prefixes[r, k]] += probs[p, r]
+        eligible = full
+        gap = np.inf
+        while eligible & (eligible - 1):  # two or more are eligible
+            top, best = 0, -np.inf
+            for s in range(1, full):
+                cut = s & eligible
+                if cut != 0 and cut != eligible and score[s] > best:
+                    top, best = s, score[s]
+            kept = top & eligible
+            rival = -np.inf
+            for s in range(1, full):
+                cut = s & eligible
+                if cut != 0 and cut != eligible and (cut & kept) == 0:
+                    rival = max(rival, score[s])
+            gap = min(gap, best - rival)
+            eligible = kept
+        c = 0
+        while not (eligible >> c) & 1:
+            c += 1
+        winner[p] = c
+        margin[p] = gap
+
+
+def descending_coalitions(rankings: np.ndarray, probs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Descending acquiescing coalitions (blocks.DescendingCoalitions): every set of
+    candidates scores the share of the voters who rank none of the others above any of
+    it, and from the highest score down every set makes the candidates outside it
+    ineligible, unless that leaves no one eligible. Returns (winner, margin) for
+    rankings (R, C) and their shares probs (..., R).
+
+    A complete ranking acquiesces to exactly the sets of its first k candidates, so a
+    set's score is the sum of the shares of the rankings it begins. The margin is the
+    smallest gap of any round: the top score of a set that cuts the eligible candidates
+    minus the highest score of a rival, a set that would leave the winner among the
+    candidates the round drops. Unlike that of IRV it vanishes only where the winner
+    changes.
+    """
+    shape = probs.shape[:-1]
+    flat = np.ascontiguousarray(probs.reshape(-1, probs.shape[-1]))
+    rankings = np.asarray(rankings, dtype=np.int64)
+    prefixes = np.ascontiguousarray(np.bitwise_or.accumulate(1 << rankings, axis=1)[:, :-1])
+    winner = np.empty(len(flat), dtype=np.int64)
+    margin = np.empty(len(flat))
+    threads.in_chunks(lambda a, b: _coalition_points(prefixes, flat[a:b], winner[a:b], margin[a:b]),
+                      len(flat), CHUNK)
+    return winner.reshape(shape), margin.reshape(shape)
 
 
 def irv_schedules(rankings: np.ndarray, probs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

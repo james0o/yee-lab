@@ -1,15 +1,16 @@
 """Voting methods built from small blocks, like in Scratch but with Python constructors:
 
-    from yeelab.build import (BordaCount, Eliminate, Fallback, Highest, Margins, Mix,
-                              Pairwise, Plurality, Schedules, Score, ScoreAvg, ScoreCluster,
-                              ScoreComparisons, ScoreDH, ScoreHybrid, StrongestPaths, Tally,
-                              Unbeaten, Weakest)
+    from yeelab.build import (BordaCount, DescendingCoalitions, Eliminate, Fallback,
+                              Highest, Margins, Mix, Pairwise, Plurality, Schedules, Score,
+                              ScoreAvg, ScoreCluster, ScoreComparisons, ScoreDH, ScoreHybrid,
+                              StrongestPaths, Tally, Unbeaten, Weakest)
 
     borda   = Highest(Tally(BordaCount()))
     fptp    = Highest(Tally(Plurality()))   # = Eliminate(Tally(Plurality()), how="all")
     irv     = Eliminate(Tally(Plurality()), how="min")
     baldwin = Eliminate(Tally(BordaCount()), how="min")
     nanson  = Eliminate(Tally(BordaCount()), how="mean")
+    dac     = DescendingCoalitions()        # descending acquiescing coalitions
 
     M = Margins(Pairwise())
     schulze = Unbeaten(StrongestPaths(M))
@@ -46,6 +47,7 @@ from yeelab.build.blocks import (
     Ballot,
     BordaCount,
     CandidateTotals,
+    DescendingCoalitions,
     Eliminate,
     Fallback,
     Highest,
@@ -73,8 +75,9 @@ from yeelab.build.methods import METHODS
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Scored, ScoredPairwise, Share, Voters
 
 __all__ = [
-    "Ballot", "BordaCount", "CandidateTotals", "Eliminate", "Fallback", "Highest", "Margins", "Mix",
-    "PairDiffs", "PairShares", "Pairwise", "Plurality", "Schedules", "Score", "ScoreComparisons", "ScoreAvg",
-    "ScoreCluster", "ScoreDH", "ScoreHybrid", "StrongestPaths", "Tally", "Unbeaten", "Union", "Weakest",
-    "Winner", "METHODS", "FIRST", "PAIRWISE", "PROFILE", "Scored", "ScoredPairwise", "Share", "Voters",
+    "Ballot", "BordaCount", "CandidateTotals", "DescendingCoalitions", "Eliminate", "Fallback", "Highest",
+    "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise", "Plurality", "Schedules", "Score",
+    "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH", "ScoreHybrid", "StrongestPaths", "Tally",
+    "Unbeaten", "Union", "Weakest", "Winner", "METHODS", "FIRST", "PAIRWISE", "PROFILE", "Scored",
+    "ScoredPairwise", "Share", "Voters",
 ]

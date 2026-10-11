@@ -3,6 +3,7 @@ lists them (margin/regions.py MARGINS)."""
 
 from yeelab.build.blocks import (
     BordaCount,
+    DescendingCoalitions,
     Eliminate,
     Fallback,
     Highest,
@@ -21,6 +22,7 @@ from yeelab.build.blocks import (
 
 fptp = Highest(Tally(Plurality()))                   # first past the post
 irv = Eliminate(Tally(Plurality()), how="min")       # instant runoff
+dac = DescendingCoalitions()                         # descending acquiescing coalitions
 borda = Highest(Tally(BordaCount()))                 # Borda count
 baldwin = Eliminate(Tally(BordaCount()), how="min")  # the lowest Borda score out
 nanson = Eliminate(Tally(BordaCount()), how="mean")  # every Borda score <= the mean out
@@ -55,6 +57,7 @@ METHODS: dict[str, Winner] = {
     "fptp": fptp,
     "two_round": two_round,
     "irv": irv,
+    "dac": dac,
     "borda": borda,
     "baldwin": baldwin,
     "nanson": nanson,

@@ -10,6 +10,8 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
                                       challengers by pairwise shares
     irv                               the whole profile (first choices among every
                                       remaining set)
+    dac                               the whole profile (the first k candidates of
+                                      every ranking, for every k)
     king_runoff                       all three: koth against irv, the duel by pairwise
                                       shares
     irv_set_koth_score                the whole profile for every elimination schedule,

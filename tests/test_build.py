@@ -22,6 +22,10 @@ the highest total among the finalists, and irv_set_koth_score, the highest mean 
 among the schedules' winners and king of the hill, against both with the reference of
 king of the hill. Highest among
 the two with the most first choices, counted again among them, is the two-round system.
+DescendingCoalitions (dac) is checked against a Python reference that scores every set
+by the voters who acquiesce to it and considers the sets from the highest score down; it
+elects every majority's candidate, and its margin bounds how much the shares must change
+to change the winner.
 The score ballots tally the parts of the top score not given they are given, which
 test_score.py checks; here the highest mean score must win (with two levels: the most
 approved candidate), with its lead as the margin. A Mix of two ballots must tally the
@@ -33,7 +37,7 @@ that builds it.
 
 import re
 from dataclasses import FrozenInstanceError
-from itertools import product
+from itertools import permutations, product
 
 import numpy as np
 import pytest
@@ -44,6 +48,7 @@ from yeelab.build import (
     PAIRWISE,
     PROFILE,
     BordaCount,
+    DescendingCoalitions,
     Eliminate,
     Fallback,
     Highest,
@@ -374,7 +379,7 @@ RUNOFFS = [
 ]
 
 
-@pytest.mark.parametrize("name", ["fptp", "irv", "borda", "schulze", "condorcet"])
+@pytest.mark.parametrize("name", ["fptp", "irv", "dac", "borda", "schulze", "condorcet"])
 def test_methods_have_nonnegative_margin_from_profile_shares(profile, name):
     rankings, probs = profile
     winner, margin = METHODS[name].evaluate(_voters(rankings, probs))
@@ -751,6 +756,104 @@ def test_irv_set_koth_score_matches_reference(profile, plurality_schedules):
     np.testing.assert_array_equal(with_[changed], king[changed])
 
 
+def _acquiescing(rankings):
+    """A[r, s]: ranking r (R, C) ranks no candidate outside the set s (a bit mask, 2^C of
+    them) above a candidate in it, (R, 2^C)."""
+    n = rankings.shape[1]
+    position = np.argsort(rankings, axis=1)  # [r, c]
+    inside = ((np.arange(1 << n)[:, None] >> np.arange(n)) & 1).astype(bool)  # [s, c]
+    worst_inside = np.where(inside, position[:, None, :], -1).max(axis=-1)
+    best_outside = np.where(inside, n, position[:, None, :]).min(axis=-1)
+    return worst_inside < best_outside
+
+
+def _dac_reference(rankings, probs):
+    """DescendingCoalitions point by point, from its definition: every set scores the
+    share of the voters who acquiesce to it, and from the highest score down (ties: the
+    lowest mask first) each set makes the candidates outside it ineligible, unless that
+    would leave no one. The margin is the smallest gap of a set that changes the
+    eligible candidates E: its score minus the highest score of a set that would change
+    them too, but keep none of the candidates it keeps."""
+    n = rankings.shape[1]
+    masks = np.arange(1 << n)
+    scores = probs.astype(np.float64) @ _acquiescing(rankings)
+    winner = np.empty(probs.shape[:-1], dtype=np.int64)
+    margin = np.empty(probs.shape[:-1])
+    for point in np.ndindex(*probs.shape[:-1]):
+        score, eligible, gap = scores[point], (1 << n) - 1, np.inf
+        for s in np.argsort(-score, kind="stable"):
+            kept = int(s) & eligible
+            if kept in (0, eligible):  # no one would be left, or no one goes
+                continue
+            cuts = masks & eligible
+            rivals = (cuts != 0) & (cuts != eligible) & ((cuts & kept) == 0)
+            gap = min(gap, score[s] - score[rivals].max())
+            eligible = kept
+        winner[point], margin[point] = eligible.bit_length() - 1, gap
+    return winner, margin
+
+
+def test_dac_matches_reference(profile):
+    rankings, probs = profile
+    expected, expected_margin = _dac_reference(rankings, probs)
+    winner, margin = METHODS["dac"].evaluate(_voters(rankings, probs))
+    clear = expected_margin > TOLERANCE
+    assert clear.mean() > 0.9  # not vacuous
+    np.testing.assert_array_equal(winner[clear], expected[clear])
+    np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-9)
+
+
+def test_dac_elects_the_candidate_of_every_majority(profile):
+    """Where more than half of the voters rank a set of candidates above all others, the
+    winner is one of them; a majority of the first choices is such a set."""
+    rankings, probs = profile
+    voters = _voters(rankings, probs)
+    winner, margin = METHODS["dac"].evaluate(voters)
+    masks = np.arange(1 << rankings.shape[1])
+    majority = probs @ _acquiescing(rankings) > 0.5 + TOLERANCE
+    majority[..., 0] = False  # the empty set: every voter acquiesces to it
+    holds = ((masks >> winner[..., None]) & 1).astype(bool)
+    assert not (majority & ~holds).any()
+    first = voters.first.max(axis=-1) > 0.5
+    size = np.bitwise_count(masks)
+    assert first.any() and (majority & (size > 1) & (size < rankings.shape[1])).any()  # not vacuous
+    np.testing.assert_array_equal(winner[first], voters.first.argmax(axis=-1)[first])
+
+
+def _profiles(n, count, seed=0):
+    """Every ranking of n candidates (n!, n) and random shares of them (count, n!), most
+    of the voters in a few rankings."""
+    rankings = np.array(list(permutations(range(n))))
+    rng = np.random.default_rng(seed + n)
+    return rankings, rng.dirichlet(np.full(len(rankings), 0.3), size=count)
+
+
+@pytest.mark.parametrize("n", [2, 3, 4, 5])
+def test_dac_margin_bounds_the_change_of_shares_that_changes_the_winner(n):
+    """A change of the shares by less than the margin in all (sum of |dp|) keeps the
+    winner: the set of a round and its rival begin no ranking together, so their gap
+    changes by at most that. Between two profiles the winner changes only where the
+    margin is 0, so next to a change it is at most the step along the way."""
+    rankings, probs = _profiles(n, 200)
+    method = DescendingCoalitions()
+    winner, margin = method.evaluate(Voters(rankings=rankings, probs=probs))
+    assert np.isfinite(margin).all() and (margin > 0).all()
+    rng = np.random.default_rng(n)
+    for _ in range(20):
+        dp = rng.normal(size=probs.shape) * (rng.random(probs.shape) < rng.random())
+        dp[np.arange(len(dp)), rng.integers(dp.shape[-1], size=len(dp))] += rng.normal(size=len(dp))
+        dp *= 0.99 * margin[:, None] / np.abs(dp).sum(axis=-1, keepdims=True)
+        np.testing.assert_array_equal(method.evaluate(Voters(rankings=rankings, probs=probs + dp))[0], winner)
+
+    t = np.linspace(0, 1, 401)[:, None, None]
+    path = (1 - t) * probs[:100] + t * probs[100:]
+    winner, margin = method.evaluate(Voters(rankings=rankings, probs=path))
+    change = winner[1:] != winner[:-1]
+    step = (t[1, 0, 0] - t[0, 0, 0]) * np.abs(probs[100:] - probs[:100]).sum(axis=-1)
+    assert change.sum() > 20  # not vacuous
+    assert (np.maximum(margin[1:], margin[:-1]) <= step + 1e-12)[change].all()
+
+
 @pytest.mark.parametrize("d", TOURNAMENTS, ids=lambda d: f"{d.shape[-1]}-candidates")
 def test_unbeaten_among(d):
     """Among all candidates (margin inf) it is Unbeaten itself, bit for bit; among the
@@ -1120,7 +1223,7 @@ def test_condorcet_ties():
         np.testing.assert_array_equal(margin, 0.0, err_msg=name)
 
 
-def test_methods_are_the_fifteen_expressions():
+def test_methods_are_the_sixteen_expressions():
     pairwise = Pairwise()
     margins = Margins(pairwise)
     koth = Unbeaten(margins, against=Highest(Tally(Plurality())), order=Tally(Plurality()))
@@ -1129,6 +1232,7 @@ def test_methods_are_the_fifteen_expressions():
         "fptp": Highest(Tally(Plurality())),
         "two_round": Unbeaten(margins, among=Highest(Tally(Plurality()), n=2)),
         "irv": Eliminate(Tally(Plurality()), how="min"),
+        "dac": DescendingCoalitions(),
         "borda": Highest(Tally(BordaCount())),
         "baldwin": Eliminate(Tally(BordaCount()), how="min"),
         "nanson": Eliminate(Tally(BordaCount()), how="mean"),
@@ -1142,7 +1246,7 @@ def test_methods_are_the_fifteen_expressions():
         "star": Unbeaten(ScoreComparisons(Score(6, power=1.5)), among=Highest(Tally(Score(6, power=1.5)), n=2)),
         "irv_set_koth_score": Highest(Tally(Score(6, power=1.5)), among=Union(Schedules(Tally(Plurality())), koth)),
     }
-    assert list(METHODS) == ["fptp", "two_round", "irv", "borda", "baldwin", "nanson", "schulze",
+    assert list(METHODS) == ["fptp", "two_round", "irv", "dac", "borda", "baldwin", "nanson", "schulze",
                              "condorcet", "minimax", "black", "koth", "king_runoff", "score", "star",
                              "irv_set_koth_score"]
 
@@ -1155,6 +1259,7 @@ def test_repr_is_the_expression():
     assert repr(METHODS["black"]) == (
         "Fallback(Unbeaten(Margins(Pairwise())), Highest(Tally(BordaCount())))")
     assert repr(METHODS["fptp"]) == "Highest(Tally(Plurality()))"
+    assert repr(METHODS["dac"]) == "DescendingCoalitions()"
     assert repr(METHODS["koth"]) == (
         "Unbeaten(Margins(Pairwise()), against=Highest(Tally(Plurality())), order=Tally(Plurality()))")
     koth = "Unbeaten(Margins(Pairwise()), against=Highest(Tally(Plurality())), order=Tally(Plurality()))"
@@ -1202,6 +1307,7 @@ def test_blocks_are_frozen_and_hashable():
 def test_needs():
     assert METHODS["fptp"].needs == {FIRST}
     assert METHODS["irv"].needs == {PROFILE}
+    assert METHODS["dac"].needs == {PROFILE}
     for name in ("borda", "baldwin", "nanson", "schulze", "condorcet", "minimax", "black"):
         assert METHODS[name].needs == {PAIRWISE}, name
     assert METHODS["koth"].needs == {FIRST, PAIRWISE}

@@ -18,6 +18,7 @@ Every block has one type of output:
                      Highest(totals, among=winner),     margin at every point;
                      Eliminate(totals, how=..., until=...),  a method chooses one, its
                      Schedules(Tally(ballot)),          winner
+                     DescendingCoalitions(),
                      Unbeaten(diffs, among=...),
                      Unbeaten(diffs, against=winner, order=totals),
                      Fallback(first, second), first | second
@@ -77,6 +78,11 @@ at once Highest. On first choices that is IRV, FPTP, the top two and all between
 
 the highest mean score among their winners and the king of the hill.
 
+DescendingCoalitions() is descending acquiescing coalitions (DAC): every set of
+candidates scores the share of the voters who rank all of it above all others, and from
+the highest score down each set makes the candidates outside it ineligible, unless
+that would leave no one; the last one eligible wins.
+
 A Winner chooses candidates (select): a mask (..., C) and a margin, >= 0, continuous in
 the shares and 0 wherever the choice changes, since margin/regions.py draws the borders
 as its zero set. Each decision a block takes has a gap, 0 where the decision flips, and
@@ -96,7 +102,7 @@ import numpy as np
 from yeelab.build.rounds import drop_below_mean, drop_lowest
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Scored, ScoredPairwise, Share, Voters
 from yeelab.score import AVG, CLUSTER, DELTA, DHONDT, HYBRID, KAPPA, MU, POWER, RANGE
-from yeelab.voting import CYCLE, irv_rounds, irv_schedules
+from yeelab.voting import CYCLE, descending_coalitions, irv_rounds, irv_schedules
 
 Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) or (chosen, margin) at every point
 HOW = ("min", "mean", "all")  # what Eliminate drops each round
@@ -916,6 +922,33 @@ class Schedules(Winner):
 
     def __repr__(self):
         return f"Schedules({self.totals!r})"
+
+
+@dataclass(frozen=True)
+class DescendingCoalitions(Winner):
+    """Descending acquiescing coalitions (DAC, Woodall). A voter acquiesces to a set of
+    candidates if they rank no candidate outside it above one in it, and every set scores
+    the share of the voters who acquiesce to it. From the highest score down, each set
+    makes the candidates outside it ineligible, unless that would leave no one eligible;
+    when one is left, it wins. On a complete ranking those sets are its first k
+    candidates, all of them ranked above all others, so this is also descending solid
+    coalitions (DSC).
+
+    A candidate with a majority of the first choices wins, and where a majority ranks a
+    set of candidates above all others, one of them wins: two sets with more than half
+    of the voters share some, and a voter's sets are nested, so those sets form a chain
+    and come first.
+
+    The margin is the smallest gap of any round (voting.descending_coalitions): the
+    highest score of a set that would change the eligible candidates minus that of the
+    highest one that would leave none of those it keeps. It is 0 only where the winner
+    changes.
+    """
+
+    needs = frozenset({PROFILE})
+
+    def evaluate(self, voters: Voters) -> Result:
+        return descending_coalitions(voters.rankings, voters.probs)
 
 
 @dataclass(frozen=True)

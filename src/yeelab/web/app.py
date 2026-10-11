@@ -83,6 +83,10 @@ METHOD_INFO = {
                   "voters rank above the other wins."},
     "irv": {"label": "IRV", "description": "Instant runoff: the candidate with the fewest first "
             "choices among the remaining ones is eliminated, round by round, until one is left."},
+    "dac": {"label": "DAC", "description": "Descending acquiescing coalitions: every set of "
+            "candidates scores the share of voters who rank all of it above all other "
+            "candidates. From the highest score down, each set makes the candidates outside it "
+            "ineligible, unless that would leave no one eligible; the last one eligible wins."},
     "borda": {"label": "Borda", "description": "Borda count: a voter gives C − 1 points to their "
               "first choice, C − 2 to the second, …, 0 to the last; the most points win."},
     "baldwin": {"label": "Baldwin", "description": "Baldwin: the candidate with the lowest Borda "

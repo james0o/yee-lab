@@ -705,7 +705,7 @@ independently:
 
 For each evaluated median, a method operates on the voter shares it needs and returns
 the winner and its margin. Most methods need only pairwise or first-choice shares;
-IRV needs the complete ranking profile. Because an electorate is a distribution, the
+IRV and DAC need the complete ranking profile. Because an electorate is a distribution, the
 calculations use shares instead of vote counts.
 
 == First past the post (`fptp`)
@@ -825,6 +825,83 @@ looks at a single defeat and not at paths of defeats.
 *Black.* The Condorcet winner if there is one, otherwise the Borda winner. Every pixel
 has a winner, never a cycle, and like Schulze, Baldwin and Nanson, Black differs from
 the Condorcet winner diagram only where there is a cycle.
+
+== Descending acquiescing coalitions (`dac`) <sec-dac>
+
+This method is only in the web UI as well, built from blocks as
+`DescendingCoalitions()`: Woodall's descending acquiescing coalitions (DAC). A voter
+_acquiesces_ to a set $T$ of candidates if they rank no candidate outside $T$ above one
+in $T$. Every set scores the share of the voters who acquiesce to it, and the sets are
+taken from the highest score down: each makes the candidates outside it ineligible,
+unless that would leave no one eligible. When one candidate is left, it wins.
+
+A complete ranking acquiesces exactly to the sets of its first $k$ candidates, so the
+score of $T$ is the share of the rankings that begin with the members of $T$,
+
+$ a_T = sum_(r: thin {r_1, dots, r_(abs(T))} = T) P(r) . $ <eq-coalition>
+
+For a single candidate that is its first-choice share $s_i$, and for all candidates but
+$c_i$ the share of the voters who rank $c_i$ last. The empty set and the set of all
+candidates get every voter and change nothing. On complete rankings these coalitions are
+also the solid coalitions of Woodall's DSC, so the two methods agree.
+
+*Rounds.* A set changes the eligible candidates $cal(E)$ only if it _cuts_ $cal(E)$: it
+holds some of them but not all. Every set with a higher score than one that cuts
+$cal(E)$ was taken while $cal(E)$ was larger, and holds all of $cal(E)$ or none of it
+since. So the method is a sequence of at most $C - 1$ rounds: the set $T$ with the
+highest score among those that cut $cal(E)$ (ties: the lowest bit mask) keeps
+$cal(E) inter T$. At the median $(0.51, 0.51)$ of @sec-irv-set ($D = 0.3$), where D is a
+centrist squeezed between A and E:
+
+#align(center, table(
+  columns: 4,
+  align: (left, left, right, left),
+  stroke: none,
+  table.hline(),
+  [round], [set $T$], [$a_T$], [eligible after],
+  table.hline(stroke: 0.5pt),
+  [1], [A, B, C, D (E last)], [40.8 %], [A, B, C, D],
+  [2], [A, D (the first two)], [30.9 %], [A, D],
+  [3], [A (first)], [28.2 %], [A],
+  table.hline(),
+))
+
+A wins, narrowly: 27.7 % of the voters rank A last, which is the score of the set of B,
+C, D and E, and would have left D. D beats A head to head (@sec-irv-set), so DAC is not a
+Condorcet method.
+
+*Majorities.* Two sets that more than half of the voters acquiesce to share a voter, and
+the sets one voter acquiesces to are nested. So the sets with more than half of the
+voters form a chain, and they are taken first. A candidate with more than half of the
+first choices therefore wins, and where more than half of the voters rank some set of
+candidates above all others (a mutual majority), one of them wins. In the diagram of
+A–E with the defaults of the UI (Beta voters, `rms`, $D = 0.2$), DAC elects the FPTP
+winner at 97 % of the pixels and the IRV winner at 88 %, and of the pixels with a
+Condorcet winner it elects that winner at 89 %. At $D = 0.3$ these are 88 %, 78 % and 77 %.
+
+*Computing.* The sets are bit masks, $2^C$ of them (256 for 8 candidates). At every
+pixel each ranking adds its share to the $C - 1$ sets it begins (the empty set and the
+full set change nothing), and each round scans the masks for the highest score of a set
+that cuts $cal(E)$. This runs in a compiled loop like that of IRV (@sec-compiled):
+$R (C - 1)$ additions and at most $2 (C - 1) 2^C$ comparisons per pixel. With 8
+candidates that takes about half the time of the IRV rounds.
+
+*Margin.* The winner is in $cal(E) inter T$ for the set $T$ of every round. A _rival_
+of the round is a set $U$ that cuts $cal(E)$ but holds none of $cal(E) inter T$: had it
+come before $T$, the winner would be in $cal(E) inter U$ instead, among the candidates
+the round drops. The gap of the round is
+
+$ a_T - max_U a_U $
+
+over its rivals, and the margin $mu$ is the smallest gap of all rounds. In the example
+the margin is $0.282 - 0.277 = 0.005$, the gap of the last round. A set that cuts $cal(E)$ but is no
+rival can come before $T$ and leave the winner: then the two rounds trade places, they
+reach the same eligible candidates, and their gaps together compare the same scores, so
+$mu$ stays continuous. Unlike the margin of IRV, it vanishes only where a round's set
+ties with a rival, that is, where the winner changes. No ranking begins both $T$ and a
+rival $U$, since the sets it begins are nested and $T$ and $U$ are not. So a change of the
+shares by $delta = sum_r abs(Delta P(r))$ in all moves every gap by at most $delta$, and
+the winner stays while $delta < mu$.
 
 == Score voting (`score`) <sec-score>
 
@@ -2232,7 +2309,8 @@ voters the cells are taken in the box of @sec-normal and summed with Owen's T.
 candidates. In a benchmark with 8 candidates it visited 106 of the 247 sets of two or
 more, so computing sets lazily saves little, and IRV uses the full arrangement. So does
 IRV set + KOTH + Score (@sec-irv-set), which needs the same first choices for its
-schedules.
+schedules, and DAC (@sec-dac), whose coalitions are the first $k$ candidates of every
+ranking.
 
 All three are sums of edge terms: the Green integrals of @sec-edges for Beta voters and
 the signed triangles of @sec-normal for normal voters.
@@ -2316,6 +2394,7 @@ remain are therefore compiled with numba:
   120 ms to 5 ms;
 - the rounds of IRV (@ch-methods), and the schedules of IRV set + KOTH + Score, each set
   of remaining candidates tallied once (@sec-irv-set);
+- the rounds of DAC, on the scores of all sets of candidates as bit masks (@sec-dac);
 - which candidates a round of Baldwin or Nanson drops (`build/rounds.py`); their Borda
   scores (@eq-borda-pairwise) are one `einsum` of numpy per round.
 
@@ -2370,6 +2449,7 @@ $psi_c$ below changes only with the winner:
   [Minimax], [lead of the top weakest link over the second],
   [Black], [as the Condorcet winner; in a cycle the smaller of that and the margin of Borda],
   [IRV], [smallest gap between the two lowest tallies over all rounds],
+  [DAC], [smallest gap over all rounds between the set taken and its highest rival],
   [Baldwin], [smallest gap between the two lowest Borda scores over all rounds],
   [Nanson], [smallest distance of a Borda score from the mean over all rounds],
   [Score], [lead of the top mean score over the second],
@@ -2381,10 +2461,10 @@ All methods are built from blocks (`yeelab.build`), and the margin is never put 
 by hand: every block that decides computes the gap of its decision, and the margin is the
 smallest of them. `Highest` has the lead of the top score (with `among`, among the
 candidates chosen, and their margin), `Eliminate` the gap of each round, `Schedules`
-that of every round of every schedule, `Unbeaten` the gaps below and `Fallback` those of
-the method that decides. Baldwin and Nanson are in @sec-baldwin-nanson, Minimax and
-Black in @sec-minimax-black, the score methods in @sec-score and IRV set + KOTH + Score
-in @sec-irv-set.
+that of every round of every schedule, `DescendingCoalitions` that of every round,
+`Unbeaten` the gaps below and `Fallback` those of the method that decides. Baldwin and
+Nanson are in @sec-baldwin-nanson, Minimax and Black in @sec-minimax-black, DAC in
+@sec-dac, the score methods in @sec-score and IRV set + KOTH + Score in @sec-irv-set.
 
 *IRV.* On each side of a curve where some round's two lowest tallies tie, the gap of
 that round tends to $0$. So $mu$ is continuous, and it vanishes on every curve where an
