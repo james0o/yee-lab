@@ -1,6 +1,7 @@
 """Voting methods built from small blocks, like in Scratch but with Python constructors:
 
-    from yeelab.build import (BordaCount, Bullet, Burial, Compromise, DescendingCoalitions, Eliminate, Fallback,
+    from yeelab.build import (AntiPlurality, BordaCount, Bullet, Burial, Compromise, DescendingCoalitions,
+                              Eliminate, Fallback,
                               Highest, Margins, Mix, Pairwise, Plurality, Schedules, Score,
                               ScoreAvg, ScoreCluster, ScoreComparisons, ScoreDH, ScoreHybrid,
                               StrongestPaths, Tally, Unbeaten, Weakest)
@@ -11,6 +12,7 @@
     baldwin = Eliminate(Tally(BordaCount()), how="min")
     nanson  = Eliminate(Tally(BordaCount()), how="mean")
     dac     = DescendingCoalitions()        # descending acquiescing coalitions
+    anti    = Highest(Tally(AntiPlurality()))
 
     M = Margins(Pairwise())
     schulze = Unbeaten(StrongestPaths(M))
@@ -54,6 +56,7 @@
 """
 
 from yeelab.build.blocks import (
+    AntiPlurality,
     Ballot,
     BordaCount,
     CandidateTotals,
@@ -86,7 +89,8 @@ from yeelab.build.strategic import Bullet, Burial, Compromise
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Ballots, Scored, ScoredPairwise, Share, Voters
 
 __all__ = [
-    "Ballot", "Ballots", "BordaCount", "Bullet", "Burial", "CandidateTotals", "Compromise", "DescendingCoalitions",
+    "AntiPlurality", "Ballot", "Ballots", "BordaCount", "Bullet", "Burial", "CandidateTotals", "Compromise",
+    "DescendingCoalitions",
     "Eliminate", "Fallback", "Highest", "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise",
     "Plurality", "Schedules", "Score", "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH",
     "ScoreHybrid", "StrongestPaths", "Tally", "Unbeaten", "Union", "Weakest", "Winner", "METHODS",

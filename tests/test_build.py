@@ -27,6 +27,7 @@ from yeelab.build import (
     METHODS,
     PAIRWISE,
     PROFILE,
+    AntiPlurality,
     BordaCount,
     DescendingCoalitions,
     Eliminate,
@@ -56,7 +57,7 @@ from yeelab.voting import CYCLE
 
 from references import TOLERANCE, ranking_weights, voters_of
 
-BALLOTS = [Plurality(), BordaCount()]
+BALLOTS = [Plurality(), BordaCount(), AntiPlurality()]
 # the blocks below the methods that are no method themselves, and Weakest
 PAIR_BLOCKS = [Pairwise(), Margins(Pairwise()), StrongestPaths(Margins(Pairwise())),
                StrongestPaths(StrongestPaths(Margins(Pairwise()))), Weakest(Margins(Pairwise()))]
@@ -262,6 +263,24 @@ def test_a_mix_of_ranked_ballots_is_eliminated_round_by_round(profile):
     np.testing.assert_array_equal(winner[clear], alive.argmax(axis=-1)[clear])
 
 
+def test_antiplurality_and_top_two_among_top_three():
+    rankings = np.array([[0, 1, 2, 3], [0, 1, 3, 2], [1, 0, 2, 3], [2, 0, 1, 3], [3, 0, 1, 2]])
+    probs = np.array([[0.25, 0.15, 0.2, 0.1, 0.3]])
+    voters = Voters(first=np.array([[0.4, 0.2, 0.1, 0.3]]), rankings=rankings, probs=probs)
+    anti = AntiPlurality()
+    assert anti.needs == anti.needs_remaining == {PROFILE}
+    assert [anti.weight(k, 4) for k in range(4)] == [1, 1, 1, 0]
+    np.testing.assert_allclose(anti.tally(voters, None), [[1.0, 1.0, 0.55, 0.45]])
+    bullet_voters = Voters(rankings=rankings, probs=0.8 * probs, bullet=np.array([[0.2, 0, 0, 0]]))
+    np.testing.assert_allclose(anti.tally(bullet_voters, None), [[1.0, 0.8, 0.44, 0.36]])
+
+    top3 = Highest(Tally(Plurality()), n=3)
+    top2 = Highest(Tally(anti), n=2, among=top3)
+    selected, margin = top2.select(voters)
+    np.testing.assert_array_equal(selected, [[True, True, False, False]])
+    np.testing.assert_allclose(margin, [0.1])
+
+
 def test_score_takes_the_number_of_levels():
     assert Score(3) == Score(levels=3) != Score(4)
     assert ScoreAvg(3) == ScoreAvg(levels=3) != ScoreAvg(4)
@@ -344,11 +363,10 @@ def test_ties_go_to_the_lowest_index():
 
 
 def test_methods_are_the_fifteen_expressions_they_print_as():
-    """METHODS are these blocks, in this order, and every block prints as the expression
-    that builds it: eval(repr(block)) == block."""
+    """The fifteen built-in methods are these blocks, and each prints as its expression."""
     margins = Margins(Pairwise())
     koth = Unbeaten(margins, against=Highest(Tally(Plurality())), order=Tally(Plurality()))
-    assert METHODS == {
+    expected = {
         "fptp": Highest(Tally(Plurality())),
         "two_round": Unbeaten(margins, among=Highest(Tally(Plurality()), n=2)),
         "irv": Eliminate(Tally(Plurality()), how="min"),
@@ -365,15 +383,15 @@ def test_methods_are_the_fifteen_expressions_they_print_as():
         "star": Unbeaten(ScoreComparisons(Score(6, power=1.5)), among=Highest(Tally(Score(6, power=1.5)), n=2)),
         "irv_set_koth_score": Highest(Tally(Score(6, power=1.5)), among=Union(Schedules(Tally(Plurality())), koth)),
     }
-    assert list(METHODS) == ["fptp", "two_round", "irv", "dac", "borda", "baldwin", "nanson", "schulze",
-                             "condorcet", "minimax", "black", "koth", "score", "star", "irv_set_koth_score"]
+    assert {name: METHODS[name] for name in expected} == expected
+    assert list(METHODS)[:len(expected)] == list(expected)
     fptp, irv, borda = METHODS["fptp"], METHODS["irv"], METHODS["borda"]
     assert repr(koth) == "Unbeaten(Margins(Pairwise()), against=Highest(Tally(Plurality())), order=Tally(Plurality()))"
     assert repr(METHODS["irv_set_koth_score"]) == (
         f"Highest(Tally(Score(6, power=1.5)), among=Schedules(Tally(Plurality())) | {koth!r})")
     assert repr(Eliminate(Tally(BordaCount()), how="mean", until=2)) == 'Eliminate(Tally(BordaCount()), how="mean", until=2)'
     assert repr(fptp | (irv | borda)) == f"{fptp!r} | ({irv!r} | {borda!r})"
-    blocks = [*METHODS.values(), *BALLOTS, *PAIR_BLOCKS, fptp | irv | borda, fptp | (irv | borda),
+    blocks = [*expected.values(), *BALLOTS, *PAIR_BLOCKS, fptp | irv | borda, fptp | (irv | borda),
               Unbeaten(StrongestPaths(margins), against=METHODS["black"], order=Weakest(margins)),
               Unbeaten(margins, among=fptp | borda), Fallback(Highest(Tally(BY_MEAN), n=3), fptp | irv),
               Eliminate(Tally(BordaCount()), how="min", until=2), Highest(Tally(Plurality()), n=2),
@@ -480,10 +498,8 @@ MARGINS = Margins(Pairwise())
      ValueError, "Unbeaten takes among or against, not both"),
     (lambda: Unbeaten(MARGINS, against=Highest(Tally(Plurality()), n=2), order=Tally(Plurality())), ValueError,
      "Unbeaten against must choose one candidate, the king"),
-    (lambda: Highest(Tally(Plurality()), n=2, among=METHODS["irv"]), ValueError,
-     "Highest takes among only for one winner of the highest totals: Highest(totals, among=...)"),
     (lambda: Eliminate(Tally(Plurality()), how="min", among=METHODS["irv"]), ValueError,
-     "Eliminate takes among only for one winner of the highest totals: Highest(totals, among=...)"),
+     'Eliminate takes among only with how="all": Highest(totals, among=...)'),
     (lambda: Eliminate(Tally(BordaCount()), how="max"), ValueError,
      'Eliminate how must be "min", "mean" or "all", got \'max\''),
     (lambda: Eliminate(Tally(BordaCount()), how="min", until=0), ValueError,

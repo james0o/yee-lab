@@ -6,7 +6,8 @@
 
 Every block has one type of output:
 
-    Ballot           Plurality(), BordaCount(),         points one voter gives a candidate
+    Ballot           Plurality(), AntiPlurality(),      points one voter gives a candidate
+                     BordaCount(),
                      Score(levels, power=...), ScoreAvg(levels), ScoreDH(levels, delta=...),
                      ScoreHybrid(levels, delta=...), ScoreCluster(levels, mu=..., kappa=...),
                      Mix(first, second, share=...)
@@ -273,6 +274,40 @@ class Plurality(Ballot):
         """Every elimination schedule by the compiled voting.irv_schedules, which tallies
         each set of remaining candidates that a schedule reaches once."""
         return irv_schedules(voters.rankings, voters.probs, voters.bullet)
+
+
+@dataclass(frozen=True)
+class AntiPlurality(Ballot):
+    """One point for each ballot that does not rank the candidate last.
+
+    For a bullet ballot, only its first choice gets a point: the other candidates are tied
+    for last.
+    """
+
+    needs = needs_remaining = frozenset({PROFILE})
+
+    def weight(self, k: int, n: int) -> float:
+        return 1 if k < n - 1 else 0
+
+    def tally(self, voters: Voters, alive: np.ndarray | None) -> np.ndarray:
+        """The share of voters not ranking each remaining candidate last."""
+        rankings, probs = voters.rankings, voters.probs
+        n_ballots, n = rankings.shape
+        if alive is None:
+            alive = np.ones((*probs.shape[:-1], n), dtype=bool)
+        reversed_rankings = rankings[:, ::-1]
+        last_position = alive[..., reversed_rankings].argmax(axis=-1)
+        last = reversed_rankings[np.arange(n_ballots), last_position].reshape(-1, n_ballots)
+        flat_probs = probs.reshape(-1, n_ballots)
+        count = len(flat_probs)
+        index = last + n * np.arange(count)[:, None]
+        last_votes = np.bincount(index.ravel(), flat_probs.ravel(), n * count).reshape(*probs.shape[:-1], n)
+        totals = probs.sum(axis=-1, keepdims=True) - last_votes
+        if voters.bullet is not None:
+            bullet = np.where(alive, voters.bullet, 0.0)
+            bullet = np.where(alive.sum(axis=-1, keepdims=True) > 1, bullet, 0.0)
+            totals = totals + bullet
+        return np.where(alive, totals, 0.0)
 
 
 @dataclass(frozen=True)
@@ -756,11 +791,11 @@ class Eliminate(Winner):
     elimination flips, and there the gap is 0. Highest(totals, n) is Eliminate(totals,
     how="all", until=n).
 
-    With `among` (how="all" and one winner: Highest(totals, among=finalists)) only the
-    candidates `among` chooses run: the highest total among them wins, a Tally counted
-    again among them, like the remaining candidates of a round. Where `among` chooses
-    one, it wins; where no one, no one does. The margin is the smaller of among's and
-    the winner's lead over the next of them, inf if it runs alone.
+    With `among` (how="all": Highest(totals, among=finalists)) only the candidates
+    `among` chooses run: the `until` highest totals among them stay, a Tally counted
+    among them as in a round. Where `among` chooses fewer than `until`, they all stay;
+    where no one, no one does. The margin is the smaller of among's and the gap between
+    the `until`-th total and the next among them, inf if all of them stay.
     """
 
     totals: CandidateTotals
@@ -781,9 +816,8 @@ class Eliminate(Winner):
         if isinstance(until, bool) or not isinstance(until, int) or until < 1:
             raise ValueError(f"{name} {self._until} must be a whole number of at least 1, got {until!r}")
         if self.among is not None:
-            if self.how != "all" or until != 1:
-                raise ValueError(f"{name} takes among only for one winner of the highest totals: "
-                                 f"Highest(totals, among=...)")
+            if self.how != "all":
+                raise ValueError(f'{name} takes among only with how="all": Highest(totals, among=...)')
             _expect(self, self.among, Winner, "a Winner as among")
 
     @property
@@ -810,7 +844,17 @@ class Eliminate(Winner):
         if self.until == 1:
             return super().select(voters)  # from evaluate, which may be the ballot's own formula
         if self.how == "all":
-            return _highest(self.totals.evaluate(voters), self.until)
+            if self.among is None:
+                return _highest(self.totals.evaluate(voters), self.until)
+            running, margin = self.among.select(voters)
+            totals = self.totals.evaluate(voters, running) if isinstance(self.totals, Tally) \
+                else self.totals.evaluate(voters)
+            chosen, lead = _highest(np.where(running, totals, -np.inf), self.until)
+            chosen &= running
+            too_few = running.sum(axis=-1) <= self.until
+            lead = np.where(too_few, np.inf, lead)
+            none = ~running.any(axis=-1)
+            return chosen, np.where(none, margin, np.minimum(margin, lead))
         return self.remaining(voters)
 
     def _among(self, voters: Voters) -> Result:
