@@ -52,7 +52,7 @@ package `src/yeelab/`):
   [deviation], [$D$], [Model parameter, _Deviation_ slider], [0.2],
   [voter distribution], [], [Model parameter, _Voters_ control], [Beta],
   [Beta spread rule], [], [Model parameter; the web UI always uses `rms`], [`rms`],
-  [what a pixel is (Beta, UI)], [], [_Pixel is_, `PIXEL_MEDIAN` (`margin/geometric.py`)], [median along each axis],
+  [what a pixel is (Beta, UI)], [], [_Point in diagram is_, `UI_PIXEL_MEDIAN` (`web/app.py`)], [geometric median],
   [interpolation nodes per axis], [$N$], [`NODES`], [49],
   [Gauss–Legendre points per edge], [$Q$], [`QUAD_NODES`], [24],
   [score levels (UI)], [$L$], [_Score categories_, `SCORE_LEVELS` (`web/app.py`)], [6],
@@ -3144,8 +3144,8 @@ implemented.
 
 A Beta pixel is the median of its voters along $x$ and along $y$. That is a median only
 in the directions of the axes, which is the root of the distorted Condorcet regions of
-@ch-compare. The web UI can draw every election at the *geometric median* of its voters
-instead (_Pixel is: the geometric median_), a centre that does not depend on the axes.
+@ch-compare. The web UI draws every election at the *geometric median* of its voters by
+default (_Point in diagram is: the geometric median_), a centre that does not depend on the axes.
 This chapter defines it, describes the part of the square that the diagram then covers,
 shows what it does to the borders between the candidates, and how it is computed
 (`margin/geometric.py`). The numbers and the figure are produced by `docs/figures.py`.

@@ -76,7 +76,7 @@
         <label><input type="checkbox" id="showHull">candidate convex hull</label>
       </div>
       <div class="choices"><span>Deviation:</span><input type="range" id="deviation"><output id="deviationValue"></output></div>
-      <div class="choices" id="pixelMedians"><span>Pixel is:</span></div>
+      <div class="choices" id="pixelMedians"><span>Point in diagram is:</span></div>
       <div class="choices" id="methods"><span>Voting method:</span></div>
       <div class="choices"><span>Score categories:</span><input type="range" id="levels" min="2" step="1"><output id="levelsValue"></output></div>
       <div class="choices"><span>Score power p:</span><input type="range" id="power"><output id="powerValue"></output></div>
@@ -938,6 +938,7 @@
     pickPower();
     pickMethod(null);  // none yet: the categories and power sliders wait for Score
     updatePixelMedians();
+    confineAll();  // the default pixels may be at geometric medians
     draw();
     drawVoters();
   </script>

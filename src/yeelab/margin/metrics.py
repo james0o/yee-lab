@@ -80,19 +80,35 @@ def _shared_boundary_segments(cells):
     return [(edge["start"], edge["end"]) for edge in edges.values() if edge["count"] == 2]
 
 
-def _sample_segments(segments, spacing=0.005):
-    """Sample a collection uniformly by total arc length."""
+def _labelled_boundary_segments(cells):
+    """Shared boundary segments and the winners of the two cells on either side of each."""
+    edges = {}
+    for cell in cells:
+        for polygon in cell["polygons"]:
+            for ring in polygon:
+                points = np.asarray(ring).reshape(-1, 2)
+                for start, end in zip(points, np.roll(points, -1, axis=0)):
+                    key = tuple(sorted((tuple(start), tuple(end))))
+                    edge = edges.setdefault(key, {"start": start, "end": end, "winners": []})
+                    edge["winners"].append(cell["winner"])
+    shared = [edge for edge in edges.values() if len(edge["winners"]) == 2]
+    return ([(edge["start"], edge["end"]) for edge in shared],
+            [tuple(edge["winners"]) for edge in shared])
+
+
+def _sample_segments(segments, spacing=0.005, with_indices=False):
+    """Sample a collection uniformly by total arc length; with_indices also returns the
+    segment of every sample."""
+    empty = (np.empty((0, 2)), np.empty(0), np.empty(0, dtype=int))
     if not segments:
-        return np.empty((0, 2)), np.empty(0)
+        return empty if with_indices else empty[:2]
     segment_array = np.asarray(segments, dtype=np.float64)
     lengths = np.linalg.norm(segment_array[:, 1] - segment_array[:, 0], axis=1)
-    keep = lengths > 1e-12
-    segment_array, lengths = segment_array[keep], lengths[keep]
-    if not len(lengths):
-        return np.empty((0, 2)), np.empty(0)
+    kept = np.flatnonzero(lengths > 1e-12)
+    segment_array, lengths = segment_array[kept], lengths[kept]
     total_length = lengths.sum()
-    if total_length <= 0:
-        return np.empty((0, 2)), np.empty(0)
+    if not len(lengths) or total_length <= 0:
+        return empty if with_indices else empty[:2]
     count = max(1, int(np.ceil(total_length / spacing)))
     distances = (np.arange(count) + 0.5) * total_length / count
     cumulative = np.cumsum(lengths)
@@ -102,16 +118,24 @@ def _sample_segments(segments, spacing=0.005):
     points = segment_array[indices, 0] + fractions[:, None] * (
         segment_array[indices, 1] - segment_array[indices, 0]
     )
-    return points, np.full(count, total_length / count)
+    weights = np.full(count, total_length / count)
+    return (points, weights, kept[indices]) if with_indices else (points, weights)
 
 
-def _sample_boundaries(cells):
-    return _sample_segments(_shared_boundary_segments(cells))
+def _half_gaps(pairs, candidates, scale):
+    """Half the distance between the two winners of each boundary segment; half the median
+    candidate distance `scale` where one side is a cycle or both sides have the same winner."""
+    gaps = np.full(len(pairs), scale / 2)
+    for index, (first, second) in enumerate(pairs):
+        if first != second and 0 <= first < len(candidates) and 0 <= second < len(candidates):
+            gaps[index] = np.linalg.norm(candidates[first] - candidates[second]) / 2
+    return gaps
 
 
-def _centrality(points):
-    radius_squared = ((points - 0.5) ** 2).sum(axis=-1)
-    return np.exp(-4 * radius_squared)
+def _nearness(points, candidates, scale):
+    """1 / (1 + (d_min / scale)^2), the weight of the assignment regret."""
+    nearest = np.linalg.norm(points[:, None, :] - candidates, axis=-1).min(axis=-1)
+    return 1 / (1 + (nearest / scale) ** 2)
 
 
 def _point_to_segments(points, segments):
@@ -135,32 +159,28 @@ def _point_to_segments(points, segments):
     return result
 
 
-def _symmetric_boundary_distances(actual_segments, reference_segments, actual, actual_lengths,
-                                  reference, reference_lengths):
-    actual_to_reference = _point_to_segments(actual, reference_segments)
-    reference_to_actual = _point_to_segments(reference, actual_segments)
-    if not np.isfinite(actual_to_reference).all() or not np.isfinite(reference_to_actual).all():
-        return None
+def boundary_distance(actual_cells, reference_cells, candidates, scale):
+    """Symmetric mean distance between the boundaries, each sample's distance divided by
+    half the distance between the two candidates its boundary separates and capped at 1
+    (the boundary has moved all the way to a candidate). Samples are weighted by length and
+    by nearness to a candidate like the assignment regret. None without any boundary."""
+    candidates = np.asarray(candidates, dtype=np.float64)
+    sides = []
+    for cells in (actual_cells, reference_cells):
+        segments, pairs = _labelled_boundary_segments(cells)
+        points, lengths, indices = _sample_segments(segments, with_indices=True)
+        if not len(points):
+            return None
+        sides.append((segments, points, lengths, _half_gaps(pairs, candidates, scale)[indices]))
 
-    actual_weights = actual_lengths * _centrality(actual)
-    reference_weights = reference_lengths * _centrality(reference)
-    actual_weights /= actual_weights.sum()
-    reference_weights /= reference_weights.sum()
-    distances = np.concatenate([actual_to_reference, reference_to_actual])
-    weights = np.concatenate([actual_weights / 2, reference_weights / 2])
-    return float(np.average(distances, weights=weights))
-
-
-def boundary_distance(actual_cells, reference_cells):
-    """Centre-weighted symmetric mean distance between the boundaries, or None without any."""
-    actual, actual_lengths = _sample_boundaries(actual_cells)
-    reference, reference_lengths = _sample_boundaries(reference_cells)
-    if not len(actual) or not len(reference):
-        return None
-    return _symmetric_boundary_distances(
-        _shared_boundary_segments(actual_cells), _shared_boundary_segments(reference_cells),
-        actual, actual_lengths, reference, reference_lengths,
-    )
+    means = []
+    for (_, points, lengths, gaps), (other, *_) in zip(sides, reversed(sides)):
+        distances = _point_to_segments(points, other)
+        if not np.isfinite(distances).all():
+            return None
+        relative = np.minimum(1, distances / np.maximum(gaps, 1e-12))
+        means.append(np.average(relative, weights=lengths * _nearness(points, candidates, scale)))
+    return float(np.mean(means))
 
 
 def voronoi_boundary_segments(cells):
@@ -198,5 +218,5 @@ def voronoi_agreement(candidates, points, winner, actual_cells, reference_cells)
     return {
         "assignment": _assignment_score(candidates, points, winner, full, scale, area_weights),
         "inside_hull": inside_score,
-        "boundary_mean": boundary_distance(actual_cells, reference_cells),
+        "boundary_mean": boundary_distance(actual_cells, reference_cells, candidates, scale),
     }

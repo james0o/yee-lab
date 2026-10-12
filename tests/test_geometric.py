@@ -358,8 +358,8 @@ def test_every_method_is_drawn_at_geometric_medians(method):
 def test_api_draws_pixels_at_either_median():
     client = TestClient(app)
     config = client.get("/api/config").json()
-    assert [info["name"] for info in config["pixel_medians"]] == ["marginal", "geometric"]
-    assert config["pixel_median"] == "marginal"
+    assert [info["name"] for info in config["pixel_medians"]] == ["geometric", "marginal"]
+    assert config["pixel_median"] == "geometric"
 
     def shapes(**settings):
         request = {"candidates": CANDIDATES.tolist(), "method": "condorcet", "deviation": 0.25,

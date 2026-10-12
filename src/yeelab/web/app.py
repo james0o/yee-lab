@@ -228,24 +228,30 @@ SPREAD_INFO = {
     "the median along each axis.",
 }
 assert SPREAD == "rms"
-# What a pixel is, for Beta voters: label and tooltip, in the order the UI lists them.
+# What a pixel is, for Beta voters: plain label, LaTeX label (typeset by KaTeX in the UI)
+# and tooltip, in the order the UI lists them. V = (V_x, V_y) is a voter of the pixel p.
 PIXEL_MEDIAN_INFO = {
-    "marginal": {
-        "label": "the median along each axis",
-        "description": "A pixel is the median of its voters along x and along y. It is a median "
-        "only in the directions of the axes: a slanted line through the pixel does not split "
-        "its voters in half, which bends slanted borders.",
-    },
     "geometric": {
         "label": "the geometric median",
+        "tex": r"p = \operatorname*{arg\,min}_q \operatorname{E}\lVert V - q \rVert",
         "description": "A pixel is the geometric median of its voters, the point with the "
         "smallest mean distance to them, which does not depend on the axes. The voters are the "
         "same; every election is only drawn somewhere else, closer to the centre. No voters "
         "have their geometric median next to a wall, so a strip along the walls stays empty, "
-        "in the Voronoi diagram too. The candidates are kept within the coloured region.",
+        "in the Voronoi diagram too. The candidates are kept within the coloured region.\n"
+        "p = argmin_q E‖V − q‖",
+    },
+    "marginal": {
+        "label": "the median along each axis",
+        "tex": r"p = (\operatorname{med} V_x, \operatorname{med} V_y)",
+        "description": "A pixel is the median of its voters along x and along y. It is a median "
+        "only in the directions of the axes: a slanted line through the pixel does not split "
+        "its voters in half, which bends slanted borders.\n"
+        "p = (med V_x, med V_y), so P(V_x ≤ p_x) = P(V_y ≤ p_y) = 1/2",
     },
 }
 assert set(PIXEL_MEDIAN_INFO) == set(PIXEL_MEDIANS)
+UI_PIXEL_MEDIAN: PixelMedian = "geometric"  # what the UI starts with; the API's is the library's
 
 app = FastAPI()
 
@@ -340,7 +346,7 @@ def config():
         "distributions": [{"name": name, **info} for name, info in DISTRIBUTION_INFO.items()],
         "spread": SPREAD_INFO,
         "pixel_medians": [{"name": name, **info} for name, info in PIXEL_MEDIAN_INFO.items()],
-        "pixel_median": PIXEL_MEDIAN,
+        "pixel_median": UI_PIXEL_MEDIAN,
         "candidates": CANDIDATES,
         "max_candidates": MAX_CANDIDATES,
         "pixels": PIXELS,
