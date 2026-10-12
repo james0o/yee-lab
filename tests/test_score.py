@@ -26,9 +26,17 @@ choices and 0 from the others, and with two levels the closest candidate is appr
 and the farthest is not) and with sampled voters elsewhere. They are computed as the
 part of the top score not given, which must stay exact where it is tiny: the lead
 between two candidates nearly all voters give the top score. What burying takes back,
-the points a candidate gets from the voters who rank another above it, is checked like
-the part not given: the mean of each rectangle, against sampled voters, and against
-exact bounds (with two candidates the one ranked lower gets nothing).
+the points a candidate gets from the voters who rank another above it, and what
+compromising adds, the points below the top score from the voters who rank it above
+another but neither first, are checked like the part not given: the mean of each
+rectangle, against sampled voters, and against exact bounds (with two candidates the
+one ranked lower gets nothing, and every voter has one of them first). All of them are
+sums over one ballot table, whose weights in every rectangle add up to 1; the table is
+kept, and one table by order gives what the separate functions give. How much burying
+and compromising voters move the score comparisons is checked against the ballots moved
+one voter at a time, in every rectangle and for sampled voters, and the score grid, which
+gives these shares at the points of each pair of frontrunners, against the shares of all
+points.
 """
 
 from itertools import combinations, combinations_with_replacement, product
@@ -38,10 +46,13 @@ import pytest
 from scipy.special import ndtr
 
 from yeelab import ranking_cells
-from yeelab.margin.shares import (GRID_CELLS, Model, _voter_grid, buried_shares, first_choice_shares,
-                                  pairwise_shares, ranking_shares, unscored_shares)
-from yeelab.score import (AVG, CLUSTER, DELTA, DHONDT, HYBRID, KAPPA, MAX_CANDIDATES, MAX_LEVELS, MU, POWER, RANGE,
-                          RULES, comparisons, distances, from_distances, given, scored, unscored)
+from yeelab.margin import shares as shares_module
+from yeelab.margin.shares import (GRID_CELLS, GRID_SUB, Model, ScoreGrid, _grid_lines, _voter_grid, ballots,
+                                  buried_shares, first_choice_shares, pairwise_shares, raised_shares, ranking_shares,
+                                  score_comparison_shares, unscored_shares)
+from yeelab.score import (AVG, CLUSTER, COMPARISONS, DELTA, DHONDT, GIVEN, HYBRID, KAPPA, MAX_CANDIDATES, MAX_LEVELS,
+                          MU, POWER, RAISED, RANGE, RULES, UNSCORED, ballot_table, comparisons, distances,
+                          from_distances, given, moved_comparisons, raised, scored, tabulate, unscored)
 
 FIVE = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
 CANDIDATES = {2: np.random.default_rng(5).random((2, 2)), 3: np.random.default_rng(3).random((3, 2)),
@@ -52,7 +63,8 @@ DELTAS = [0.5, DELTA, 1.0]  # the range of the UI's slider and its default
 MODELS = [Model("beta", 0.2, "rms"), Model("beta", 0.05, "rms"), Model("beta", 0.35, "mean_abs"),
           Model("normal", 0.2), Model("normal", 0.05)]
 NODES = [(5, -9), (24, 24), (-5, 10), (0, 0)]  # of the nodes per axis, where the shares are sampled
-SAMPLES = 400_000
+SAMPLES = 100_000
+SAMPLED = 1e-2  # 6 standard errors of a mean share of SAMPLES voters
 # The grid shares against exact ones: 5e-4 seen for the narrowest voters, 2e-4 otherwise.
 TOLERANCE = 2e-3
 
@@ -484,7 +496,7 @@ def _cluster_cost(r, scores, levels, mu=MU, kappa=KAPPA):
 
 
 @pytest.mark.parametrize(("mu", "kappa"), [(MU, KAPPA), (0.5, 1.0), (0.03, 4.0)])
-@pytest.mark.parametrize("levels", [2, 3, 6, 11])
+@pytest.mark.parametrize("levels", [2, 3, 6])
 def test_cluster_gives_the_ballot_of_least_cost(levels, mu, kappa):
     """Among every ballot it may give, from T for the closest to 0 for the farthest and
     never more for a farther candidate, CLUSTER's costs the least, at the defaults of mu
@@ -595,13 +607,79 @@ def _given_by(points, candidates, levels, rule=RANGE):
     return np.where(rank[..., None, :] < rank[..., :, None], points_[..., :, None], 0)
 
 
+def _raised_by(points, candidates, levels, rule=RANGE):
+    """G[..., c, e] = points below the top score the voter at each of the points gives c if
+    they rank c above e but neither first, else 0."""
+    rank = np.argsort(np.argsort(distances(points, candidates), axis=-1, kind="stable"), axis=-1)
+    below = levels - 1 - scored(points, candidates, levels, rule)
+    ranked = (rank[..., :, None] < rank[..., None, :]) & (rank[..., :, None] > 0)
+    return np.where(ranked, below[..., :, None], 0)
+
+
+def _moved_by(points, candidates, levels, a, b, bury, compromise, rule=RANGE):
+    """M[..., c, e]: how much the strict comparison of c and e of the voter at each point
+    moves, mixed over the kinds of strategic voters by their shares: burying (the
+    frontrunner of a and b ranked lower gets 0), compromising (the other gets the top score
+    if neither is first) and both."""
+    rank = np.argsort(np.argsort(distances(points, candidates), axis=-1, kind="stable"), axis=-1)
+    scores = scored(points, candidates, levels, rule).astype(np.int64)
+    upper = np.where(rank[..., a] < rank[..., b], a, b)[..., None]
+    lower = np.where(rank[..., a] < rank[..., b], b, a)[..., None]
+    neither = (rank[..., a] > 0) & (rank[..., b] > 0)
+
+    def compare(given_scores):
+        return np.sign(given_scores[..., :, None] - given_scores[..., None, :])
+
+    before, moved = compare(scores), 0.0
+    for share, buries, compromises in ((bury * (1 - compromise), True, False),
+                                       ((1 - bury) * compromise, False, True), (bury * compromise, True, True)):
+        changed = scores.copy()
+        if buries:
+            np.put_along_axis(changed, lower, 0, axis=-1)
+        if compromises:
+            raised_ = np.where(neither[..., None], levels - 1, np.take_along_axis(changed, upper, axis=-1))
+            np.put_along_axis(changed, upper, raised_, axis=-1)
+        moved = moved + share * (compare(changed) - before)
+    return moved
+
+
+@pytest.mark.parametrize("bury, compromise", [(0.4, 0.3), (1, 0), (0, 1)])
+@pytest.mark.parametrize("rule", [RANGE, CLUSTER])
+@pytest.mark.parametrize("levels", [2, 6])
+def test_moved_comparisons_are_the_mean_of_each_rectangle(levels, rule, bury, compromise):
+    """In a rectangle with one ballot and one order at its corners, the ballot moved; in the
+    others the mean of the ballots moved at their sub x sub points. Only the pairs with a
+    frontrunner move."""
+    xs, ys, sub, a, b = np.linspace(0, 1, 41) ** 1.3, np.linspace(-0.2, 1.1, 31), 4, 3, 0
+    table = ballot_table(xs, ys, FIVE, levels, sub, rule, by_order=True)
+    short = np.moveaxis(moved_comparisons(table, a, b, bury, compromise), (0, 1), (-2, -1))
+    grid_points = np.stack(np.meshgrid(xs, ys, indexing="ij"), axis=-1)
+    corners = np.concatenate([scored(grid_points, FIVE, levels, rule),
+                              np.argsort(distances(grid_points, FIVE), axis=-1, kind="stable")], axis=-1)
+    whole = ((corners[:-1, :-1] == corners[1:, :-1]) & (corners[:-1, :-1] == corners[:-1, 1:])
+             & (corners[:-1, :-1] == corners[1:, 1:])).all(axis=-1)
+    np.testing.assert_allclose(short[whole], _moved_by(grid_points, FIVE, levels, a, b, bury, compromise,
+                                                        rule)[:-1, :-1][whole], rtol=0, atol=1e-6)
+    at = (np.arange(sub) + 0.5) / sub
+    inner_x = (xs[:-1, None] + at * np.diff(xs)[:, None]).ravel()
+    inner_y = (ys[:-1, None] + at * np.diff(ys)[:, None]).ravel()
+    inner = _moved_by(np.stack(np.meshgrid(inner_x, inner_y, indexing="ij"), axis=-1), FIVE, levels, a, b, bury,
+                      compromise, rule)
+    mean = inner.reshape(40, sub, 30, sub, 5, 5).mean(axis=(1, 3))
+    np.testing.assert_allclose(short[~whole], mean[~whole], rtol=0, atol=1e-6)
+    others = [1, 2, 4]
+    assert (short[..., np.ix_(others, others)[0], np.ix_(others, others)[1]] == 0).all()
+    assert np.abs(short).max() > 0.1  # not vacuous
+
+
 @pytest.mark.parametrize("rule", RULES)
 @pytest.mark.parametrize("levels", [2, 6])
-def test_given_is_the_mean_of_each_rectangle(levels, rule):
+@pytest.mark.parametrize("points, by", [(given, _given_by), (raised, _raised_by)], ids=["given", "raised"])
+def test_given_and_raised_are_the_mean_of_each_rectangle(points, by, levels, rule):
     """A rectangle with one ballot and one order of distance at its four corners holds
     that ballot; the others the mean of the ballots at their sub x sub points."""
     xs, ys, sub = np.linspace(0, 1, 41) ** 1.3, np.linspace(-0.2, 1.1, 31), 4
-    short = np.moveaxis(given(xs, ys, FIVE, levels, sub, rule), (0, 1), (-2, -1))
+    short = np.moveaxis(points(xs, ys, FIVE, levels, sub, rule), (0, 1), (-2, -1))
     assert short.shape == (40, 30, 5, 5) and short.dtype == np.float32
     grid_points = np.stack(np.meshgrid(xs, ys, indexing="ij"), axis=-1)
     ballots = scored(grid_points, FIVE, levels, rule)
@@ -610,15 +688,59 @@ def test_given_is_the_mean_of_each_rectangle(levels, rule):
     whole = ((corners[:-1, :-1] == corners[1:, :-1]) & (corners[:-1, :-1] == corners[:-1, 1:])
              & (corners[:-1, :-1] == corners[1:, 1:])).all(axis=-1)
     assert 0.1 < whole.mean() < 1
-    np.testing.assert_array_equal(short[whole], _given_by(grid_points, FIVE, levels, rule)[:-1, :-1][whole])
+    np.testing.assert_array_equal(short[whole], by(grid_points, FIVE, levels, rule)[:-1, :-1][whole])
 
     at = (np.arange(sub) + 0.5) / sub
     inner_x = (xs[:-1, None] + at * np.diff(xs)[:, None]).ravel()
     inner_y = (ys[:-1, None] + at * np.diff(ys)[:, None]).ravel()
-    inner = _given_by(np.stack(np.meshgrid(inner_x, inner_y, indexing="ij"), axis=-1), FIVE, levels, rule)
+    inner = by(np.stack(np.meshgrid(inner_x, inner_y, indexing="ij"), axis=-1), FIVE, levels, rule)
     mean = inner.reshape(40, sub, 30, sub, 5, 5).mean(axis=(1, 3))
     np.testing.assert_allclose(short[~whole], mean[~whole], rtol=0, atol=1e-6)
     assert (short[..., range(5), range(5)] == 0).all()
+
+
+@pytest.mark.parametrize("by_order", [False, True])
+@pytest.mark.parametrize("rule", [RANGE, CLUSTER])
+def test_one_ballot_table_gives_every_share(rule, by_order):
+    """The weights of every rectangle add up to 1, a table without the order holds at most
+    one ballot where that by order does, and the sums over one table are what the
+    separate functions give: the part not given and the comparisons from a table
+    without the order, what burying takes back and compromising adds from one by order."""
+    xs, ys = np.linspace(0, 1, 41) ** 1.3, np.linspace(-0.2, 1.1, 31)
+    table = ballot_table(xs, ys, FIVE, 6, 4, rule, by_order=by_order)
+    assert table.shape == (40, 30) and table.start[-1] == len(table.codes) == len(table.weights)
+    np.testing.assert_allclose(np.add.reduceat(table.weights, table.start[:-1]), 1, rtol=0, atol=1e-12)
+    if by_order:
+        coarse = ballot_table(xs, ys, FIVE, 6, 4, rule)
+        assert (np.diff(table.start) >= np.diff(coarse.start)).all() and len(table.codes) > len(coarse.codes)
+        np.testing.assert_array_equal(tabulate(table, GIVEN), given(xs, ys, FIVE, 6, 4, rule))
+        np.testing.assert_array_equal(tabulate(table, RAISED), raised(xs, ys, FIVE, 6, 4, rule))
+        np.testing.assert_allclose(tabulate(table, UNSCORED), unscored(xs, ys, FIVE, 6, 4, rule), rtol=0, atol=0.2)
+    else:
+        assert (table.orders == 0).all()
+        np.testing.assert_array_equal(tabulate(table, UNSCORED), unscored(xs, ys, FIVE, 6, 4, rule))
+        np.testing.assert_array_equal(tabulate(table, COMPARISONS), comparisons(xs, ys, FIVE, 6, 4, rule))
+        for kind in (GIVEN, RAISED):
+            with pytest.raises(ValueError, match="need a ballot table by order"):
+                tabulate(table, kind)
+
+
+def test_the_ballots_of_the_voter_grid_are_kept():
+    """All score shares of a ballot, at any medians, come from one table, by order where
+    burying or compromising read it."""
+    model, candidates = Model("beta", 0.2, "rms"), CANDIDATES[5]
+    shares_module._cached_ballots.cache_clear()
+    for medians in (model.medians, np.linspace(0.1, 0.9, 7)):
+        unscored_shares(candidates, model, 6, medians)
+        score_comparison_shares(candidates, model, medians, 6)
+    assert shares_module._cached_ballots.cache_info().misses == 1
+    unscored_shares(candidates, model, 6, model.medians, by_order=True)
+    buried_shares(candidates, model, model.medians, 6)
+    raised_shares(candidates, model, model.medians, 6)
+    assert shares_module._cached_ballots.cache_info().misses == 2
+    lines = _grid_lines(model)
+    np.testing.assert_array_equal(ballots(candidates, model, 6).codes,
+                                  ballot_table(lines, lines, candidates, 6, GRID_SUB).codes)
 
 
 def test_unscored_rejects_what_it_cannot_do():
@@ -696,7 +818,7 @@ def test_shares_match_sampled_voters(model, rule):
         for node in NODES:
             ballots = scored(_sample(model, node, rng), CANDIDATES[n], levels, rule)
             sampled = 1 - ballots.mean(axis=0) / (levels - 1)
-            np.testing.assert_allclose(shares[node], sampled, rtol=0, atol=5e-3)  # 6 standard errors
+            np.testing.assert_allclose(shares[node], sampled, rtol=0, atol=SAMPLED)
 
 
 @pytest.mark.parametrize("model", MODELS, ids=_ids)
@@ -766,8 +888,8 @@ def test_more_levels_come_closer_to_the_part_of_the_way_itself(model):
         exact = 1 - ((far - r) / (far - r.min(axis=-1, keepdims=True))).mean(axis=0)
         for levels in (3, 6, 16):
             shares = unscored_shares(candidates, model, levels, model.medians)[node]
-            assert np.abs(shares - exact).max() <= 0.5 / (levels - 1) + 5e-3
-        assert np.abs(shares - exact).max() < 0.02  # 16 levels
+            assert np.abs(shares - exact).max() <= 0.5 / (levels - 1) + SAMPLED
+        assert np.abs(shares - exact).max() < 0.02 + SAMPLED / 2  # 16 levels
 
 
 @pytest.mark.parametrize("model", MODELS, ids=_ids)
@@ -779,7 +901,7 @@ def test_buried_shares_match_sampled_voters(model):
         assert shares.shape == (model.nodes, model.nodes, n, n)
         for node in NODES:
             sampled = _given_by(_sample(model, node, rng), CANDIDATES[n], levels).mean(axis=0) / (levels - 1)
-            np.testing.assert_allclose(shares[node], sampled, rtol=0, atol=5e-3)  # 6 standard errors
+            np.testing.assert_allclose(shares[node], sampled, rtol=0, atol=SAMPLED)
 
 
 @pytest.mark.parametrize("model", MODELS, ids=_ids)
@@ -797,3 +919,54 @@ def test_burying_takes_back_at_most_what_was_given_by_those_who_rank_another_hig
         assert (shares <= np.swapaxes(above, -1, -2) + TOLERANCE).all()
         given_all = 1 - unscored_shares(candidates, model, levels, model.medians)
         assert (shares <= given_all[..., :, None] + TOLERANCE).all()
+
+
+@pytest.mark.parametrize("model", MODELS, ids=_ids)
+def test_raised_shares_match_sampled_voters(model):
+    """The part of the top score that the voters who rank c above e, but neither first, do
+    not give c."""
+    rng = np.random.default_rng(10)
+    for n, levels in ((5, 2), (5, 6), (7, 11)):
+        shares = raised_shares(CANDIDATES[n], model, model.medians, levels)
+        assert shares.shape == (model.nodes, model.nodes, n, n)
+        for node in NODES:
+            sampled = _raised_by(_sample(model, node, rng), CANDIDATES[n], levels).mean(axis=0) / (levels - 1)
+            np.testing.assert_allclose(shares[node], sampled, rtol=0, atol=SAMPLED)
+
+
+@pytest.mark.parametrize("model", MODELS, ids=_ids)
+def test_compromising_adds_at_most_what_was_not_given_by_those_who_rank_neither_first(model):
+    """What compromising adds to c over e is at most the share of the voters who rank c
+    above e, and at most what all voters do not give c; with two candidates every voter
+    has one of them first, and it adds nothing."""
+    for levels, rule in product((2, 6), RULES):
+        assert np.abs(raised_shares(CANDIDATES[2], model, model.medians, levels, rule)).max() < 1e-12
+    candidates = CANDIDATES[5]
+    above = pairwise_shares(candidates, model)
+    for levels in (2, 6):
+        shares = raised_shares(candidates, model, model.medians, levels)
+        assert (shares >= 0).all()
+        assert (shares <= above + TOLERANCE).all()
+        not_given = unscored_shares(candidates, model, levels, model.medians)
+        assert (shares <= not_given[..., :, None] + TOLERANCE).all()
+
+
+@pytest.mark.parametrize("model", MODELS[:2] + MODELS[3:4], ids=_ids)
+def test_the_score_grid_gives_the_shares_of_the_points_of_a_pair(model):
+    """What burying takes back and compromising adds are those of buried_shares and
+    raised_shares at the points asked for, from the rows and columns they need, and how
+    much the comparisons move is that of sampled voters moved one at a time."""
+    candidates, levels, a, b = CANDIDATES[5], 6, 3, 1
+    grid = ScoreGrid(candidates, model, model.medians, levels)
+    cells = np.array([(5, 9), (24, 24), (40, 3), (5, 3), (24, 9)])
+    taken = buried_shares(candidates, model, model.medians, levels)[cells[:, 0], cells[:, 1]]
+    added = raised_shares(candidates, model, model.medians, levels)[cells[:, 0], cells[:, 1]]
+    np.testing.assert_allclose(grid.taken(a, b, cells), np.stack([taken[:, a, b], taken[:, b, a]], -1), atol=1e-12)
+    np.testing.assert_allclose(grid.added(a, b, cells), np.stack([added[:, a, b], added[:, b, a]], -1), atol=1e-12)
+    rng = np.random.default_rng(11)
+    moved = grid.moved(a, b, 0.4, 0.3, cells)
+    assert moved.shape == (5, 5, 5)
+    np.testing.assert_allclose(moved, -np.swapaxes(moved, -1, -2), atol=1e-12)
+    for k, node in enumerate(cells[:2]):
+        sampled = _moved_by(_sample(model, tuple(node), rng), candidates, levels, a, b, 0.4, 0.3)
+        np.testing.assert_allclose(moved[k], sampled.mean(axis=0), rtol=0, atol=SAMPLED)

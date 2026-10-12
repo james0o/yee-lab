@@ -25,6 +25,7 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.uv.build-backend]
@@ -35,3 +36,6 @@ wheel-exclude = ["yeelab/pixels/cache", "yeelab/pixels/plots"]
 
 [tool.fastapi]
 entrypoint = "yeelab.web.app:app"
+
+[tool.pytest.ini_options]
+addopts = "-n auto"  # pytest-xdist: one worker per CPU
