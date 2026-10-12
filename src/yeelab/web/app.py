@@ -22,7 +22,8 @@ from yeelab.build import (Bullet, Burial, Compromise, Score, Winner)
 from yeelab.build.methods import SCORE_POWER
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
-from yeelab.margin.regions import MARGINS, regions
+from yeelab.margin.metrics import voronoi_agreement, voronoi_boundary_segments
+from yeelab.margin.regions import MARGINS, diagram, regions
 from yeelab.margin.shares import PIXELS, Model
 from yeelab.normal import sigma_from_deviation
 from yeelab.ranking_cells import SPREAD, beta_params
@@ -383,8 +384,19 @@ def diagram_regions(request: DiagramRequest):
     shares = {name: getattr(request, name) for name in STRATEGIES}
     if method != "voronoi" and any(shares.values()):
         method = strategic(MARGINS[method] if isinstance(method, str) else method, shares)
-    shapes = regions(method, request.candidates, model, request.grid, request.pixel_median, request.shift)
-    payload = {"regions": shapes, "ms": round(1000 * (time.perf_counter() - start), 1)}
+    shapes, points, winner, margin = diagram(
+        method, request.candidates, model, request.grid, request.pixel_median, request.shift
+    )
+    payload = {
+        "regions": shapes,
+        "metrics": voronoi_agreement(request.candidates, points, winner, margin),
+        "overlays": {
+            "voronoi_boundaries": voronoi_boundary_segments(
+                request.candidates, model, request.grid, request.pixel_median, request.shift
+            ),
+        },
+        "ms": round(1000 * (time.perf_counter() - start), 1),
+    }
     # json.dumps directly: FastAPI's encoder is slow on thousands of vertices
     return Response(json.dumps(payload, separators=(",", ":")), media_type="application/json")
 

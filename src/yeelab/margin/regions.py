@@ -216,3 +216,27 @@ def regions(method: str | Winner, candidates, model: Model | None, size: int,
         kept = np.ix_(keep, keep)
         return contour_regions(coords[keep], winner[kept], margin[kept], points)
     return contour_regions(coords, winner, margin)
+
+
+def diagram(method: str | Winner, candidates, model: Model | None, size: int,
+            pixel_median: PixelMedian = PIXEL_MEDIAN, shift: float = 1.0):
+    """Return the win regions and the winner grid with its represented points."""
+    moved = pixel_median == "geometric" and model is not None and model.distribution == "beta"
+    coords = (grid(size, model.pixels)[0] if model is not None else
+              np.concatenate([[0.0], (np.arange(size) + 0.5) / size, [1.0]]))
+    if method == "voronoi" or model is None:
+        if not moved:
+            points = np.stack(np.meshgrid(coords, coords, indexing="ij"), axis=-1)
+            winner, margin = nearest(candidates, points)
+            return voronoi_regions(candidates), points, winner, margin
+        keep, points = geometric_grid(model, size, shift)
+        winner, margin = nearest(candidates, points)
+        return contour_regions(coords[keep], winner, margin, points), points, winner, margin
+    coords, winner, margin = winners(method, candidates, model, size)
+    if moved:
+        keep, points = geometric_grid(model, size, shift)
+        kept = np.ix_(keep, keep)
+        winner, margin = winner[kept], margin[kept]
+        return contour_regions(coords[keep], winner, margin, points), points, winner, margin
+    points = np.stack(np.meshgrid(coords, coords, indexing="ij"), axis=-1)
+    return contour_regions(coords, winner, margin), points, winner, margin

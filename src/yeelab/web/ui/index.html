@@ -32,20 +32,37 @@
     button.active { background: #222; color: #fff; }
     button:disabled { opacity: .35; cursor: default; }
     p { margin: .25rem 0; font-size: .9rem; color: #666; }
+    #metrics { margin-top: .1rem; border-collapse: collapse; font-size: .9rem; color: #666; }
+    #metrics th, #metrics td { padding: .15rem .8rem .15rem 0; text-align: left; }
+    #metrics th { font-weight: 500; }
     .katex { font-size: 1.05em; }
   </style>
 </head>
 <body>
   <h1>Yee diagram</h1>
   <div class="layout">
-    <div class="diagram joint" id="joint">
-      <canvas id="square" width="1000" height="1000"></canvas>
+    <div class="diagram">
+      <div class="joint" id="joint">
+        <canvas id="square" width="1000" height="1000"></canvas>
+      </div>
+      <table id="metrics" title="Assignment regret is r/(r+L), weighted by 1/(1+(d/L)^2), where L is the median candidate spacing. Boundary F1 uses ε = 0.01 + (0.04−0.01)e^(−d_edge/0.1), so tolerance grows near the square's edge.">
+        <thead><tr><th>Voronoi agreement</th><th>Score</th></tr></thead>
+        <tbody>
+          <tr><td>Assignment</td><td id="metric-assignment">—</td></tr>
+          <tr><td>Inside candidate hull</td><td id="metric-inside">—</td></tr>
+          <tr><td>Boundaries</td><td id="metric-boundaries">—</td></tr>
+        </tbody>
+      </table>
     </div>
     <div class="controls">
       <div class="choices" id="distributions"><span>Voters:</span></div>
       <div class="choices"><span>Show voters:</span>
         <label><input type="checkbox" id="showMarginal">marginal distribution of x</label>
         <label><input type="checkbox" id="showJoint">joint distribution</label>
+      </div>
+      <div class="choices"><span>Show on diagram:</span>
+        <label><input type="checkbox" id="showBoundaries">boundaries + Voronoi tolerance</label>
+        <label><input type="checkbox" id="showHull">candidate convex hull</label>
       </div>
       <div class="choices"><span>Deviation:</span><input type="range" id="deviation"><output id="deviationValue"></output></div>
       <div class="choices" id="pixelMedians"><span>Pixel is:</span></div>
@@ -71,6 +88,9 @@
     const canvas = document.getElementById("square");
     const ctx = canvas.getContext("2d");
     const message = document.getElementById("message");
+    const assignmentMetric = document.getElementById("metric-assignment");
+    const insideMetric = document.getElementById("metric-inside");
+    const boundariesMetric = document.getElementById("metric-boundaries");
     const methods = document.getElementById("methods");
     const ideals = document.getElementById("ideals");
     const distributions = document.getElementById("distributions");
@@ -86,6 +106,8 @@
     const votersText = document.getElementById("voters");
     const showMarginal = document.getElementById("showMarginal");  // the strip above the square
     const showJoint = document.getElementById("showJoint");        // the shade over it while hovering
+    const showBoundaries = document.getElementById("showBoundaries");
+    const showHull = document.getElementById("showHull");
     // each curve is scaled so its peak sits at 1 / HEADROOM of the strip, whatever its height
     const HEADROOM = 1.1;
     const SAMPLES = 500;    // points per density curve
@@ -151,6 +173,8 @@
     let hovered = [0.5, 0.5];  // point whose voters are shown in the strip and the shade
     let showDensity = false;   // their 2D density over the square, while hovering it (if shown at all)
     let regions = null;   // last computed win regions [{winner, path}], path a Path2D in the unit square
+    let boundaryPath = null;
+    let voronoiBoundaries = [];
     let dragged = -1;     // index of the candidate being dragged
     let dragGrid = 0, finalGrid = 0;  // grid the backend traces regions on: while dragging, after
     let inFlight = false; // a request is on its way; at most one is, so a drag never queues up
@@ -170,6 +194,76 @@
         const [x, y] = toCanvas(c);
         return Math.hypot(x - px, y - py) <= RADIUS + 6;
       });
+    }
+
+    function pathOfBoundaries(regions) {
+      const path = new Path2D();
+      const segments = new Map();
+      for (const { polygons } of regions) {
+        for (const rings of polygons) {
+          for (const ring of rings) {
+            for (let i = 0; i < ring.length; i += 2) {
+              const j = (i + 2) % ring.length;
+              const x1 = ring[i], y1 = ring[i + 1], x2 = ring[j], y2 = ring[j + 1];
+              const first = `${x1},${y1}`, second = `${x2},${y2}`;
+              const key = first < second ? `${first}|${second}` : `${second}|${first}`;
+              const segment = segments.get(key);
+              if (segment) segment.count++;
+              else segments.set(key, { x1, y1, x2, y2, count: 1 });
+            }
+          }
+        }
+      }
+      for (const { x1, y1, x2, y2, count } of segments.values()) {
+        if (count < 2) continue;  // outer perimeter edges belong to only one region
+        path.moveTo(x1, y1);
+        path.lineTo(x2, y2);
+      }
+      return path;
+    }
+
+    function drawBoundaryOverlay() {
+      if (!showBoundaries.checked || !regions) return;
+      if (!boundaryPath) boundaryPath = pathOfBoundaries(regions);
+      for (const [x1, y1, x2, y2, tolerance] of voronoiBoundaries) {
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = "rgba(0, 165, 195, 0.2)";
+        ctx.lineWidth = 2 * tolerance;
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      for (const [x1, y1, x2, y2] of voronoiBoundaries) {
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+      }
+      ctx.strokeStyle = "#007c91";
+      ctx.lineWidth = 1.5 / canvas.width;
+      ctx.stroke();
+      ctx.strokeStyle = "#171717";
+      ctx.lineWidth = 2.5 / canvas.width;
+      ctx.lineJoin = "round";
+      ctx.stroke(boundaryPath);
+    }
+
+    function convexHull(points) {
+      const sorted = [...new Map(points.map(point => [point.join(","), point])).values()]
+        .sort(([ax, ay], [bx, by]) => ax - bx || ay - by);
+      if (sorted.length < 2) return sorted;
+      const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+      const half = values => {
+        const result = [];
+        for (const point of values) {
+          while (result.length > 1 && cross(result[result.length - 2], result[result.length - 1], point) <= 0) {
+            result.pop();
+          }
+          result.push(point);
+        }
+        return result;
+      };
+      const lower = half(sorted), upper = half([...sorted].reverse());
+      return lower.slice(0, -1).concat(upper.slice(0, -1));
     }
 
     function draw() {
@@ -193,6 +287,31 @@
         ctx.imageSmoothingQuality = "high";
         ctx.drawImage(densityCanvas, DENSITY_EDGE, DENSITY_EDGE, DENSITY_GRID, DENSITY_GRID,
           0, 0, canvas.width, canvas.height);
+      }
+      if ((showBoundaries.checked && regions) || (showHull.checked && candidates.length)) {
+        ctx.save();
+        ctx.setTransform(canvas.width, 0, 0, -canvas.height, 0, canvas.height);
+        drawBoundaryOverlay();
+        if (showHull.checked && candidates.length) {
+          const hull = convexHull(candidates);
+          if (hull.length >= 2) {
+            const path = new Path2D();
+            path.moveTo(...hull[0]);
+            for (const point of hull.slice(1)) path.lineTo(...point);
+            if (hull.length >= 3) path.closePath();
+            ctx.lineJoin = "round";
+            ctx.strokeStyle = "#111";
+            ctx.lineWidth = 4 / canvas.width;
+            ctx.setLineDash([8 / canvas.width, 5 / canvas.width]);
+            ctx.stroke(path);
+            ctx.strokeStyle = "#00e5ff";
+            ctx.lineWidth = 2 / canvas.width;
+            ctx.setLineDash([8 / canvas.width, 5 / canvas.width]);
+            ctx.stroke(path);
+            ctx.setLineDash([]);
+          }
+        }
+        ctx.restore();
       }
       candidates.forEach((candidate, i) => {
         const [x, y] = toCanvas(candidate);
@@ -470,6 +589,8 @@
       if (!showJoint.checked) showDensity = false;  // checking it again shows it from the next move
       draw();
     });
+    showBoundaries.addEventListener("change", draw);
+    showHull.addEventListener("change", draw);
 
     // Win regions as a Path2D: every ring of every polygon, [x0, y0, x1, y1, ...] in the unit square.
     function toPath(polygons) {
@@ -530,9 +651,17 @@
         if (!response.ok) throw new Error(await response.text());
         const answer = await response.json();
         if (asked === settings()) {
-          regions = answer.regions.map(({ winner, polygons }) => ({ winner, path: toPath(polygons) }));
+          regions = answer.regions.map(({ winner, polygons }) => ({
+            winner, polygons, path: toPath(polygons),
+          }));
+          voronoiBoundaries = answer.overlays.voronoi_boundaries;
+          boundaryPath = null;
           draw();
           describe(...sliders, Math.round(performance.now() - start), Math.round(answer.ms));
+          const { assignment, inside_hull, boundaries } = answer.metrics;
+          assignmentMetric.textContent = `${assignment.toFixed(1)}%`;
+          insideMetric.textContent = inside_hull === null ? "n/a" : `${inside_hull.toFixed(1)}%`;
+          boundariesMetric.textContent = `${boundaries.toFixed(1)}%`;
         }
       } catch (error) {
         if (asked === settings()) message.textContent = `Error: ${error.message}`;
@@ -622,6 +751,7 @@
       if (i === -1) return;
       candidates.splice(i, 1);
       regions = null;  // colours follow the index, which just shifted
+      boundaryPath = null;
       draw();
       compute();
     });

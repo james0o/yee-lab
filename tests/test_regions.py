@@ -14,6 +14,7 @@ from matplotlib.path import Path as MplPath
 
 from yeelab.build import (AntiPlurality, Highest, Mix, Plurality, Schedules, Score, ScoreAvg, ScoreCluster,
                           ScoreComparisons, ScoreDH, ScoreHybrid, Tally, Unbeaten)
+from yeelab.margin.metrics import voronoi_agreement
 from yeelab.margin.regions import MARGINS, grid, nearest, regions, winners
 from yeelab.margin.shares import Model, first_choice_shares, ranking_shares, score_comparison_shares, unscored_shares
 from yeelab.voting import irv_rounds
@@ -154,6 +155,41 @@ def test_voronoi_regions_are_exact():
                                   expected[clear])
 
 
+def test_voronoi_agreement_is_perfect_for_the_reference_diagram():
+    coordinates = (np.arange(100) + 0.5) / 100
+    points = np.stack(np.meshgrid(coordinates, coordinates, indexing="ij"), axis=-1)
+    winner, margin = nearest(CANDIDATES, points)
+
+    result = voronoi_agreement(CANDIDATES, points, winner, margin)
+
+    assert result["assignment"] == pytest.approx(100)
+    assert result["inside_hull"] == pytest.approx(100)
+    assert result["boundaries"] == pytest.approx(100)
+
+
+def test_voronoi_agreement_has_no_inside_score_for_collinear_candidates():
+    candidates = np.array([[0.1, 0.5], [0.5, 0.5], [0.9, 0.5]])
+    coordinates = (np.arange(20) + 0.5) / 20
+    points = np.stack(np.meshgrid(coordinates, coordinates, indexing="ij"), axis=-1)
+    winner, margin = nearest(candidates, points)
+
+    assert voronoi_agreement(candidates, points, winner, margin)["inside_hull"] is None
+
+
+def test_wrong_assignments_reduce_regret_and_boundary_agreement():
+    coordinates = (np.arange(80) + 0.5) / 80
+    points = np.stack(np.meshgrid(coordinates, coordinates, indexing="ij"), axis=-1)
+    winner, margin = nearest(CANDIDATES, points)
+    incorrect = winner.copy()
+    incorrect[:40] = (incorrect[:40] + 1) % len(CANDIDATES)
+
+    result = voronoi_agreement(CANDIDATES, points, incorrect, margin)
+
+    assert result["assignment"] < 100
+    assert result["inside_hull"] < 100
+    assert result["boundaries"] < 100
+
+
 def test_grid_reaches_the_walls():
     coords, medians = grid(10, 300)
     assert coords[0] == 0 and coords[-1] == 1 and len(coords) == 12
@@ -252,8 +288,28 @@ def test_api_returns_regions(distribution, method):
         "deviation": 0.2, "grid": 64,
     })
     assert response.status_code == 200
-    shapes = response.json()["regions"]
+    payload = response.json()
+    shapes = payload["regions"]
     assert shapes and all(region["polygons"] for region in shapes)
+    assert {"assignment", "inside_hull", "boundaries"} == set(payload["metrics"])
+    assert all(payload["metrics"][name] is None or 0 <= payload["metrics"][name] <= 100
+               for name in payload["metrics"])
+    overlays = payload["overlays"]
+    assert overlays["voronoi_boundaries"]
+    assert all(len(segment) == 5 and 0.01 <= segment[4] <= 0.04
+               for segment in overlays["voronoi_boundaries"])
+
+
+def test_api_reports_perfect_metrics_for_voronoi():
+    response = TestClient(app).post("/api/regions", json={
+        "candidates": CANDIDATES.tolist(), "method": "voronoi", "grid": 64,
+    })
+
+    assert response.status_code == 200
+    metrics = response.json()["metrics"]
+    assert metrics["assignment"] == pytest.approx(100)
+    assert metrics["inside_hull"] == pytest.approx(100)
+    assert metrics["boundaries"] == pytest.approx(100)
 
 
 def _mix(share):
