@@ -36,6 +36,7 @@ default. @ch-shapes asks when a candidate's region is convex or in one piece, an
 that relates to the monotonicity of the method. @ch-realtime shows how the web UI draws
 the regions as curves fast enough to follow a dragged candidate. @ch-geometric describes
 the diagram in which every pixel is drawn at the geometric median of its voters.
+@ch-metrics defines how the web UI compares a method's diagram with the Voronoi diagram.
 
 The settings that appear in the mathematics, with their defaults (file names are in the
 package `src/yeelab/`):
@@ -3414,3 +3415,118 @@ with pixels at geometric medians the UI keeps every candidate within the border:
 dragged or added beyond it, or left beyond it when the diagram moves to geometric medians
 or a larger deviation widens the strip, goes to the closest point of the border. It stays
 there when the pixels go back to their medians along the axes.
+
+#pagebreak()
+
+= Comparing a diagram with Voronoi <ch-metrics>
+
+The web UI reports three complementary quantities for a method's diagram, using the
+Voronoi diagram of the same candidate positions as the reference. Assignment and
+assignment inside the candidates' convex hull are scores from 0 to 100, with larger
+values indicating closer agreement. The two boundary distances are means in units of
+the unit square's width, shown as percentages; smaller values indicate closer boundaries.
+The hull-restricted assignment is the same metric as the whole-square assignment, but
+evaluated only within the convex hull, so the two values are related rather than
+independent.
+
+== Assignment regret (`margin/metrics.py`)
+
+At each evaluation point $x$, let $d_min(x)$ be its distance to the nearest candidate,
+and $d_a(x)$ its distance to the candidate assigned the point by the method diagram.
+The regret is the extra distance paid by that assignment:
+
+$ r(x) = d_a(x) - d_min(x) . $
+
+This is more informative than counting mismatched labels. At a Voronoi boundary the two
+nearest candidates have nearly equal distances, so switching their labels has very
+little regret. Assigning a point to a much farther candidate has larger regret. If the
+method reports a cycle rather than a candidate, the point receives the maximum loss.
+
+To put regrets of different candidate layouts on a comparable scale, let $L$ be the
+median of all pairwise candidate distances. The bounded loss and the importance weight
+at $x$ are
+
+$ ell(x) = r(x) / (r(x) + L), quad
+  w_a(x) = 1 / (1 + (d_min(x) / L)^2). $
+
+Thus $ell$ is zero for a perfect assignment and approaches one for a very poor one.
+The weight decreases with distance from the nearest candidate, so mistakes in remote
+parts of the square matter less. Let $A(x)$ be the area represented by the grid point
+(the trapezoidal area weight of the evaluation grid). The whole-square score is
+
+$ S_a = 100 (1 -
+  (sum_(x in Omega) A(x) w_a(x) ell(x)) /
+  (sum_(x in Omega) A(x) w_a(x))). $
+
+Here $Omega$ is the full evaluated region. To obtain the inside-hull score, use exactly
+the same formula and weights, but sum only over grid points inside the convex hull $H$
+of the candidate positions:
+
+$ S_H = 100 (1 -
+  (sum_(x in H) A(x) w_a(x) ell(x)) /
+  (sum_(x in H) A(x) w_a(x))). $
+
+If the candidates are collinear, their convex hull has no area and the inside-hull
+score is not defined; the UI displays `n/a`.
+
+== Symmetric mean distance between boundaries
+
+Let $B_a$ be the shared borders between the method's win regions and $B_v$ the shared
+Voronoi borders. The outer edge of the square is not included: it is not a boundary
+between two winners. Distances are measured in both directions, so extra borders in one
+diagram and missing borders in the other are both represented.
+
+For a sampled point $x$ on one boundary and a line segment of the other boundary with
+endpoints $a$ and $b$, the nearest point on that segment is the perpendicular projection
+clamped to the segment:
+
+$ t = max(0, min(1, ((x - a) dot (b - a)) / ||b - a||^2)), quad
+  p = a + t (b - a), quad d(x, [a,b]) = ||x - p||. $
+
+The distance $d(x, B)$ to a whole boundary is the minimum over all its segments. This
+is a true point-to-segment distance, not the distance to the nearest sampled vertex:
+when the perpendicular foot falls within a segment, it gives the perpendicular
+distance; outside the segment it gives the distance to the nearer endpoint.
+
+The boundaries are sampled uniformly by arc length, at approximately $0.005$ units per
+sample. Each sample represents an equal small piece of boundary length. For the
+whole-square metric, its weight is further reduced toward the square's edge by
+
+$ w_b(x) = exp(-4 ||x - (0.5, 0.5)||^2). $
+
+This weight is largest at the centre and smaller toward the corners. For each
+direction, take the weighted mean distance and then give the two directions equal
+weight. The reported whole-square boundary distance is
+
+$ D_b = 1/2 (
+  (sum_(x in B_a) Delta s w_b(x) d(x, B_v)) /
+    (sum_(x in B_a) Delta s w_b(x))
+  +
+  (sum_(x in B_v) Delta s w_b(x) d(x, B_a)) /
+    (sum_(x in B_v) Delta s w_b(x))
+). $
+
+The UI displays $100 D_b$ as a percentage of the square's width.
+
+== Boundary distance inside the convex hull
+
+The second boundary mean restricts both sets of segments to the convex hull $H$ of the
+candidates by clipping each segment to $H$. It then samples the clipped boundary
+lengths uniformly. All samples have equal weight: distance from the centre does not
+change their importance. Its symmetric mean is
+
+$ D_H = 1/2 (
+  (sum_(x in B_a inter H) d(x, B_v inter H)) / |B_a inter H|
+  +
+  (sum_(x in B_v inter H) d(x, B_a inter H)) / |B_v inter H|
+). $
+
+In this expression the sums denote averages over the equally spaced samples on each
+clipped boundary; $|B inter H|$ is its length. The UI displays $100 D_H$, also as a
+percentage of the square's width. If the hull has no area or either clipped boundary
+is empty, this metric is not defined and the UI displays `n/a`.
+
+The boundary overlay in the UI draws the method's boundary in black and the Voronoi
+reference boundary in blue. The candidate hull can be shown separately as a dashed
+outline. There is no tolerance band and no binary inside/outside decision in either
+boundary metric.
