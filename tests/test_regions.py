@@ -192,20 +192,25 @@ def test_wrong_assignments_reduce_regret_and_boundary_agreement():
     assert result["inside_hull"] < 100
 
 
-def test_boundary_distance_measures_symmetric_offset():
+def test_boundary_distance_is_relative_to_half_the_candidate_gap():
     from yeelab.margin.metrics import boundary_distance
 
     def cells(split):
         return [
-            {"polygons": [[
+            {"winner": 0, "polygons": [[
                 [0, 0, split, 0, split, 1, 0, 1],
             ]]},
-            {"polygons": [[
+            {"winner": 1, "polygons": [[
                 [split, 0, 1, 0, 1, 1, split, 1],
             ]]},
         ]
 
-    assert boundary_distance(cells(0.45), cells(0.55)) == pytest.approx(0.1, abs=1e-6)
+    # the boundaries are 0.1 apart everywhere: half of the gap of 0.2 between the candidates
+    candidates = np.array([[0.3, 0.5], [0.7, 0.5]])
+    assert boundary_distance(cells(0.45), cells(0.55), candidates, 0.4) == pytest.approx(0.5, abs=1e-6)
+    # beyond a candidate a boundary cannot be any worse
+    candidates = np.array([[0.45, 0.5], [0.55, 0.5]])
+    assert boundary_distance(cells(0.45), cells(0.55), candidates, 0.1) == pytest.approx(1)
 
 
 def test_boundary_distance_uses_perpendicular_projection_onto_segments():
