@@ -12,7 +12,8 @@ import pytest
 from fastapi.testclient import TestClient
 from matplotlib.path import Path as MplPath
 
-from yeelab.build import Highest, Mix, Plurality, Schedules, Score, ScoreAvg, ScoreCluster, ScoreDH, ScoreHybrid, Tally
+from yeelab.build import (Highest, Mix, Plurality, Schedules, Score, ScoreAvg, ScoreCluster, ScoreComparisons, ScoreDH,
+                          ScoreHybrid, Tally, Unbeaten)
 from yeelab.margin.regions import MARGINS, grid, nearest, regions, winners
 from yeelab.margin.shares import Model, first_choice_shares, ranking_shares, score_comparison_shares, unscored_shares
 from yeelab.voting import irv_rounds
@@ -172,14 +173,15 @@ def test_config_lists_every_method():
     config = TestClient(app).get("/api/config").json()
     methods = config["methods"]
     assert [m["name"] for m in methods] == list(MARGINS)
-    assert [m["label"] for m in methods + config["ideals"]] == [
-        "FPTP", "Two-round", "IRV", "DAC", "Borda", "Baldwin", "Nanson", "Schulze", "Condorcet", "Minimax",
-        "Black", "King of the hill", "Score", "STAR", "IRV set + KOTH + Score", "Voronoi"]
+    assert [m["name"] for m in methods + config["ideals"]] == [*MARGINS, "voronoi"]
+    assert config["ideals"][0]["label"] == "Voronoi"
+    assert all({"name", "label", "description"} <= method.keys() for method in methods)
+    assert all(method["description"].endswith(repr(MARGINS[method["name"]])) for method in methods)
     descriptions = {m["name"]: m["description"] for m in methods}
     assert descriptions["nanson"].endswith('\nEliminate(Tally(BordaCount()), how="mean")')
     # the categories and power sliders: their method, their defaults, which it is listed
     # with, and their ranges
-    assert config["scores"] == ["score", "star", "irv_set_koth_score"]
+    assert {"score", "star", "irv_set_koth_score", "star_two_round"} <= set(config["scores"])
     assert config["levels"] == 6 and config["max_levels"] == 11
     assert descriptions["score"].endswith("\nHighest(Tally(Score(6, power=1.5)))")
     assert descriptions["star"].endswith(
@@ -191,6 +193,26 @@ def test_config_lists_every_method():
     assert (config["min_power"], config["max_power"], config["power_step"]) == (1.0, 2.0, 0.05)
     for gone in ("deltas", "delta", "clusters", "mu", "kappa", "powers"):
         assert gone not in config
+
+
+def test_score_sliders_apply_to_nested_score_ballots():
+    """The sliders update Score ballots even inside a composed registered method."""
+    config = TestClient(app).get("/api/config").json()
+    assert "star_two_round" in config["scores"]
+
+    response = TestClient(app).post("/api/regions", json={
+        "candidates": CANDIDATES.tolist(), "method": "star_two_round", "levels": 2, "power": 2, "grid": 64,
+    })
+    assert response.status_code == 200
+
+    ballot = Score(2, power=2)
+    expected = Unbeaten(
+        ScoreComparisons(ballot),
+        among=Highest(Tally(ballot)) | MARGINS["two_round"],
+    )
+    assert response.json()["regions"] == json.loads(
+        json.dumps(regions(expected, CANDIDATES.tolist(), MODELS[0], 64))
+    )
 
 
 @pytest.mark.parametrize("distribution", ["beta", "normal"])

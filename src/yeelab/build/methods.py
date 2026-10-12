@@ -50,6 +50,7 @@ star = Unbeaten(ScoreComparisons(score_ballot), among=Highest(Tally(score_ballot
 # first choices out, any number at a time: IRV, FPTP, the top two and all between) and
 # the king of the hill
 irv_set_koth_score = Highest(Tally(score_ballot), among=Schedules(Tally(Plurality())) | koth)
+star_two_round = Unbeaten(ScoreComparisons(score_ballot), among= score | two_round)
 
 METHODS: dict[str, Winner] = {
     "fptp": fptp,
@@ -67,4 +68,5 @@ METHODS: dict[str, Winner] = {
     "score": score,
     "star": star,
     "irv_set_koth_score": irv_set_koth_score,
+    "star_two_round": star_two_round,
 }

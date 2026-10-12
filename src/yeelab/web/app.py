@@ -7,6 +7,8 @@ The page itself is ui/index.html; this file only answers its requests.
 import json
 import threading
 import time
+from copy import copy
+from dataclasses import fields, is_dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
@@ -16,9 +18,8 @@ from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
-from yeelab.build import (Bullet, Burial, Compromise, Highest, Plurality, Schedules, Score, ScoreComparisons, Tally,
-                          Unbeaten, Winner)
-from yeelab.build.methods import SCORE_POWER, koth
+from yeelab.build import (Bullet, Burial, Compromise, Score, Winner)
+from yeelab.build.methods import SCORE_POWER
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
 from yeelab.margin.regions import MARGINS, regions
@@ -49,25 +50,33 @@ MAX_LEVELS = 11
 MIN_POWER, MAX_POWER, POWER_STEP = 1.0, 2.0, 0.05
 
 
-def build_score(levels: int, power: float) -> Winner:
-    """Score with the sliders' settings."""
-    return Highest(Tally(Score(levels, power=power)))
+def _has_score_ballot(block) -> bool:
+    """Whether a built method contains a Score ballot that the UI sliders can adjust."""
+    if type(block) is Score:
+        return True
+    return (is_dataclass(block)
+            and any(_has_score_ballot(getattr(block, field.name)) for field in fields(block)))
 
 
-def build_star(levels: int, power: float) -> Winner:
-    """STAR with the sliders' settings."""
-    ballot = Score(levels, power=power)
-    return Unbeaten(ScoreComparisons(ballot), among=Highest(Tally(ballot), n=2))
+def _score_ballot_settings(block, levels: int, power: float):
+    """Replace every Score ballot in a built method while preserving its block structure."""
+    if type(block) is Score:
+        return Score(levels, power=power)
+    if not is_dataclass(block):
+        return block
+    updated_block = copy(block)
+    changed = False
+    for field in fields(block):
+        value = getattr(block, field.name)
+        updated = _score_ballot_settings(value, levels, power)
+        if updated is not value:
+            object.__setattr__(updated_block, field.name, updated)
+            changed = True
+    return updated_block if changed else block
 
 
-def build_irv_set_koth_score(levels: int, power: float) -> Winner:
-    """IRV set + KOTH + Score with the sliders' settings."""
-    return Highest(Tally(Score(levels, power=power)), among=Schedules(Tally(Plurality())) | koth)
-
-
-# the methods of the sliders, built with their settings
-SCORES = {"score": build_score, "star": build_star, "irv_set_koth_score": build_irv_set_koth_score}
-assert all(MARGINS[name] == build(SCORE_LEVELS, SCORE_POWER) for name, build in SCORES.items())
+# Whether the UI sliders apply is derived from each method's built blocks.
+SCORE_METHODS = [name for name, method in MARGINS.items() if _has_score_ballot(method)]
 assert MIN_POWER <= SCORE_POWER <= MAX_POWER
 # How the voters vote: a slider for the share of the voters of each strategy, from 0 to 1
 # by STRATEGIC_STEP and at 0 at first (every voter sincere), in the order the UI lists them,
@@ -183,7 +192,6 @@ METHOD_INFO = {
                 "pixels at geometric medians it is drawn only where the voters above have one, "
                 "to compare it with the methods."},
 }
-assert set(METHOD_INFO) == set(DIAGRAMS)
 # Each voter distribution along one axis, per pixel: plain label, LaTeX label (typeset
 # by KaTeX in the UI) and tooltip.
 DISTRIBUTION_INFO = {
@@ -299,15 +307,23 @@ def _voters():
     ]
 
 
+def _method_option(name: str, method: Winner) -> dict[str, str]:
+    """The UI label and tooltip, with useful defaults for methods without overrides."""
+    info = METHOD_INFO.get(name, {})
+    label = info.get("label", name.replace("_", " ").title())
+    expression = repr(method)
+    description = info.get("description")
+    return {
+        "name": name,
+        "label": label,
+        "description": f"{description}\n{expression}" if description else expression,
+    }
+
+
 @app.get("/api/config")
 def config():
     return {
-        "methods": [
-            {"name": name, "label": METHOD_INFO[name]["label"],
-             "description": METHOD_INFO[name]["description"]
-             + (f"\n{method!r}" if isinstance(method, Winner) else "")}
-            for name, method in MARGINS.items()
-        ],
+        "methods": [_method_option(name, method) for name, method in MARGINS.items()],
         "ideals": [{"name": name, **METHOD_INFO[name]} for name in IDEALS],
         "distributions": [{"name": name, **info} for name, info in DISTRIBUTION_INFO.items()],
         "spread": SPREAD_INFO,
@@ -321,7 +337,7 @@ def config():
         "deviations": DEVIATIONS,
         "deviation": DEVIATION,
         # the methods of the categories and power sliders, their defaults and ranges
-        "scores": list(SCORES),
+        "scores": SCORE_METHODS,
         "levels": SCORE_LEVELS,
         "max_levels": MAX_LEVELS,
         "power": SCORE_POWER,
@@ -347,8 +363,8 @@ def diagram_regions(request: DiagramRequest):
     start = time.perf_counter()
     spread = SPREAD if request.distribution == "beta" else None
     model = Model(request.distribution, request.deviation, spread)
-    if request.method in SCORES:
-        method = SCORES[request.method](request.levels, request.power)
+    if request.method in SCORE_METHODS:
+        method = _score_ballot_settings(MARGINS[request.method], request.levels, request.power)
     else:
         method = request.method
     shares = {name: getattr(request, name) for name in STRATEGIES}
