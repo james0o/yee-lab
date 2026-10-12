@@ -56,7 +56,7 @@ score_two_runoff = Unbeaten(M, among=score | two_round)
 
 top3 = Highest(Tally(Plurality()), n=3)
 top2 = Highest(Tally(AntiPlurality()), n=2, among=top3)
-system321 = Unbeaten(ScoreComparisons(score_ballot), among=top2)
+system321 = Unbeaten(ScoreComparisons(Score(3, power=SCORE_POWER, fixed=True)), among=top2)
 
 METHODS: dict[str, Winner] = {
     "fptp": fptp,

@@ -12,8 +12,8 @@ import pytest
 from fastapi.testclient import TestClient
 from matplotlib.path import Path as MplPath
 
-from yeelab.build import (Highest, Mix, Plurality, Schedules, Score, ScoreAvg, ScoreCluster, ScoreComparisons, ScoreDH,
-                          ScoreHybrid, Tally, Unbeaten)
+from yeelab.build import (AntiPlurality, Highest, Mix, Plurality, Schedules, Score, ScoreAvg, ScoreCluster,
+                          ScoreComparisons, ScoreDH, ScoreHybrid, Tally, Unbeaten)
 from yeelab.margin.regions import MARGINS, grid, nearest, regions, winners
 from yeelab.margin.shares import Model, first_choice_shares, ranking_shares, score_comparison_shares, unscored_shares
 from yeelab.voting import irv_rounds
@@ -182,6 +182,9 @@ def test_config_lists_every_method():
     # the categories and power sliders: their method, their defaults, which it is listed
     # with, and their ranges
     assert {"score", "star", "irv_set_koth_score", "star_two_round"} <= set(config["scores"])
+    assert "system321" in config["scores"]
+    assert "system321" not in config["score_levels"]
+    assert config["fixed_score_levels"]["system321"] == [3]
     assert config["levels"] == 6 and config["max_levels"] == 11
     assert descriptions["score"].endswith("\nHighest(Tally(Score(6, power=1.5)))")
     assert descriptions["star"].endswith(
@@ -211,6 +214,31 @@ def test_score_sliders_apply_to_nested_score_ballots():
         among=Highest(Tally(ballot)) | MARGINS["two_round"],
     )
     assert response.json()["regions"] == json.loads(
+        json.dumps(regions(expected, CANDIDATES.tolist(), MODELS[0], 64))
+    )
+
+
+def test_fixed_score_levels_ignore_category_slider_but_keep_power_slider():
+    """A fixed Score ballot keeps its categories while the UI power slider still applies."""
+    client = TestClient(app)
+
+    def shapes(levels, power):
+        response = client.post("/api/regions", json={
+            "candidates": CANDIDATES.tolist(), "method": "system321",
+            "levels": levels, "power": power, "grid": 64,
+        })
+        assert response.status_code == 200
+        return response.json()["regions"]
+
+    assert shapes(2, 2) == shapes(11, 2)
+
+    ballot = Score(3, power=2, fixed=True)
+    expected = Unbeaten(
+        ScoreComparisons(ballot),
+        among=Highest(Tally(AntiPlurality()), n=2,
+                      among=Highest(Tally(Plurality()), n=3)),
+    )
+    assert shapes(2, 2) == json.loads(
         json.dumps(regions(expected, CANDIDATES.tolist(), MODELS[0], 64))
     )
 

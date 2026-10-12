@@ -283,6 +283,11 @@ def test_antiplurality_and_top_two_among_top_three():
 
 def test_score_takes_the_number_of_levels():
     assert Score(3) == Score(levels=3) != Score(4)
+    assert Score(3, fixed=True) != Score(3)
+    assert repr(Score(3, power=1.5, fixed=True)) == "Score(3, power=1.5, fixed=True)"
+    assert eval(repr(Score(3, power=1.5, fixed=True))) == Score(3, power=1.5, fixed=True)
+    with pytest.raises(TypeError, match="Score fixed must be a bool"):
+        Score(3, fixed=1)
     assert ScoreAvg(3) == ScoreAvg(levels=3) != ScoreAvg(4)
     assert ScoreDH(3) == ScoreDH(levels=3) != ScoreDH(4)
     assert ScoreHybrid(3) == ScoreHybrid(levels=3) != ScoreHybrid(4)

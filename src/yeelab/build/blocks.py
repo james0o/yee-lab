@@ -340,10 +340,12 @@ class Score(Ballot):
     The total is the mean score as a part of the top score, counted down from 1.
     Score(2) is an approval ballot: the voter approves the candidates beyond
     2^(-1 / power) of the way from the farthest to the closest, halfway for power = 1.
-    The other score ballots, subclasses of this one, have no power."""
+    The other score ballots, subclasses of this one, have no power. fixed keeps the
+    number of categories fixed in the UI while leaving power adjustable."""
 
     levels: int
     power: float = field(default=POWER, kw_only=True)
+    fixed: bool = field(default=False, kw_only=True)
     rule = RANGE  # of the ballot (yeelab.score); not a field
 
     def __post_init__(self):
@@ -353,6 +355,8 @@ class Score(Ballot):
         power = self.power
         if isinstance(power, bool) or not isinstance(power, int | float) or not 0 < power < np.inf:
             raise ValueError(f"{type(self).__name__} power must be a number above 0, got {power!r}")
+        if not isinstance(self.fixed, bool):
+            raise TypeError(f"{type(self).__name__} fixed must be a bool, got {self.fixed!r}")
         if self.rule != RANGE and power != POWER:  # as for any keyword the block does not take
             raise TypeError(f"{type(self).__name__} has no power; only Score has")
 
@@ -379,7 +383,8 @@ class Score(Ballot):
 
     def __repr__(self):
         power = f", power={self.power!r}" if self.power != POWER else ""
-        return f"{type(self).__name__}({self.levels}{power})"
+        fixed = ", fixed=True" if self.fixed else ""
+        return f"{type(self).__name__}({self.levels}{power}{fixed})"
 
 
 @dataclass(frozen=True, repr=False)  # the repr of Score, with this name

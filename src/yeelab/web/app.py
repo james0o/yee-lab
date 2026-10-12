@@ -50,18 +50,20 @@ MAX_LEVELS = 11
 MIN_POWER, MAX_POWER, POWER_STEP = 1.0, 2.0, 0.05
 
 
-def _has_score_ballot(block) -> bool:
-    """Whether a built method contains a Score ballot that the UI sliders can adjust."""
+def _score_ballots(block) -> list[Score]:
+    """Find Score ballots nested in a built method."""
     if type(block) is Score:
-        return True
-    return (is_dataclass(block)
-            and any(_has_score_ballot(getattr(block, field.name)) for field in fields(block)))
+        return [block]
+    if not is_dataclass(block):
+        return []
+    return [ballot for field in fields(block)
+            for ballot in _score_ballots(getattr(block, field.name))]
 
 
 def _score_ballot_settings(block, levels: int, power: float):
-    """Replace every Score ballot in a built method while preserving its block structure."""
+    """Replace adjustable Score settings while preserving fixed levels and block structure."""
     if type(block) is Score:
-        return Score(levels, power=power)
+        return Score(block.levels if block.fixed else levels, power=power, fixed=block.fixed)
     if not is_dataclass(block):
         return block
     updated_block = copy(block)
@@ -76,7 +78,16 @@ def _score_ballot_settings(block, levels: int, power: float):
 
 
 # Whether the UI sliders apply is derived from each method's built blocks.
-SCORE_METHODS = [name for name, method in MARGINS.items() if _has_score_ballot(method)]
+SCORE_METHODS = {name: _score_ballots(method) for name, method in MARGINS.items()}
+SCORE_METHODS = {name: ballots for name, ballots in SCORE_METHODS.items() if ballots}
+SCORE_LEVEL_METHODS = [name for name, ballots in SCORE_METHODS.items()
+                       if any(not ballot.fixed for ballot in ballots)]
+SCORE_POWER_METHODS = list(SCORE_METHODS)
+FIXED_SCORE_LEVELS = {
+    name: sorted({ballot.levels for ballot in ballots if ballot.fixed})
+    for name, ballots in SCORE_METHODS.items()
+    if all(ballot.fixed for ballot in ballots)
+}
 assert MIN_POWER <= SCORE_POWER <= MAX_POWER
 # How the voters vote: a slider for the share of the voters of each strategy, from 0 to 1
 # by STRATEGIC_STEP and at 0 at first (every voter sincere), in the order the UI lists them,
@@ -337,7 +348,9 @@ def config():
         "deviations": DEVIATIONS,
         "deviation": DEVIATION,
         # the methods of the categories and power sliders, their defaults and ranges
-        "scores": SCORE_METHODS,
+        "scores": SCORE_POWER_METHODS,
+        "score_levels": SCORE_LEVEL_METHODS,
+        "fixed_score_levels": FIXED_SCORE_LEVELS,
         "levels": SCORE_LEVELS,
         "max_levels": MAX_LEVELS,
         "power": SCORE_POWER,

@@ -135,7 +135,9 @@
                           // quarter of the square the pixel whose voters have their geometric
                           // median there, and the border of the coloured region
     let deviation = 0;    // mean absolute deviation of the voters from their pixel
-    let scoreMethods = [];   // names of the methods the categories and power sliders belong to
+    let scoreLevelMethods = []; // methods with at least one Score ballot whose categories can change
+    let scorePowerMethods = []; // methods with a Score ballot whose power can change
+    let fixedScoreLevels = {};  // method -> fixed category counts when no category slider applies
     let levels = 0;          // their number of scores on a ballot
     let power = 0;           // their part of the way is raised to this power
     let shares = {};         // strategy name -> the share of the voters who vote by it, from 0 to 1,
@@ -550,8 +552,12 @@
     function describe(deviation, levels, power, applies, total, server) {
       const tail = ` · ${candidates.length} candidates · ${total} ms (${server} ms computing)`;
       let name = labels[method];
-      if (scoreMethods.includes(method)) name += `, ${levels} categories${levels === 2 ? " (approval)" : ""}`;
-      if (scoreMethods.includes(method)) name += `, p = ${power.toFixed(2)}`;
+      if (scorePowerMethods.includes(method)) {
+        const fixed = !scoreLevelMethods.includes(method);
+        const categories = fixed ? fixedScoreLevels[method].join(", ") : levels;
+        name += `, ${categories} categories${categories === 2 ? " (approval)" : ""}${fixed ? " (fixed)" : ""}`;
+        name += `, p = ${power.toFixed(2)}`;
+      }
       for (const [strategy, share] of Object.entries(applies)) {
         const others = applies[strategyOf[strategy]] > 0 ? "of the others " : "";
         if (share > 0) name += ` · ${Math.round(100 * share)}% ${others}${strategyPhrases[strategy]}`;
@@ -653,11 +659,11 @@
       for (const button of pixelMedians.querySelectorAll("button")) button.disabled = distribution !== "beta";
     }
 
-    // The categories and power sliders only apply to their methods.
+    // The categories and power sliders only apply to the Score ballots they can change.
     function pickMethod(name) {
       method = name;
-      levelsSlider.disabled = !scoreMethods.includes(method);
-      powerSlider.disabled = !scoreMethods.includes(method);
+      levelsSlider.disabled = !scoreLevelMethods.includes(method);
+      powerSlider.disabled = !scorePowerMethods.includes(method);
       updateStrategies();
     }
 
@@ -698,7 +704,9 @@
     deviationSlider.addEventListener("change", () => compute());
     // The categories slider is the number of scores of a score ballot. It recomputes like the
     // deviation slider.
-    scoreMethods = config.scores;
+    scorePowerMethods = config.scores;
+    scoreLevelMethods = config.score_levels;
+    fixedScoreLevels = config.fixed_score_levels;
     function pickLevels() {
       levels = levelsSlider.valueAsNumber;
       levelsValue.textContent = levels === 2 ? "2 (approval)" : `${levels} (scores 0 to ${levels - 1})`;
