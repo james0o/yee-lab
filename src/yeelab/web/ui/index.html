@@ -35,6 +35,9 @@
     #metrics { margin-top: .1rem; border-collapse: collapse; font-size: .9rem; color: #666; }
     #metrics th, #metrics td { padding: .15rem .8rem .15rem 0; text-align: left; }
     #metrics th { font-weight: 500; }
+    /* the error relative to the method shown before: smaller in green, larger in red */
+    #metrics .better { color: #2a7d2e; }
+    #metrics .worse { color: #c62828; }
     .katex { font-size: 1.05em; }
   </style>
 </head>
@@ -45,21 +48,21 @@
       <div class="joint" id="joint">
         <canvas id="square" width="1000" height="1000"></canvas>
       </div>
-      <table id="metrics" title="Boundary distances are symmetric and weighted by boundary length and centrality exp(−4‖x−(0.5,0.5)‖²). Lower is better.">
-        <thead><tr><th>Voronoi agreement</th><th>Score</th></tr></thead>
+      <table id="metrics" title="The boundary distance is symmetric and weighted by boundary length and centrality exp(−4‖x−(0.5,0.5)‖²). Lower is better.">
+        <thead><tr><th>Voronoi disagreement</th><th>Error</th><th id="compared"></th></tr></thead>
         <tbody>
-          <tr><td>Assignment</td><td id="metric-assignment">—</td></tr>
-          <tr><td>Inside candidate hull</td><td id="metric-inside">—</td></tr>
-          <tr><td>Boundary distance, center-weighted mean</td><td id="metric-boundaries">—</td></tr>
-          <tr><td>Boundary distance inside hull, equal-weight mean</td><td id="metric-boundary-hull">—</td></tr>
+          <tr><td>Assignment error</td><td id="metric-assignment">—</td><td></td></tr>
+          <tr><td>Assignment error inside candidate hull</td><td id="metric-inside">—</td><td></td></tr>
+          <tr><td>Boundary distance</td><td id="metric-boundaries">—</td><td></td></tr>
         </tbody>
       </table>
       <details class="metric-help">
         <summary>How the metrics are calculated</summary>
         <p>Let d<sub>min</sub>(x) be the nearest candidate distance, d<sub>a</sub>(x) the distance to the assigned candidate, r(x) = d<sub>a</sub>(x) − d<sub>min</sub>(x), and L the median distance between candidate pairs. The regret loss is ℓ(x) = r(x)/(r(x)+L), weighted by area and w<sub>a</sub>(x) = 1/(1+(d<sub>min</sub>(x)/L)²).</p>
-        <p>Assignment = 100 × (1 − Σw<sub>a</sub>ℓ/Σw<sub>a</sub>). Inside hull uses the same formula, summing only over grid points inside the candidates’ convex hull.</p>
+        <p>Assignment error = 100 × Σw<sub>a</sub>ℓ/Σw<sub>a</sub>. Inside hull uses the same formula, summing only over grid points inside the candidates’ convex hull.</p>
         <p>For boundaries, each sample is projected to the nearest point on every segment of the other boundary. For segment endpoints a and b, the closest point is a + t(b−a), where t = clamp(((x−a)·(b−a))/‖b−a‖², 0, 1); distance is the minimum Euclidean distance over segments. This is measured in both directions.</p>
-        <p>Center-weighted boundary distance uses weight w<sub>b</sub>(x) = exp(−4‖x−(0.5,0.5)‖²), multiplied by represented segment length. It is the weighted mean Σwd/Σw. The hull-only metric clips both diagrams’ boundary segments to the candidates’ convex hull and gives its uniformly spaced samples equal weight. Distances are shown as percentages of the square’s width; lower is better.</p>
+        <p>After switching to another method, the last column shows how many times smaller (green, ↓) or larger (red, ↑) each error is than with the method shown before, for the same candidates and voters.</p>
+        <p>Center-weighted boundary distance uses weight w<sub>b</sub>(x) = exp(−4‖x−(0.5,0.5)‖²), multiplied by represented segment length. It is the weighted mean Σwd/Σw. Distances are shown as percentages of the square’s width; lower is better.</p>
       </details>
     </div>
     <div class="controls">
@@ -99,7 +102,10 @@
     const assignmentMetric = document.getElementById("metric-assignment");
     const insideMetric = document.getElementById("metric-inside");
     const boundariesMetric = document.getElementById("metric-boundaries");
-    const hullBoundariesMetric = document.getElementById("metric-boundary-hull");
+    const compared = document.getElementById("compared");  // the header of the ratio column
+    // The errors of the last fine diagram ({key, method, errors}) and of the method it is
+    // compared with, the one shown before for the same key (all but the method).
+    let shown = null, previous = null;
     const methods = document.getElementById("methods");
     const ideals = document.getElementById("ideals");
     const distributions = document.getElementById("distributions");
@@ -639,6 +645,7 @@
       if (moving) grid = dragGrid;  // on its way: the coarser grid, like a drag
       const part = shift();
       const asked = settings(), sliders = [deviation, levels, power, applied()];
+      const key = JSON.stringify([candidates, distribution, deviation, levels, power, shares, part]);
       if (grid === finalGrid) message.textContent = `Computing ${labels[method]}…`;
       const start = performance.now();
       try {
@@ -660,16 +667,35 @@
           boundaryPath = null;
           draw();
           describe(...sliders, Math.round(performance.now() - start), Math.round(answer.ms));
-          const { assignment, inside_hull, boundary_mean, boundary_hull_mean } = answer.metrics;
-          assignmentMetric.textContent = `${assignment.toFixed(1)}%`;
-          insideMetric.textContent = inside_hull === null ? "n/a" : `${inside_hull.toFixed(1)}%`;
-          boundariesMetric.textContent = formatBoundaryDistance(boundary_mean);
-          hullBoundariesMetric.textContent = formatBoundaryDistance(boundary_hull_mean);
+          const { assignment, inside_hull, boundary_mean } = answer.metrics;
+          const errors = [100 - assignment, inside_hull === null ? null : 100 - inside_hull,
+            boundary_mean === null ? null : 100 * boundary_mean];
+          if (grid === finalGrid) {
+            if (shown?.key !== key) previous = null;
+            else if (shown.method !== method) previous = shown;
+            shown = { key, method, errors };
+          }
+          const against = grid === finalGrid ? previous : null;  // a coarse drag is not compared
+          compared.textContent = against ? `vs ${labels[against.method]}` : "";
+          [assignmentMetric, insideMetric, boundariesMetric].forEach((cell, i) => {
+            cell.textContent = errors[i] === null ? "n/a" : `${errors[i].toFixed(i < 2 ? 1 : 2)}%`;
+            showRatio(cell.nextElementSibling, errors[i], against?.errors[i] ?? null);
+          });
         }
 
-        function formatBoundaryDistance(mean) {
-          return mean === null ? "n/a"
-            : `${(100 * mean).toFixed(2)}%`;
+        // How many times smaller (green) or larger (red) the error is than before.
+        function showRatio(cell, error, before) {
+          cell.className = "";
+          cell.textContent = "";
+          if (error === null || before === null) return;
+          const smaller = error < before;
+          const ratio = smaller ? before / error : error / before;
+          if (!(ratio >= 1.005)) {  // also both zero (NaN)
+            cell.textContent = "=";
+            return;
+          }
+          cell.className = smaller ? "better" : "worse";
+          cell.textContent = `${smaller ? "↓" : "↑"} ${isFinite(ratio) ? ratio.toFixed(2) : "∞"}×`;
         }
       } catch (error) {
         if (asked === settings()) message.textContent = `Error: ${error.message}`;

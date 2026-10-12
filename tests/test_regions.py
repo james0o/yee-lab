@@ -166,7 +166,6 @@ def test_voronoi_agreement_is_perfect_for_the_reference_diagram():
     assert result["assignment"] == pytest.approx(100)
     assert result["inside_hull"] == pytest.approx(100)
     assert result["boundary_mean"] == pytest.approx(0)
-    assert result["boundary_hull_mean"] == pytest.approx(0)
 
 
 def test_voronoi_agreement_has_no_inside_score_for_collinear_candidates():
@@ -193,8 +192,8 @@ def test_wrong_assignments_reduce_regret_and_boundary_agreement():
     assert result["inside_hull"] < 100
 
 
-def test_boundary_distances_measure_symmetric_offset():
-    from yeelab.margin.metrics import boundary_distance_metrics
+def test_boundary_distance_measures_symmetric_offset():
+    from yeelab.margin.metrics import boundary_distance
 
     def cells(split):
         return [
@@ -206,11 +205,7 @@ def test_boundary_distances_measure_symmetric_offset():
             ]]},
         ]
 
-    hull_candidates = np.array([[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]])
-    result = boundary_distance_metrics(cells(0.45), cells(0.55), hull_candidates)
-
-    assert result["boundary_mean"] == pytest.approx(0.1, abs=1e-6)
-    assert result["boundary_hull_mean"] == pytest.approx(0.1, abs=1e-6)
+    assert boundary_distance(cells(0.45), cells(0.55)) == pytest.approx(0.1, abs=1e-6)
 
 
 def test_boundary_distance_uses_perpendicular_projection_onto_segments():
@@ -325,11 +320,11 @@ def test_api_returns_regions(distribution, method):
     payload = response.json()
     shapes = payload["regions"]
     assert shapes and all(region["polygons"] for region in shapes)
-    assert {"assignment", "inside_hull", "boundary_mean", "boundary_hull_mean"} == set(payload["metrics"])
+    assert {"assignment", "inside_hull", "boundary_mean"} == set(payload["metrics"])
     assert 0 <= payload["metrics"]["assignment"] <= 100
     assert payload["metrics"]["inside_hull"] is None or 0 <= payload["metrics"]["inside_hull"] <= 100
-    assert all(payload["metrics"][name] is None or 0 <= payload["metrics"][name] <= 2 ** 0.5
-               for name in ("boundary_mean", "boundary_hull_mean"))
+    boundary_mean = payload["metrics"]["boundary_mean"]
+    assert boundary_mean is None or 0 <= boundary_mean <= 2 ** 0.5
     overlays = payload["overlays"]
     assert overlays["voronoi_boundaries"]
     assert all(len(segment) == 4
@@ -346,7 +341,6 @@ def test_api_reports_perfect_metrics_for_voronoi():
     assert metrics["assignment"] == pytest.approx(100)
     assert metrics["inside_hull"] == pytest.approx(100)
     assert metrics["boundary_mean"] == pytest.approx(0)
-    assert metrics["boundary_hull_mean"] == pytest.approx(0)
 
 
 def _mix(share):

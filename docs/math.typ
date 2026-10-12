@@ -3420,14 +3420,18 @@ there when the pixels go back to their medians along the axes.
 
 = Comparing a diagram with Voronoi <ch-metrics>
 
-The web UI reports three complementary quantities for a method's diagram, using the
-Voronoi diagram of the same candidate positions as the reference. Assignment and
-assignment inside the candidates' convex hull are scores from 0 to 100, with larger
-values indicating closer agreement. The two boundary distances are means in units of
-the unit square's width, shown as percentages; smaller values indicate closer boundaries.
-The hull-restricted assignment is the same metric as the whole-square assignment, but
-evaluated only within the convex hull, so the two values are related rather than
-independent.
+The web UI reports three errors for a method's diagram, using the Voronoi diagram of
+the same candidate positions as the reference. All are shown as percentages, are zero
+for the Voronoi diagram itself, and smaller values indicate closer agreement. The
+assignment error and the assignment error inside the candidates' convex hull are
+$100 - S$ for the scores $S$ below; the hull-restricted one is the same metric evaluated
+only within the convex hull, so the two values are related rather than independent. The
+boundary distance is a mean in units of the unit square's width.
+
+The errors have a true zero, so two methods are compared by their ratio: an error of
+2 % against 6 % is three times smaller. For small regrets the assignment loss below is
+nearly linear ($ell approx r \/ L$), so this holds approximately for the assignment errors
+too. Errors near zero are dominated by the grid resolution, and there a ratio says little.
 
 == Assignment regret (`margin/metrics.py`)
 
@@ -3467,7 +3471,8 @@ $ S_H = 100 (1 -
   (sum_(x in H) A(x) w_a(x))). $
 
 If the candidates are collinear, their convex hull has no area and the inside-hull
-score is not defined; the UI displays `n/a`.
+score is not defined; the UI displays `n/a`. The UI displays the errors $100 - S_a$ and
+$100 - S_H$.
 
 == Symmetric mean distance between boundaries
 
@@ -3496,7 +3501,7 @@ $ w_b(x) = exp(-4 ||x - (0.5, 0.5)||^2). $
 
 This weight is largest at the centre and smaller toward the corners. For each
 direction, take the weighted mean distance and then give the two directions equal
-weight. The reported whole-square boundary distance is
+weight. The reported boundary distance is
 
 $ D_b = 1/2 (
   (sum_(x in B_a) Delta s w_b(x) d(x, B_v)) /
@@ -3508,25 +3513,7 @@ $ D_b = 1/2 (
 
 The UI displays $100 D_b$ as a percentage of the square's width.
 
-== Boundary distance inside the convex hull
-
-The second boundary mean restricts both sets of segments to the convex hull $H$ of the
-candidates by clipping each segment to $H$. It then samples the clipped boundary
-lengths uniformly. All samples have equal weight: distance from the centre does not
-change their importance. Its symmetric mean is
-
-$ D_H = 1/2 (
-  (sum_(x in B_a inter H) d(x, B_v inter H)) / |B_a inter H|
-  +
-  (sum_(x in B_v inter H) d(x, B_a inter H)) / |B_v inter H|
-). $
-
-In this expression the sums denote averages over the equally spaced samples on each
-clipped boundary; $|B inter H|$ is its length. The UI displays $100 D_H$, also as a
-percentage of the square's width. If the hull has no area or either clipped boundary
-is empty, this metric is not defined and the UI displays `n/a`.
-
 The boundary overlay in the UI draws the method's boundary in black and the Voronoi
 reference boundary in blue. The candidate hull can be shown separately as a dashed
-outline. There is no tolerance band and no binary inside/outside decision in either
+outline. There is no tolerance band and no binary inside/outside decision in the
 boundary metric.
