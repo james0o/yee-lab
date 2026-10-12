@@ -343,10 +343,28 @@ def _voter_grid(model: Model, medians):
     return _cached_voter_grid(model, np.ascontiguousarray(medians, dtype=np.float64).tobytes())
 
 
+@lru_cache(maxsize=8)  # a few MB each; all score shares of a ballot, and both grids of a drag, share one
+def _cached_ballots(candidates: bytes, model: Model, levels, rule, delta, mu, kappa, power, by_order):
+    lines = _grid_lines(model)
+    return score.ballot_table(lines, lines, np.frombuffer(candidates).reshape(-1, 2), levels, GRID_SUB, rule, delta,
+                              mu=mu, kappa=kappa, power=power, by_order=by_order)
+
+
+def ballots(candidates, model: Model, levels: int, rule: score.Rule = score.RANGE, delta: float = score.DELTA,
+            mu: float = score.MU, kappa: float = score.KAPPA, power: float = score.POWER,
+            by_order: bool = False) -> score.BallotTable:
+    """The ballots of the voter grid of the model (score.ballot_table), kept by the
+    candidates and the ballot: they do not depend on the medians, so every score share of
+    a ballot, at any points, comes from one pass over the grid."""
+    candidates = np.ascontiguousarray(candidates, dtype=np.float64)
+    return _cached_ballots(candidates.tobytes(), model, levels, rule, float(delta), float(mu), float(kappa),
+                           float(power), by_order)
+
+
 def unscored_shares(candidates, model: Model, levels: int, medians,
                     rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
                     mu: float = score.MU, kappa: float = score.KAPPA,
-                    power: float = score.POWER) -> np.ndarray:
+                    power: float = score.POWER, by_order: bool = False) -> np.ndarray:
     """unscored[i, j, c] = mean part of the top score that the voters with median
     (medians[i], medians[j]) do not give c on a score ballot with `levels` scores by
     `rule`, `delta`, `mu`, `kappa` and `power` (yeelab.score), from 0 to 1, shape (M, M, C). The mean score of c
@@ -369,21 +387,25 @@ def unscored_shares(candidates, model: Model, levels: int, medians,
     score.
 
     The shares are not interpolated from the nodes: a tail of 1e-20 is far below the
-    error of the interpolant, and one more median costs only a row of each product."""
-    lines, mass = _voter_grid(model, medians)
-    short = score.unscored(lines, lines, candidates, levels, GRID_SUB, rule, delta, mu=mu,
-                           kappa=kappa, power=power).astype(np.float64)
+    error of the interpolant, and one more median costs only a row of each product. The
+    ballots of the grid are kept (ballots), so the other score shares of the same ballot
+    cost only their sums; by_order takes them from the table of given() and raised(),
+    whose rectangles also keep one order of distance, so that one pass serves all."""
+    mass = _voter_grid(model, medians)[1]
+    table = ballots(candidates, model, levels, rule, delta, mu, kappa, power, by_order)
+    short = score.tabulate(table, score.UNSCORED).astype(np.float64)
     return np.moveaxis(mass @ short @ mass.T, 0, -1) / (levels - 1)
 
 
 def score_comparison_shares(candidates, model: Model, medians, levels: int,
                             rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
                             mu: float = score.MU, kappa: float = score.KAPPA,
-                            power: float = score.POWER) -> np.ndarray:
-    """Strict score-comparison differences at each median: equal scores abstain."""
-    lines, mass = _voter_grid(model, medians)
-    short = score.comparisons(lines, lines, candidates, levels, GRID_SUB, rule, delta,
-                              mu=mu, kappa=kappa, power=power).astype(np.float64)
+                            power: float = score.POWER, by_order: bool = False) -> np.ndarray:
+    """Strict score-comparison differences at each median: equal scores abstain. From the
+    kept ballots, like unscored_shares."""
+    mass = _voter_grid(model, medians)[1]
+    table = ballots(candidates, model, levels, rule, delta, mu, kappa, power, by_order)
+    short = score.tabulate(table, score.COMPARISONS).astype(np.float64)
     n, m = len(candidates), len(medians)
     comparisons = np.zeros((m, m, n, n), dtype=np.float64)
     for c in range(n):
@@ -391,6 +413,20 @@ def score_comparison_shares(candidates, model: Model, medians, levels: int,
             comparisons[:, :, c, e] = mass @ short[c, e] @ mass.T
             comparisons[:, :, e, c] = -comparisons[:, :, c, e]
     return comparisons
+
+
+def _pair_shares(kind, candidates, model: Model, medians, levels, rule, delta, mu, kappa, power):
+    """score.tabulate(kind) (GIVEN or RAISED) of the kept ballots by order, weighed with the
+    voters of each median, as a part of the top score: (M, M, C, C), 0 for e = c."""
+    mass = _voter_grid(model, medians)[1]
+    short = score.tabulate(ballots(candidates, model, levels, rule, delta, mu, kappa, power, True), kind)
+    n, m = len(candidates), len(medians)
+    shares = np.zeros((m, m, n, n))
+    for c in range(n):
+        for e in range(n):
+            if e != c:
+                shares[:, :, c, e] = mass @ short[c, e].astype(np.float64) @ mass.T
+    return shares / (levels - 1)
 
 
 def buried_shares(candidates, model: Model, medians, levels: int,
@@ -401,13 +437,85 @@ def buried_shares(candidates, model: Model, medians, levels: int,
     (medians[i], medians[j]) who rank e above c give c (score.given), shape (M, M, C, C):
     what the mean score of c loses where they bury it. 0 for e = c. On the voter grid,
     like unscored_shares."""
-    lines, mass = _voter_grid(model, medians)
-    short = score.given(lines, lines, candidates, levels, GRID_SUB, rule, delta, mu=mu, kappa=kappa,
-                        power=power)
-    n, m = len(candidates), len(medians)
-    buried = np.zeros((m, m, n, n))
-    for c in range(n):
-        for e in range(n):
-            if e != c:
-                buried[:, :, c, e] = mass @ short[c, e].astype(np.float64) @ mass.T
-    return buried / (levels - 1)
+    return _pair_shares(score.GIVEN, candidates, model, medians, levels, rule, delta, mu, kappa, power)
+
+
+def raised_shares(candidates, model: Model, medians, levels: int,
+                  rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
+                  mu: float = score.MU, kappa: float = score.KAPPA,
+                  power: float = score.POWER) -> np.ndarray:
+    """raised[i, j, c, e] = mean part of the top score that the voters with median
+    (medians[i], medians[j]) who rank c above e, but neither first, do not give c
+    (score.raised), shape (M, M, C, C): what the mean score of c gains where they
+    compromise on it. 0 for e = c. On the voter grid, like unscored_shares."""
+    return _pair_shares(score.RAISED, candidates, model, medians, levels, rule, delta, mu, kappa, power)
+
+
+@dataclass(frozen=True, eq=False)
+class ScoreGrid:
+    """A score ballot on the voter grid of the model, at the medians: what the score
+    shares of burying and compromising voters come from when a method asks for them
+    (build.strategic.burying, compromising, build.Voters.compared). Whom those voters vote against
+    depends on the frontrunners of each point, so the shares are computed for each pair
+    of frontrunners, at its points only. The ballots are those kept by order (ballots).
+    `cells` (P, 2) are the indices of the medians of the points: the shares at them are
+    the products of the rows and columns of the voters' shares of the rectangles they
+    need."""
+
+    candidates: np.ndarray
+    model: Model
+    medians: np.ndarray
+    levels: int
+    rule: score.Rule = score.RANGE
+    delta: float = score.DELTA
+    mu: float = score.MU
+    kappa: float = score.KAPPA
+    power: float = score.POWER
+
+    @property
+    def table(self) -> score.BallotTable:
+        return ballots(self.candidates, self.model, self.levels, self.rule, self.delta, self.mu, self.kappa,
+                       self.power, True)
+
+    @cached_property
+    def _pair_points(self) -> dict[int, np.ndarray]:
+        """score.tabulate GIVEN and RAISED of the ballots, (C, C, X, Y) each."""
+        return {kind: score.tabulate(self.table, kind) for kind in (score.GIVEN, score.RAISED)}
+
+    def _at(self, short, pairs, cells) -> np.ndarray:
+        """short[c, e] (C, C, X, Y) weighed with the voters of the points `cells` (P, 2),
+        for each pair (c, e) of `pairs`: (P, len(pairs)). Only the rows and columns of
+        the voters' shares of the rectangles that the points have are multiplied."""
+        mass = _voter_grid(self.model, self.medians)[1]
+        rows, at_rows = np.unique(cells[:, 0], return_inverse=True)
+        columns, at_columns = np.unique(cells[:, 1], return_inverse=True)
+        left, right = mass[rows], mass[columns].T
+        out = np.empty((len(cells), len(pairs)))
+        for k, (c, e) in enumerate(pairs):
+            out[:, k] = (left @ short[c, e].astype(np.float64) @ right)[at_rows, at_columns]
+        return out
+
+    def taken(self, a: int, b: int, cells: np.ndarray) -> np.ndarray:
+        """(P, 2): the part of the top score that the voters of each point who rank b above
+        a give a, and those who rank a above b give b (buried_shares): what burying
+        takes back."""
+        return self._at(self._pair_points[score.GIVEN], ((a, b), (b, a)), cells) / (self.levels - 1)
+
+    def added(self, a: int, b: int, cells: np.ndarray) -> np.ndarray:
+        """(P, 2): the part of the top score that the voters of each point who rank a above
+        b, but neither first, do not give a, and likewise for b (raised_shares): what
+        compromising adds."""
+        return self._at(self._pair_points[score.RAISED], ((a, b), (b, a)), cells) / (self.levels - 1)
+
+    def moved(self, a: int, b: int, bury: float, compromise: float, cells: np.ndarray) -> np.ndarray:
+        """(P, C, C): how much the strict score comparisons of the voters of each point
+        move where `bury` of them bury and `compromise` of them compromise against the
+        frontrunners a and b (score.moved_comparisons); only the pairs with a or b move."""
+        short = score.moved_comparisons(self.table, a, b, bury, compromise)
+        n = len(self.candidates)
+        pairs = [(c, e) for c in range(n) for e in range(c + 1, n) if a in (c, e) or b in (c, e)]
+        values = self._at(short, pairs, cells)
+        moved = np.zeros((len(cells), n, n))
+        for k, (c, e) in enumerate(pairs):
+            moved[:, c, e], moved[:, e, c] = values[:, k], -values[:, k]
+        return moved

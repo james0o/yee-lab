@@ -30,7 +30,7 @@ Yee diagram, the two voter distributions (normal and Beta) and the spread rules 
 fix the Beta distributions. @ch-compute shows how the share of every ranking of the
 candidates is computed exactly for every pixel, and @ch-methods how the voting methods
 turn these shares into winners. @ch-strategy lets a share of the voters vote
-strategically, by bullet voting or burial. @ch-compare explains why Beta and normal voters give
+strategically, by bullet voting, burial or compromise. @ch-compare explains why Beta and normal voters give
 different diagrams. @ch-spread compares the spread rules and explains why `rms` is the
 default. @ch-shapes asks when a candidate's region is convex or in one piece, and how
 that relates to the monotonicity of the method. @ch-realtime shows how the web UI draws
@@ -56,7 +56,7 @@ package `src/yeelab/`):
   [Gauss–Legendre points per edge], [$Q$], [`QUAD_NODES`], [24],
   [score levels (UI)], [$L$], [_Score categories_, `SCORE_LEVELS` (`web/app.py`)], [6],
   [power of the score ballot (UI)], [$p$], [_Score power p_, `SCORE_POWER` (`build/methods.py`)], [1.5],
-  [strategy and share of its voters (UI)], [$b$], [_Strategy_, _Strategic voters_, `STRATEGIC` (`web/app.py`)], [sincere; 50%],
+  [bullet, burying, compromising voters (UI)], [$b$, $q$, $y$], [_Bullet voters_, _Burying voters_, _Compromising voters_ (`web/app.py`)], [0, 0, 0],
   [voter grid of the score shares], [$K$], [`GRID_CELLS`, `GRID_SUB` (`margin/shares.py`)], [256, 8],
   [contour grid per axis (UI)], [$G$], [`DRAG_GRID` / `FINAL_GRID` (`web/app.py`)], [160 / 320],
   table.hline(),
@@ -1007,9 +1007,16 @@ $b_i slash (L - 1)$ over that rectangle,
 $ u_i approx sum_(k, l) mu_k thin a_(i k l) thin nu_l . $ <eq-grid-share>
 
 For all medians at once these are two matrix products per candidate (`unscored_shares`
-in `margin/shares.py`). `unscored` in `score.py` finds $a$: a rectangle whose four
-corners have the same ballot counts as all of that ballot, and in the others, about 2% of
-them, the ballots at $8 times 8$ points are averaged.
+in `margin/shares.py`). $a$ comes from a _ballot table_ (`ballot_table` in `score.py`):
+for every rectangle the distinct ballots of its voters and the part of them with each. A
+rectangle whose four corners have the same ballot holds all of that ballot, and the
+others, about 2% of them, the ballots at $8 times 8$ points, most with two or three
+distinct ones. Every score share is a mean over the table (`tabulate`): the part not
+given here, STAR's comparisons and the shares of burial and compromise
+(@ch-strategy). Computing the ballots is most of the work, and the table depends only
+on the candidates, the ballot and the grid, not on the medians, so it is kept: all score
+shares of a ballot come from one pass, and the fine grid after a drag reuses the table of
+the last step.
 
 The grid has $256$ equal cells across the square. For Beta voters the cell at each wall
 is halved again and again down to $10^(-6)$: the density of a Beta with $a < 1$ is
@@ -1446,18 +1453,22 @@ neither candidate beats the other (the dotted black lines in @fig-compare).
 
 Everywhere else every voter votes sincerely: they rank the candidates by distance and
 score them by distance. A strategy changes the ballots of some of the voters, not the
-method. `Bullet(method, share)` and `Burial(method, share)` evaluate any method of
-@ch-methods on voters of whom a share vote strategically at every pixel, the same share
-among the voters of every first choice, while the others vote sincerely. Every share a
-method reads is a sum over the voters, so the shares of these voters are those of the
-sincere voters and of the strategic ones, weighted by their shares. In the web UI,
-_Strategy_ picks the strategy (sincere, bullet voting or burial) and the slider
-_Strategic voters_ sets the share.
+method. `Bullet(method, share)`, `Burial(method, share)` and `Compromise(method, share)`
+(`build/strategic.py`) evaluate any method of @ch-methods on voters of whom a share vote strategically at every
+pixel, the same share among the voters of every first choice, while the others vote
+sincerely. Every share a method reads is a sum over the voters, so the shares of these
+voters are those of the sincere voters and of the strategic ones, weighted by their
+shares. The three combine: `Bullet(Burial(Compromise(method, y), q), b)` is the method
+where $b$ of the voters bullet vote, and of the others $q$ bury and $y$ compromise, each
+whatever the other does. A voter who bullet votes would gain nothing by either: their
+ballot ranks the frontrunner they like less among the last already, and their first
+choice alone first. The web UI has a slider for each, _Bullet voters_ for $b$, _Burying
+voters_ for $q$ and _Compromising voters_ for $y$, all at 0 at first: every voter sincere.
 
 Bullet voting depends on the voter alone, so its shares are as smooth in the median as
-before, and the margins and borders are traced the same way (@sec-zero-sets). Burial
-depends on who the frontrunners are, which jumps from one pixel to the next, and that
-adds borders of its own (@sec-burial).
+before, and the margins and borders are traced the same way (@sec-zero-sets). Burial and
+compromise depend on who the frontrunners are, which jumps from one pixel to the next,
+and that adds borders of their own (@sec-burial).
 
 == Bullet voting (`Bullet`) <sec-bullet>
 
@@ -1591,9 +1602,10 @@ frontrunners of the pixel:
   $u_a + q t_(a b)$ for $a$ and $u_b + q t_(b a)$ for $b$, and stays for the others:
   a burying voter takes back what they gave the frontrunner they bury. $t$ is summed
   over the voter grid like $u$; a cell counts as one ballot only if its corners also
-  rank the candidates in the same order, so that no bisector crosses it.
-  STAR is left out: its runoff would need the score comparisons of every pair among the
-  voters on each side of every bisector.
+  rank the candidates in the same order, so that no bisector crosses it. Only $t_(a b)$
+  and $t_(b a)$ of the frontrunners of a pixel are needed there, so they are computed for
+  each pair of frontrunners, at its pixels only. STAR's runoff reads the score
+  comparisons, which take more (@sec-star-strategy).
 
 *Poll lines.* Where the second and the third most first choices tie, the frontrunners
 change, and with them whom the voters bury, so the winner can jump although every share
@@ -1637,9 +1649,126 @@ burying voters. The part of the square with another winner than with sincere vot
   [Condorcet, Black], [1.5–1.6%], [5.9%], [45%],
   [DAC], [2.2%], [6.2%], [27%],
   [Score], [3.4%], [6.3%], [14%],
+  [STAR], [1.4%], [3.8%], [15%],
   [Borda], [7.6%], [17%], [69%],
   table.hline(),
 ))
+
+== Compromise (`Compromise`) <sec-compromise>
+
+*The ballot.* A compromising voter whose first choice is neither frontrunner ranks the
+one of them they like more first, and on a score ballot gives it the top score; the rest
+of the ballot stays. A voter with a frontrunner first ranks it first already and changes
+nothing. The frontrunners are those of the poll of @sec-burial, so the method runs on the
+pixels of each pair apart, with the poll's margin as a gap. With $y$ the share of the
+voters who compromise:
+
+- *Profile.* Every ranking comes twice: as it is, with $(1 - y) P(r)$, and compromised,
+  with $y P(r)$.
+- *First choices.* Unlike with burial, they change. The voters who rank $a$ above $b$
+  are those with $a$ first and those with neither first who like $a$ more, so $y$ of the
+  latter move their first choice to $a$:
+  $ s'_a = s_a + y (pi_(a b) - s_a), quad s'_b = s_b + y (pi_(b a) - s_b), quad
+    s'_i = (1 - y) s_i "for the others." $
+  The shares come from the profile, so compromise makes every ranked method read it,
+  FPTP too.
+- *Pairwise shares.* From the profile, as for burial; the head-to-head of the
+  frontrunners stays.
+- *Score shares.* With $g_(i j)$ the part of the top score that the voters who rank $c_i$
+  above $c_j$, but neither first, do not give $c_i$, the part not given becomes
+  $u_a - y g_(a b)$ for $a$ and $u_b - y g_(b a)$ for $b$. $g$ is summed over the voter
+  grid like $t$, for each pair of frontrunners (@sec-burial); STAR's comparisons in
+  @sec-star-strategy.
+
+*Order.* A poll reads the first choices of the voters it is given, and compromise
+changes them, so it runs inside the other strategies: in
+`Bullet(Burial(Compromise(method, y), q), b)` every poll reads the sincere first choices.
+Burying and compromising move different candidates, so a voter can do both, and $q y$
+of the voters who do not bullet vote do: they rank one frontrunner first and the other
+last.
+
+*Empty tallies.* Where all voters compromise, no voter has a third candidate first, and
+IRV's first rounds drop candidates with empty tallies. Two empty tallies tie, but that
+decides nothing: such a candidate has no ballots to pass on, and gets none, since it goes
+before any candidate with ballots, so their order changes no winner. The compiled rounds
+of IRV and of the schedules leave these ties out of the margin, which would otherwise be
+0 on the whole square.
+
+*All voters.* At $y = 1$ every first choice is a frontrunner, so FPTP elects the one of
+them more voters rank above the other, the winner of the two-round system, and so does
+IRV once the empty tallies are gone. The two-round system itself never changes:
+compromise only moves first choices to the frontrunners, who are its finalists already,
+and keeps their head-to-head. That is a limit of the model: the poll is exact, so no
+voter fears that the frontrunner they like more misses the runoff.
+
+#figure(
+  image("figures/compromise.png", width: 100%),
+  caption: [FPTP, Borda count and Score (six levels, $p = 1.5$) with no, half and all
+    voters compromising (candidates A–E, Beta voters, `rms`, $D = 0.2$). At $y = 1$
+    FPTP is the two-round system.],
+) <fig-compromise>
+
+*The default candidates.* Compromise takes first choices from the candidates outside
+the poll, the opposite of a spoiler, and FPTP changes the most. The centrist D, a
+frontrunner at many pixels, wins 14% of the square with sincere voters, 20% at
+$y = 0.5$ and 23.5% at $y = 1$, as in the two-round system (@fig-compromise). IRV
+changes only at the 1.9% of the square where its sincere winner is not a frontrunner,
+and the Condorcet methods hardly at all: they do not count first places. The part of the
+square with another winner than with sincere voters:
+
+#align(center, table(
+  columns: 4,
+  align: (left, right, right, right),
+  stroke: none,
+  table.hline(),
+  [method], [$y = 0.25$], [$y = 0.5$], [$y = 1$],
+  table.hline(stroke: 0.5pt),
+  [Two-round], [0], [0], [0],
+  [KOTH], [0.4%], [0.5%], [0.5%],
+  [STAR], [0.5%], [0.7%], [1.2%],
+  [Baldwin, Nanson, Schulze, Condorcet, Minimax, Black], [0.7%], [0.8%], [1.2%],
+  [IRV set + KOTH + Score], [1.7%], [2.2%], [3.4%],
+  [IRV], [1.9%], [1.9%], [1.9%],
+  [Score], [2.4%], [4.2%], [7.1%],
+  [Borda], [2.7%], [4.0%], [6.6%],
+  [DAC], [3.8%], [6.5%], [11%],
+  [FPTP], [4.8%], [8.3%], [13%],
+  table.hline(),
+))
+
+== STAR's runoff <sec-star-strategy>
+
+STAR's runoff reads the strict score comparisons $x_(i j)$, the share of the voters who
+score $c_i$ above $c_j$ minus that who score $c_j$ above $c_i$ (@sec-score). Burying and
+compromising move only the comparisons of a frontrunner with another candidate, but
+unlike the scores these do not add up over the strategies: a voter who buries $b$ and
+compromises on $a$ scores $a$ above $b$ whatever they did before, which neither change
+alone tells. So the comparisons are counted for each kind of voter on its own: of the
+voters who do not bullet vote, $(1 - q)(1 - y)$ vote sincerely, $q (1 - y)$ bury,
+$(1 - q) y$ compromise and $q y$ do both, and each moves the comparisons by its own
+ballots,
+
+$ x'_(i j) = x_(i j) + (1 - b) sum_"kind" w_"kind"
+  sum_(k, l) mu_k thin (m^"kind"_(i j k l)) thin nu_l , $
+
+with $m^"kind"_(i j k l)$ how much the comparisons of the ballots in rectangle $(k, l)$
+move (`moved_comparisons` in `score.py`), summed over the ballot table of @sec-score.
+These depend on the pair of frontrunners and on $q$ and $y$, so they are not shares the
+method gets beforehand: burying and compromising only note them (`Voters.compared`), and
+STAR's runoff computes them, for its pair of frontrunners and at its pixels only, when it
+reads them. With eight random candidates, whose pixels have twelve pairs of
+frontrunners, that takes about 0.25 s of the 0.9 s of a drag step with burying voters.
+
+*The default candidates.* A burying voter ranks the frontrunner they like more above
+the one they bury already, so where the two frontrunners meet in the runoff only the
+voters who gave them the same score change their vote: STAR changes less than Score at
+$q = 0.5$, 3.8% of the square against 6.3%. Where a buried frontrunner meets a third
+candidate in the runoff instead, burial backfires: the voters who buried it now score
+that candidate above it. The centrist D gains: it wins 24% of the square with sincere
+voters, 26% at $q = 0.5$ and 28% at $q = 1$. Compromise hardly changes STAR, 0.7% of the
+square at $y = 0.5$: it gives the frontrunner a voter likes more the top score, which
+moves it up in the totals, but where the two frontrunners meet in the runoff that voter
+preferred it already.
 
 #pagebreak()
 
@@ -2520,11 +2649,17 @@ the signed triangles of @sec-normal for normal voters.
 
 *Bullet voters* (@sec-bullet) need the shares of their method, and next to pairwise or
 score shares also the first-choice shares; the profile has its own. *Burying voters*
-(@sec-burial) need the first-choice shares of the poll, the profile for pairwise shares,
-and next to score shares what burying takes back, $t_(i j)$. That share costs a pass
-over the voter grid of its own, about 1.6 to 1.8 times that of the part not given, since
-the cells the bisectors cross are averaged too: with five candidates Score takes about
-0.1 s more with burying voters, with eight about 0.3 s.
+(@sec-burial) need the first-choice shares of the poll and the profile for pairwise
+shares, and *compromising voters* (@sec-compromise) the profile for first-choice and
+pairwise shares. Next to score shares both need the ballots of the voter grid, from which
+what burying takes back, $t_(i j)$, what compromising adds, $g_(i j)$, and how STAR's
+comparisons move (@sec-star-strategy) are computed for each pair of frontrunners, at its
+pixels only, multiplying only the rows and columns of the voters' shares of the
+rectangles that those pixels have. These read who ranks whom above whom, so their ballot
+table also keeps one order of distance per rectangle: its rectangles with one ballot must
+also have the same order at their four corners, and the ones a bisector crosses are
+averaged too. That table takes about 1.6 times as long as the one of the part not given
+alone, and gives the part not given as well.
 
 *Score shares.* Score uses the part of the top score the voters do not give
 each candidate. The regions of these voters have curved borders, so their shares have no
@@ -2532,11 +2667,11 @@ edge terms: they are summed over a grid of rectangles with the exact share of th
 in each, at the $G + 2$ points per axis where the borders are traced and not at the
 nodes (@sec-score). The voters' shares of the rectangles depend only on the voter
 model and $G$. They are kept; computing them takes up to 0.2 s for Beta voters. The
-rest is done again at every step of a drag: for five to eight candidates the whole grid
-takes about 100 to 170 ms with six levels and 30 to 90 ms with two, at $G = 160$ and
-$G = 320$ alike. Most of it is the ballots on the voter grid, which do not depend on $G$;
-with more levels more rectangles have a border inside and are averaged at $8 times 8$
-points.
+ballot table is computed again at every step of a drag: for five to eight candidates it
+takes about 60 to 150 ms with six levels and 30 to 90 ms with two; with more levels more
+rectangles have a border inside and hold the ballots of $8 times 8$ points. The fine grid
+after the drag reuses it, and then the matrix products are most of the work. STAR takes
+one table for its totals and its comparisons.
 
 == Dragging: an edge cache <sec-edge-cache>
 

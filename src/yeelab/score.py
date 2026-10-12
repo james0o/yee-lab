@@ -109,14 +109,18 @@ its DHONDT steps moves, with m for r_a or r_c at the gap to the midrange, where 
 candidate crosses m, 2 r_i = r_min + r_max, and where a RANGE score of its lower half is
 half a score. A CLUSTER score changes where two choices of scores cost the same. Unlike
 the bisectors these are curves, so the mean score is not a sum
-over polygons. `unscored` gives, for a grid of rectangles, the mean points below the
-top score of each candidate in each rectangle, and `given` the mean points each
-candidate gets from the voters who rank another candidate above it (what burying it
-takes away); margin/shares.py weighs them with the voters of each rectangle.
+over polygons. `ballot_table` gives, for a grid of rectangles, the distinct ballots in
+each rectangle and the part of its voters with each, and `tabulate` every mean over them:
+the points below the top score of each candidate (`unscored`), the strict comparisons of
+each pair (`comparisons`), the points each candidate gets from the voters who rank
+another candidate above it (`given`, what burying it takes away) and the points below
+the top score from the voters who rank it above another but neither first (`raised`,
+what compromising on it adds). margin/shares.py weighs them with the voters of each
+rectangle.
 """
 
 import math
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import numpy as np
 from numba import njit
@@ -418,142 +422,6 @@ def _ballot(x, y, candidates, top, rule, delta, mu, kappa, power, r, order, step
     return code
 
 
-@njit(cache=True, nogil=True, error_model="numpy")
-def _unscored(xs, ys, candidates, top, rule, delta, mu, kappa, power, sub, start, stop, out):
-    """unscored() of the cells [xs[i], xs[i + 1]] with start <= i < stop, into
-    out (C, X, Y)."""
-    n = candidates.shape[0]
-    r, points = np.empty(n), np.empty(n, dtype=np.int64)
-    order, steps = np.empty(n, dtype=np.int64), np.empty(n, dtype=np.int64)
-    work, back = np.empty((4, max(n, top + 1))), np.empty((n, top + 1), dtype=np.int64)
-    left, right = np.empty(ys.size, dtype=np.int64), np.empty(ys.size, dtype=np.int64)
-    for j in range(ys.size):
-        left[j] = _ballot(xs[start], ys[j], candidates, top, rule, delta, mu, kappa, power, r, order, steps,
-                          work, back)
-    for i in range(start, stop):
-        for j in range(ys.size):
-            right[j] = _ballot(xs[i + 1], ys[j], candidates, top, rule, delta, mu, kappa, power,
-                               r, order, steps, work, back)
-        for j in range(ys.size - 1):
-            code = left[j]
-            if code == left[j + 1] and code == right[j] and code == right[j + 1]:
-                for c in range(n):
-                    out[c, i, j] = (code >> (BITS * c)) & MASK
-                continue
-            points[:] = 0
-            for a in range(sub):
-                x = xs[i] + (a + 0.5) / sub * (xs[i + 1] - xs[i])
-                for b in range(sub):
-                    y = ys[j] + (b + 0.5) / sub * (ys[j + 1] - ys[j])
-                    code = _ballot(x, y, candidates, top, rule, delta, mu, kappa, power, r, order, steps,
-                                   work, back)
-                    for c in range(n):
-                        points[c] += (code >> (BITS * c)) & MASK
-            for c in range(n):
-                out[c, i, j] = points[c] / (sub * sub)
-        left, right = right, left
-
-
-def unscored(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
-             delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
-             power: float = POWER) -> np.ndarray:
-    """short[c, i, j] = mean points below the top score that the voters of the rectangle
-    [xs[i], xs[i + 1]] x [ys[j], ys[j + 1]] give candidate c, from 0 to levels - 1, shape
-    (C, X, Y) for X + 1 and Y + 1 increasing grid lines; delta, mu, kappa and power as in
-    scored(). A
-    rectangle whose four corners have the same ballot counts as all of that ballot; in
-    the others, which a border crosses, the ballots at sub x sub points are averaged.
-    Chunks of the rows run in parallel threads."""
-    xs = np.ascontiguousarray(xs, dtype=np.float64)
-    ys = np.ascontiguousarray(ys, dtype=np.float64)
-    candidates = np.ascontiguousarray(candidates, dtype=np.float64)
-    if not 2 <= len(candidates) <= MAX_CANDIDATES:
-        raise ValueError(f"score ballots need 2 to {MAX_CANDIDATES} candidates, got {len(candidates)}")
-    if not 2 <= levels <= MAX_LEVELS:
-        raise ValueError(f"score ballots need 2 to {MAX_LEVELS} levels, got {levels}")
-    _check(rule, delta, mu, kappa, power)
-    out = np.empty((len(candidates), len(xs) - 1, len(ys) - 1), dtype=np.float32)
-    threads.in_chunks(
-        lambda a, b: _unscored(xs, ys, candidates, levels - 1, RULES.index(rule), float(delta), float(mu),
-                               float(kappa), float(power), sub, a, b, out),
-        len(xs) - 1, ROWS)
-    return out
-
-
-@njit(cache=True, nogil=True, error_model="numpy")
-def _comparisons(xs, ys, candidates, top, rule, delta, mu, kappa, power, sub, start, stop, out):
-    """Strict score comparisons over cells [xs[i], xs[i + 1]], into out (C, C, X, Y)."""
-    n = candidates.shape[0]
-    r, order, steps = np.empty(n), np.empty(n, dtype=np.int64), np.empty(n, dtype=np.int64)
-    work, back = np.empty((4, max(n, top + 1))), np.empty((n, top + 1), dtype=np.int64)
-    left, right = np.empty(ys.size, dtype=np.int64), np.empty(ys.size, dtype=np.int64)
-    counts = np.empty((n, n), dtype=np.int64)
-    for j in range(ys.size):
-        left[j] = _ballot(xs[start], ys[j], candidates, top, rule, delta, mu, kappa, power, r, order, steps,
-                          work, back)
-    for i in range(start, stop):
-        for j in range(ys.size):
-            right[j] = _ballot(xs[i + 1], ys[j], candidates, top, rule, delta, mu, kappa, power,
-                               r, order, steps, work, back)
-        for j in range(ys.size - 1):
-            code = left[j]
-            if code == left[j + 1] and code == right[j] and code == right[j + 1]:
-                for c in range(n):
-                    below_c = (code >> (BITS * c)) & MASK
-                    for e in range(c + 1, n):
-                        below_e = (code >> (BITS * e)) & MASK
-                        difference = 1 if below_c < below_e else -1 if below_c > below_e else 0
-                        out[c, e, i, j] = difference
-                        out[e, c, i, j] = -difference
-                continue
-            counts[:, :] = 0
-            for a in range(sub):
-                x = xs[i] + (a + 0.5) / sub * (xs[i + 1] - xs[i])
-                for b in range(sub):
-                    y = ys[j] + (b + 0.5) / sub * (ys[j + 1] - ys[j])
-                    code = _ballot(x, y, candidates, top, rule, delta, mu, kappa, power, r, order, steps,
-                                   work, back)
-                    for c in range(n):
-                        below_c = (code >> (BITS * c)) & MASK
-                        for e in range(c + 1, n):
-                            below_e = (code >> (BITS * e)) & MASK
-                            if below_c < below_e:
-                                counts[c, e] += 1
-                                counts[e, c] -= 1
-                            elif below_c > below_e:
-                                counts[c, e] -= 1
-                                counts[e, c] += 1
-            for c in range(n):
-                for e in range(c + 1, n):
-                    difference = counts[c, e] / (sub * sub)
-                    out[c, e, i, j] = difference
-                    out[e, c, i, j] = -difference
-        left, right = right, left
-
-
-def comparisons(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
-                delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
-                power: float = POWER) -> np.ndarray:
-    """short[c, e, i, j] = share strictly scoring c above e minus e above c among
-    voters in each rectangle [xs[i], xs[i + 1]] x [ys[j], ys[j + 1]]. Voters who give
-    the pair equal scores contribute 0. Curved score borders are sampled at sub x sub
-    points in cells where the ballot changes; output shape is (C, C, X, Y)."""
-    xs = np.ascontiguousarray(xs, dtype=np.float64)
-    ys = np.ascontiguousarray(ys, dtype=np.float64)
-    candidates = np.ascontiguousarray(candidates, dtype=np.float64)
-    if not 2 <= len(candidates) <= MAX_CANDIDATES:
-        raise ValueError(f"score ballots need 2 to {MAX_CANDIDATES} candidates, got {len(candidates)}")
-    if not 2 <= levels <= MAX_LEVELS:
-        raise ValueError(f"score ballots need 2 to {MAX_LEVELS} levels, got {levels}")
-    _check(rule, delta, mu, kappa, power)
-    out = np.zeros((len(candidates), len(candidates), len(xs) - 1, len(ys) - 1), dtype=np.float32)
-    threads.in_chunks(
-        lambda a, b: _comparisons(xs, ys, candidates, levels - 1, RULES.index(rule), float(delta), float(mu),
-                                 float(kappa), float(power), sub, a, b, out),
-        len(xs) - 1, ROWS)
-    return out
-
-
 @njit(inline="always", error_model="numpy")
 def _order_code(r, order):
     """The candidates in order of the distances r (C,), closest first, into order (ties:
@@ -571,61 +439,271 @@ def _order_code(r, order):
     return code
 
 
+class BallotTable(NamedTuple):
+    """The ballots of the voters of a grid of rectangles (ballot_table): for each
+    rectangle k, in the order of its row and then its column, the distinct ballots of its
+    voters, start[k] to start[k + 1] of these arrays.
+
+        codes    the ballot as _ballot gives it: BITS bits per candidate, its points below
+                 the top score
+        orders   the candidates in order of distance: BITS bits per position, the closest
+                 lowest (_order_code); only in a table by_order, else 0
+        weights  the part of the rectangle's voters with that ballot, adding up to 1
+
+    Every score share is a sum over the table (tabulate), so one pass over the grid,
+    which is most of the work, gives them all."""
+
+    shape: tuple[int, int]  # rectangles along x and y
+    start: np.ndarray
+    codes: np.ndarray
+    orders: np.ndarray
+    weights: np.ndarray
+    candidates: int
+    top: int  # levels - 1
+    by_order: bool
+
+
 @njit(cache=True, nogil=True, error_model="numpy")
-def _given(xs, ys, candidates, top, rule, delta, mu, kappa, power, sub, start, stop, out):
-    """given() of the cells [xs[i], xs[i + 1]] with start <= i < stop, into out (C, C, X, Y).
-    A cell counts as one ballot only if its four corners have the same ballot and the
-    same order of distance: the bisectors are straight, so then none crosses it. In the
-    others the points of the cell hold few ballots, each counted once with how often."""
-    n = candidates.shape[0]
+def _table_rows(xs, ys, candidates, top, rule, delta, mu, kappa, power, sub, by_order, start, stop):
+    """The ballot table of the cells [xs[i], xs[i + 1]] with start <= i < stop: the
+    number of distinct ballots of every cell (rows, Y), and their codes, orders and
+    weights, cell after cell. A cell holds one ballot if its four corners have the same
+    one, and with by_order also the same order of distance: the bisectors are straight,
+    so then none crosses it. The others hold the distinct ballots of sub x sub points,
+    each with how often it is there."""
+    n, ny = candidates.shape[0], ys.size - 1
     r, order, steps = np.empty(n), np.empty(n, dtype=np.int64), np.empty(n, dtype=np.int64)
     work, back = np.empty((4, max(n, top + 1))), np.empty((n, top + 1), dtype=np.int64)
-    codes, orders = np.empty(sub * sub, dtype=np.int64), np.empty(sub * sub, dtype=np.int64)
+    kinds = np.zeros((stop - start, ny), dtype=np.int64)
+    size = 2 * (stop - start) * ny  # grows as needed
+    codes, orders, weights = np.empty(size, dtype=np.int64), np.empty(size, dtype=np.int64), np.empty(size)
+    used = 0
+    point_codes, point_orders = np.empty(sub * sub, dtype=np.int64), np.empty(sub * sub, dtype=np.int64)
     counts = np.empty(sub * sub, dtype=np.int64)
     left, right = np.empty(ys.size, dtype=np.int64), np.empty(ys.size, dtype=np.int64)
     left_order, right_order = np.empty(ys.size, dtype=np.int64), np.empty(ys.size, dtype=np.int64)
     for j in range(ys.size):
         left[j] = _ballot(xs[start], ys[j], candidates, top, rule, delta, mu, kappa, power, r, order, steps,
                           work, back)
-        left_order[j] = _order_code(r, order)
+        left_order[j] = _order_code(r, order) if by_order else 0
     for i in range(start, stop):
         for j in range(ys.size):
             right[j] = _ballot(xs[i + 1], ys[j], candidates, top, rule, delta, mu, kappa, power,
                                r, order, steps, work, back)
-            right_order[j] = _order_code(r, order)
-        for j in range(ys.size - 1):
+            right_order[j] = _order_code(r, order) if by_order else 0
+        for j in range(ny):
             code, ranked = left[j], left_order[j]
-            if (code == left[j + 1] and code == right[j] and code == right[j + 1] and ranked == left_order[j + 1]
-                    and ranked == right_order[j] and ranked == right_order[j + 1]):
-                kinds, counts[0], codes[0], orders[0] = 1, sub * sub, code, ranked
+            whole = code == left[j + 1] and code == right[j] and code == right[j + 1]
+            if whole and by_order:
+                whole = ranked == left_order[j + 1] and ranked == right_order[j] and ranked == right_order[j + 1]
+            if whole:
+                found, point_codes[0], point_orders[0], counts[0] = 1, code, ranked, sub * sub
             else:
-                kinds = 0
+                found = 0
                 for a in range(sub):
                     x = xs[i] + (a + 0.5) / sub * (xs[i + 1] - xs[i])
                     for b in range(sub):
                         y = ys[j] + (b + 0.5) / sub * (ys[j + 1] - ys[j])
                         code = _ballot(x, y, candidates, top, rule, delta, mu, kappa, power, r, order, steps,
                                        work, back)
-                        ranked = _order_code(r, order)
+                        ranked = _order_code(r, order) if by_order else 0
                         k = 0
-                        while k < kinds and (codes[k] != code or orders[k] != ranked):
+                        while k < found and (point_codes[k] != code or point_orders[k] != ranked):
                             k += 1
-                        if k == kinds:
-                            codes[k], orders[k], counts[k] = code, ranked, 0
-                            kinds += 1
+                        if k == found:
+                            point_codes[k], point_orders[k], counts[k] = code, ranked, 0
+                            found += 1
                         counts[k] += 1
-            for c in range(n):
-                for e in range(n):
-                    out[c, e, i, j] = 0.0
-            for k in range(kinds):
-                weight = counts[k] / (sub * sub)
-                for above in range(n):  # the candidates in order: each gets from this ballot
-                    e = (orders[k] >> (BITS * above)) & MASK
-                    for below in range(above + 1, n):
-                        c = (orders[k] >> (BITS * below)) & MASK
-                        out[c, e, i, j] += weight * (top - ((codes[k] >> (BITS * c)) & MASK))
+            if used + found > size:  # twice as much room
+                size = 2 * (used + found)
+                codes, orders, weights = (np.concatenate((codes[:used], np.empty(size - used, dtype=np.int64))),
+                                          np.concatenate((orders[:used], np.empty(size - used, dtype=np.int64))),
+                                          np.concatenate((weights[:used], np.empty(size - used))))
+            for k in range(found):
+                codes[used], orders[used] = point_codes[k], point_orders[k]
+                weights[used] = counts[k] / (sub * sub)
+                used += 1
+            kinds[i - start, j] = found
         left, right = right, left
         left_order, right_order = right_order, left_order
+    return kinds, codes[:used], orders[:used], weights[:used]
+
+
+def ballot_table(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
+                 delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
+                 power: float = POWER, by_order: bool = False) -> BallotTable:
+    """The distinct ballots of the voters of every rectangle [xs[i], xs[i + 1]] x
+    [ys[j], ys[j + 1]], with the part of them that has each, for X + 1 and Y + 1
+    increasing grid lines; delta, mu, kappa and power as in scored(). A rectangle whose
+    four corners have the same ballot counts as all of that ballot, and with by_order
+    only if they also rank the candidates in the same order; the others, which a border
+    crosses, hold the ballots of sub x sub points. given() and raised() need by_order:
+    who ranks whom above whom is all they read. Chunks of the rows run in parallel
+    threads."""
+    xs = np.ascontiguousarray(xs, dtype=np.float64)
+    ys = np.ascontiguousarray(ys, dtype=np.float64)
+    candidates = np.ascontiguousarray(candidates, dtype=np.float64)
+    if not 2 <= len(candidates) <= MAX_CANDIDATES:
+        raise ValueError(f"score ballots need 2 to {MAX_CANDIDATES} candidates, got {len(candidates)}")
+    if not 2 <= levels <= MAX_LEVELS:
+        raise ValueError(f"score ballots need 2 to {MAX_LEVELS} levels, got {levels}")
+    _check(rule, delta, mu, kappa, power)
+    parts = {}
+
+    def rows(a, b):
+        parts[a] = _table_rows(xs, ys, candidates, levels - 1, RULES.index(rule), float(delta), float(mu),
+                               float(kappa), float(power), sub, by_order, a, b)
+
+    threads.in_chunks(rows, len(xs) - 1, ROWS)
+    chunks = [parts[a] for a in sorted(parts)]
+    kinds = np.concatenate([chunk[0] for chunk in chunks])
+    start = np.concatenate([[0], np.cumsum(kinds.ravel())])
+    codes, orders, weights = (np.concatenate([chunk[k] for chunk in chunks]) for k in (1, 2, 3))
+    for array in (start, codes, orders, weights):
+        array.setflags(write=False)
+    return BallotTable(kinds.shape, start, codes, orders, weights, len(candidates), levels - 1, by_order)
+
+
+# what tabulate() sums: the points below the top score of each candidate (C, X, Y), the
+# strict comparisons of each pair (C, C, X, Y), and what burying takes back and what
+# compromising adds (both C, C, X, Y; given() and raised())
+UNSCORED, COMPARISONS, GIVEN, RAISED = range(4)
+CELLS = 4096  # rectangles per task of the compiled sums (threads.py)
+
+
+@njit(cache=True, nogil=True, error_model="numpy")
+def _tabulate(start, codes, orders, weights, n, top, kind, first, stop, out):
+    """tabulate() of the rectangles first <= k < stop into out (C or C * C, X * Y)."""
+    for k in range(first, stop):
+        for row in range(out.shape[0]):
+            out[row, k] = 0.0
+        for t in range(start[k], start[k + 1]):
+            code, ranked, weight = codes[t], orders[t], weights[t]
+            if kind == UNSCORED:
+                for c in range(n):
+                    out[c, k] += weight * ((code >> (BITS * c)) & MASK)
+            elif kind == COMPARISONS:
+                for c in range(n):
+                    below_c = (code >> (BITS * c)) & MASK
+                    for e in range(c + 1, n):
+                        below_e = (code >> (BITS * e)) & MASK
+                        if below_c != below_e:
+                            difference = weight if below_c < below_e else -weight
+                            out[c * n + e, k] += difference
+                            out[e * n + c, k] -= difference
+            else:
+                for above in range(1 if kind == RAISED else 0, n):  # the candidates in order
+                    c = (ranked >> (BITS * above)) & MASK
+                    for below in range(above + 1, n):
+                        e = (ranked >> (BITS * below)) & MASK
+                        if kind == RAISED:  # c, not the first choice, above e: the points c lacks
+                            out[c * n + e, k] += weight * ((code >> (BITS * c)) & MASK)
+                        else:  # c above e: the points e gets
+                            out[e * n + c, k] += weight * (top - ((code >> (BITS * e)) & MASK))
+
+
+def tabulate(table: BallotTable, kind: int) -> np.ndarray:
+    """The mean over the voters of every rectangle of the table (float32): for UNSCORED
+    the points below the top score of each candidate (C, X, Y), for COMPARISONS the share
+    strictly scoring c above e minus e above c (C, C, X, Y), for GIVEN given() and for
+    RAISED raised(), which need a table by_order. Chunks of the rectangles run in
+    parallel threads."""
+    if kind in (GIVEN, RAISED) and not table.by_order:
+        raise ValueError("what burying takes back and compromising adds need a ballot table by order")
+    n = table.candidates
+    cells = table.shape[0] * table.shape[1]
+    out = np.empty((n if kind == UNSCORED else n * n, cells), dtype=np.float32)
+    threads.in_chunks(lambda a, b: _tabulate(table.start, table.codes, table.orders, table.weights, n, table.top,
+                                             kind, a, b, out), cells, CELLS)
+    return out.reshape((n,) * (1 if kind == UNSCORED else 2) + table.shape)
+
+
+@njit(cache=True, nogil=True, error_model="numpy")
+def _moved(start, codes, orders, weights, n, top, a, b, bury, compromise, first, stop, out):
+    """moved_comparisons() of the rectangles first <= k < stop into out (C * C, X * Y)."""
+    scores, moved = np.empty(n, dtype=np.int64), np.empty(n, dtype=np.int64)
+    kinds = (bury * (1 - compromise), (1 - bury) * compromise, bury * compromise)  # bury, compromise, both
+    for k in range(first, stop):
+        for row in range(out.shape[0]):
+            out[row, k] = 0.0
+        for t in range(start[k], start[k + 1]):
+            code, ranked, weight = codes[t], orders[t], weights[t]
+            position_a = position_b = 0
+            for position in range(n):
+                c = (ranked >> (BITS * position)) & MASK
+                scores[c] = top - ((code >> (BITS * c)) & MASK)
+                if c == a:
+                    position_a = position
+                elif c == b:
+                    position_b = position
+            # a voter with a frontrunner first gives it the top score already: compromising
+            # changes nothing there
+            upper, lower = (a, b) if position_a < position_b else (b, a)
+            for kind in range(3):
+                share = kinds[kind]
+                if share == 0:
+                    continue
+                for c in range(n):
+                    moved[c] = scores[c]
+                if kind != 1:  # buries: the frontrunner ranked lower gets 0
+                    moved[lower] = 0
+                if kind != 0:  # compromises: the other the top score
+                    moved[upper] = top
+                for c in (a, b):  # the pairs with a or b, (a, b) once
+                    for e in range(n):
+                        if e == c or (c == b and e == a):
+                            continue
+                        before = 1 if scores[c] > scores[e] else -1 if scores[c] < scores[e] else 0
+                        after = 1 if moved[c] > moved[e] else -1 if moved[c] < moved[e] else 0
+                        if after != before:
+                            change = weight * share * (after - before)
+                            out[c * n + e, k] += change
+                            out[e * n + c, k] -= change
+
+
+def moved_comparisons(table: BallotTable, a: int, b: int, bury: float, compromise: float) -> np.ndarray:
+    """How much the strict score comparisons of a table by order move, (C, C, X, Y) float32,
+    where `bury` of the voters bury and `compromise` of them compromise against the
+    frontrunners a and b, each whatever the other does (blocks.Burial, Compromise): a
+    burying voter gives the frontrunner they rank lower 0, a compromising one gives the one
+    they rank higher the top score if neither is their first choice, and bury * compromise
+    of the voters do both. Only the comparisons of a or b with another candidate move. The
+    comparisons do not add up over the strategies like the scores: a voter who does both
+    compares the two frontrunners as neither change alone would, so each kind of voter is
+    counted on its own."""
+    if not table.by_order:
+        raise ValueError("the comparisons of strategic voters need a ballot table by order")
+    n = table.candidates
+    cells = table.shape[0] * table.shape[1]
+    out = np.empty((n * n, cells), dtype=np.float32)
+    threads.in_chunks(lambda first, stop: _moved(table.start, table.codes, table.orders, table.weights, n, table.top,
+                                                 a, b, float(bury), float(compromise), first, stop, out),
+                      cells, CELLS)
+    return out.reshape((n, n) + table.shape)
+
+
+def unscored(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
+             delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
+             power: float = POWER) -> np.ndarray:
+    """short[c, i, j] = mean points below the top score that the voters of the rectangle
+    [xs[i], xs[i + 1]] x [ys[j], ys[j + 1]] give candidate c, from 0 to levels - 1, shape
+    (C, X, Y) for X + 1 and Y + 1 increasing grid lines; delta, mu, kappa and power as in
+    scored(). A rectangle whose four corners have the same ballot counts as all of that
+    ballot; in the others, which a border crosses, the ballots at sub x sub points are
+    averaged (ballot_table, tabulate)."""
+    table = ballot_table(xs, ys, candidates, levels, sub, rule, delta, mu=mu, kappa=kappa, power=power)
+    return tabulate(table, UNSCORED)
+
+
+def comparisons(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
+                delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
+                power: float = POWER) -> np.ndarray:
+    """short[c, e, i, j] = share strictly scoring c above e minus e above c among
+    voters in each rectangle [xs[i], xs[i + 1]] x [ys[j], ys[j + 1]]. Voters who give
+    the pair equal scores contribute 0. Rectangles as in unscored(); output shape is
+    (C, C, X, Y)."""
+    table = ballot_table(xs, ys, candidates, levels, sub, rule, delta, mu=mu, kappa=kappa, power=power)
+    return tabulate(table, COMPARISONS)
 
 
 def given(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
@@ -635,19 +713,19 @@ def given(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
     [ys[j], ys[j + 1]] who rank e above c give c, from 0 to levels - 1 (0 for e = c), shape
     (C, C, X, Y): what c loses if those voters bury it, giving it 0. A voter ranks e above c
     if e is closer (ties: the lower index first). Rectangles as in unscored(), but one
-    holds one ballot only if its corners also have the same order of distance; the
-    others are averaged at sub x sub points."""
-    xs = np.ascontiguousarray(xs, dtype=np.float64)
-    ys = np.ascontiguousarray(ys, dtype=np.float64)
-    candidates = np.ascontiguousarray(candidates, dtype=np.float64)
-    if not 2 <= len(candidates) <= MAX_CANDIDATES:
-        raise ValueError(f"score ballots need 2 to {MAX_CANDIDATES} candidates, got {len(candidates)}")
-    if not 2 <= levels <= MAX_LEVELS:
-        raise ValueError(f"score ballots need 2 to {MAX_LEVELS} levels, got {levels}")
-    _check(rule, delta, mu, kappa, power)
-    out = np.empty((len(candidates), len(candidates), len(xs) - 1, len(ys) - 1), dtype=np.float32)
-    threads.in_chunks(
-        lambda a, b: _given(xs, ys, candidates, levels - 1, RULES.index(rule), float(delta), float(mu),
-                            float(kappa), float(power), sub, a, b, out),
-        len(xs) - 1, ROWS)
-    return out
+    holds one ballot only if its corners also have the same order of distance (by_order)."""
+    table = ballot_table(xs, ys, candidates, levels, sub, rule, delta, mu=mu, kappa=kappa, power=power,
+                         by_order=True)
+    return tabulate(table, GIVEN)
+
+
+def raised(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
+           delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
+           power: float = POWER) -> np.ndarray:
+    """short[c, e, i, j] = mean points below the top score that the voters of the rectangle
+    who rank c above e, but neither first, give c, from 0 to levels - 1 (0 for e = c), shape
+    (C, C, X, Y): what c gains if those voters compromise on it, giving it the top score.
+    Rectangles as in given()."""
+    table = ballot_table(xs, ys, candidates, levels, sub, rule, delta, mu=mu, kappa=kappa, power=power,
+                         by_order=True)
+    return tabulate(table, RAISED)

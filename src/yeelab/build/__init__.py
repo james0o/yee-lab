@@ -1,6 +1,6 @@
 """Voting methods built from small blocks, like in Scratch but with Python constructors:
 
-    from yeelab.build import (BordaCount, Bullet, Burial, DescendingCoalitions, Eliminate, Fallback,
+    from yeelab.build import (BordaCount, Bullet, Burial, Compromise, DescendingCoalitions, Eliminate, Fallback,
                               Highest, Margins, Mix, Pairwise, Plurality, Schedules, Score,
                               ScoreAvg, ScoreCluster, ScoreComparisons, ScoreDH, ScoreHybrid,
                               StrongestPaths, Tally, Unbeaten, Weakest)
@@ -35,6 +35,9 @@
     # 30% of the voters rank the frontrunner they like less of the two with the most
     # first choices last
     Burial(borda, share=0.3)
+    # 30% of the voters whose first choice is neither frontrunner rank the one they like
+    # more first
+    Compromise(fptp, share=0.3)
     # the other ways to score of yeelab.score, for comparisons (not in the web UI)
     ScoreAvg(6), ScoreDH(6, delta=0.8), ScoreHybrid(6, delta=0.8), ScoreCluster(6, mu=0.1, kappa=2.0)
 
@@ -43,6 +46,8 @@
 
     blocks      the blocks, their types (Ballot, CandidateTotals, PairDiffs, PairShares,
                 Winner) and how each computes
+    strategic   the methods where some of the voters vote strategically: Bullet, Burial,
+                Compromise
     rounds      one round of Eliminate, compiled: who goes at every point
     voters      Voters: the shares at every point that a method is evaluated on
     methods     the methods above by name (METHODS); margin/regions.py draws them
@@ -51,8 +56,6 @@
 from yeelab.build.blocks import (
     Ballot,
     BordaCount,
-    Bullet,
-    Burial,
     CandidateTotals,
     DescendingCoalitions,
     Eliminate,
@@ -79,10 +82,11 @@ from yeelab.build.blocks import (
     Winner,
 )
 from yeelab.build.methods import METHODS
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Buried, Scored, ScoredPairwise, Share, Voters
+from yeelab.build.strategic import Bullet, Burial, Compromise
+from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Ballots, Scored, ScoredPairwise, Share, Voters
 
 __all__ = [
-    "Ballot", "BordaCount", "Bullet", "Burial", "Buried", "CandidateTotals", "DescendingCoalitions",
+    "Ballot", "Ballots", "BordaCount", "Bullet", "Burial", "CandidateTotals", "Compromise", "DescendingCoalitions",
     "Eliminate", "Fallback", "Highest", "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise",
     "Plurality", "Schedules", "Score", "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH",
     "ScoreHybrid", "StrongestPaths", "Tally", "Unbeaten", "Union", "Weakest", "Winner", "METHODS",

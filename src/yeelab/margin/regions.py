@@ -33,11 +33,11 @@ web UI steps through these to move the diagram between the two.
 import contourpy
 import numpy as np
 
-from yeelab.build import FIRST, METHODS, PAIRWISE, PROFILE, Buried, Scored, ScoredPairwise, Share, Voters, Winner
+from yeelab.build import FIRST, METHODS, PAIRWISE, PROFILE, Ballots, Scored, ScoredPairwise, Share, Voters, Winner
 from yeelab.margin.geometric import PIXEL_MEDIAN, PixelMedian, geometric_medians
 from yeelab.margin.shares import (
     Model,
-    buried_shares,
+    ScoreGrid,
     first_choice_shares,
     pairwise_shares,
     ranking_shares,
@@ -89,28 +89,31 @@ def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Vote
     if PROFILE in needs:
         shares["rankings"], node_shares = ranking_shares(candidates, model)
         shares["probs"] = interpolate(node_shares)
+    # one ballot table per score ballot: by order where burying or compromising read it too
+    ordered = {share.scored for share in needs if isinstance(share, Ballots)}
     scores = [share for share in needs if isinstance(share, Scored)]
     if scores:
         shares["unscored"] = {share: unscored_shares(candidates, model, share.levels, medians, share.rule,
                                                      share.delta, mu=share.mu, kappa=share.kappa,
-                                                     power=share.power)
+                                                     power=share.power, by_order=share in ordered)
                               for share in scores}
     score_pairs = [share for share in needs if isinstance(share, ScoredPairwise)]
     if score_pairs:
         shares["scored_pairwise"] = {
             share: score_comparison_shares(candidates, model, medians, share.scored.levels,
                                            share.scored.rule, share.scored.delta, mu=share.scored.mu,
-                                           kappa=share.scored.kappa, power=share.scored.power)
+                                           kappa=share.scored.kappa, power=share.scored.power,
+                                           by_order=share.scored in ordered)
             for share in score_pairs
         }
-    taken = [share for share in needs if isinstance(share, Buried)]
-    if taken:
-        shares["buried"] = {
-            share: buried_shares(candidates, model, medians, share.scored.levels, share.scored.rule,
-                                 share.scored.delta, mu=share.scored.mu, kappa=share.scored.kappa,
-                                 power=share.scored.power)
-            for share in taken
-        }
+    grids = [share for share in needs if isinstance(share, Ballots)]
+    if grids:  # the score shares of strategic voters, computed when asked
+        shares["ballots"] = {share: ScoreGrid(np.asarray(candidates, dtype=np.float64), model, medians,
+                                              share.scored.levels, share.scored.rule, share.scored.delta,
+                                              share.scored.mu, share.scored.kappa, share.scored.power)
+                             for share in grids}
+        shares["cells"] = np.stack(np.meshgrid(np.arange(len(medians)), np.arange(len(medians)), indexing="ij"),
+                                   axis=-1)
     return Voters(**shares)
 
 

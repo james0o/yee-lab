@@ -22,8 +22,8 @@ from scipy.special import betainc, ndtr, ndtri
 from scipy.stats import beta as beta_dist
 
 from yeelab import normal, ranking_cells
-from yeelab.build import (Bullet, Burial, Highest, Score, ScoreAvg, ScoreCluster, ScoreDH, ScoreHybrid, Tally,
-                          Voters, Winner)
+from yeelab.build import (Bullet, Burial, Compromise, Highest, Score, ScoreAvg, ScoreCluster, ScoreDH, ScoreHybrid,
+                          Tally, Voters, Winner)
 from yeelab.build.methods import METHODS as BUILD_METHODS
 from yeelab.margin.geometric import geometric_median_at, geometric_medians
 from yeelab.margin.regions import MARGINS, grid, nearest, regions, winners
@@ -1045,6 +1045,28 @@ def burial():
         print(f"burial, {name}: sincere dark horse {sincere_dark:.3f}; " + "; ".join(parts))
 
 
+def compromise():
+    """FPTP, Borda and Score where none, half and all of the voters compromise (the voters
+    of the UI), and for every method the part of the square where compromising voters
+    give the pixel another winner, and the part D wins."""
+    rows = [("FPTP", BUILD_METHODS["fptp"]), ("Borda", BUILD_METHODS["borda"]), ("Score", BUILD_METHODS["score"])]
+    fig, axes = plt.subplots(len(rows), len(BULLET_SHARES), figsize=(10, 10.2), layout="constrained")
+    for row, (label, method) in enumerate(rows):
+        for col, share in enumerate(BULLET_SHARES):
+            show(axes[row, col], Compromise(method, share), UI_MODEL, f"{label}, {share:.0%} compromising")
+    _save_figure(fig, "compromise")
+    plt.close(fig)
+    for name, method in BUILD_METHODS.items():
+        if name == "star":
+            continue
+        sincere = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+        parts = []
+        for share in (0.25, 0.5, 1):
+            winner = winners(Compromise(method, share), CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+            parts.append(f"{share:.0%}: another winner {(winner != sincere).mean():.3f}, D {(winner == D).mean():.3f}")
+        print(f"compromise, {name}: D sincere {(sincere == D).mean():.3f}; " + "; ".join(parts))
+
+
 if __name__ == "__main__":
     FIGURES.mkdir(exist_ok=True)
     spread_shapes()
@@ -1073,3 +1095,4 @@ if __name__ == "__main__":
     score_against_voronoi()
     bullet()
     burial()
+    compromise()

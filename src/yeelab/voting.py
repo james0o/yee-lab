@@ -50,7 +50,8 @@ def _irv_points(rankings, probs, bullet, winner, margin):
                     second, lowest = lowest, c
                 elif second < 0 or tally[c] < tally[second]:
                     second = c
-            gap = min(gap, tally[second] - tally[lowest])
+            if tally[second] > 0:  # two empty tallies decide nothing (irv_rounds)
+                gap = min(gap, tally[second] - tally[lowest])
             alive[lowest] = False
             for r in range(n_ballots):
                 if rankings[r, top[r]] == lowest:
@@ -112,7 +113,8 @@ def _schedule_points(rankings, probs, bullet, chosen, margin):
             chosen[p, order[0]] = True
             kept = 1 << order[0]  # the k highest
             for k in range(1, left):
-                gap = min(gap, tally[order[k - 1]] - tally[order[k]])
+                if tally[order[k - 1]] > 0:  # two empty tallies decide nothing (irv_rounds)
+                    gap = min(gap, tally[order[k - 1]] - tally[order[k]])
                 if k > 1 and seen[kept] != p + 1:
                     seen[kept] = p + 1
                     stack[size] = kept
@@ -230,7 +232,8 @@ def irv_schedules(rankings: np.ndarray, probs: np.ndarray,
 
     The margin is the smallest gap of any round of any schedule, the k-th highest tally
     minus the next where the round keeps k: a winner changes only where some round's
-    decision flips, and there its gap is 0.
+    decision flips, and there its gap is 0. Two empty tallies decide nothing, as in
+    irv_rounds: the candidates a round drops then have no ballots to pass on.
     """
     shape = probs.shape[:-1]
     flat = np.ascontiguousarray(probs.reshape(-1, probs.shape[-1]))
@@ -256,7 +259,11 @@ def irv_rounds(rankings: np.ndarray, probs: np.ndarray,
     eliminated; eliminating until one candidate remains gives the IRV winner.
     The margin is the smallest gap between the two lowest tallies of any round:
     the winner can change only where some elimination flips, and the gap is 0 on
-    both sides of such a flip.
+    both sides of such a flip. Two empty tallies are no such decision: a candidate with
+    no ballots passes none on when it goes, and gets none, since it goes before any
+    candidate with ballots, so their order changes no winner. They only happen where no
+    voter has some candidates first, as where all voters compromise on the frontrunners
+    (blocks.Compromise).
     """
     shape = probs.shape[:-1]
     flat = np.ascontiguousarray(probs.reshape(-1, probs.shape[-1]))

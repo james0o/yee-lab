@@ -26,8 +26,8 @@
     .choices > span { font-size: .9rem; color: #666; }  /* row labels only, not KaTeX spans */
     .choices > label { font-size: .9rem; display: flex; align-items: center; gap: .3rem; cursor: pointer; }
     .choices input[type=checkbox] { accent-color: #222; margin: 0; }
-    #deviation, #levels, #power, #strategic { width: 12rem; accent-color: #222; }
-    #deviationValue, #levelsValue, #powerValue, #strategicValue { font-size: .9rem; min-width: 6rem; }
+    #deviation, #levels, #power, #strategies input { width: 12rem; accent-color: #222; }
+    #deviationValue, #levelsValue, #powerValue, #strategies output { font-size: .9rem; min-width: 6rem; }
     button { font: inherit; padding: .4rem .9rem; border: 1px solid #222; border-radius: 4px; background: #fff; cursor: pointer; }
     button.active { background: #222; color: #fff; }
     button:disabled { opacity: .35; cursor: default; }
@@ -52,8 +52,7 @@
       <div class="choices" id="methods"><span>Voting method:</span></div>
       <div class="choices"><span>Score categories:</span><input type="range" id="levels" min="2" step="1"><output id="levelsValue"></output></div>
       <div class="choices"><span>Score power p:</span><input type="range" id="power"><output id="powerValue"></output></div>
-      <div class="choices" id="strategies"><span>Strategy:</span></div>
-      <div class="choices"><span>Strategic voters:</span><input type="range" id="strategic"><output id="strategicValue"></output></div>
+      <div id="strategies"></div>
       <div class="choices" id="ideals"><span>Ideal scenario:</span></div>
       <p>Drag a candidate to move it · click empty space to add one · right-click to remove</p>
       <p>Hover the square to see the voters of a pixel along x (above) and in 2D</p>
@@ -82,9 +81,7 @@
     const levelsValue = document.getElementById("levelsValue");
     const powerSlider = document.getElementById("power");
     const powerValue = document.getElementById("powerValue");
-    const strategies = document.getElementById("strategies");
-    const strategicSlider = document.getElementById("strategic");
-    const strategicValue = document.getElementById("strategicValue");
+    const strategies = document.getElementById("strategies");  // a row with a slider per strategy
     const joint = document.getElementById("joint");
     const votersText = document.getElementById("voters");
     const showMarginal = document.getElementById("showMarginal");  // the strip above the square
@@ -141,10 +138,12 @@
     let scoreMethods = [];   // names of the methods the categories and power sliders belong to
     let levels = 0;          // their number of scores on a ballot
     let power = 0;           // their part of the way is raised to this power
-    let strategy = null;     // how the voters vote: "sincere", or a strategy of a share of them
-    let strategic = 0;       // that share, from 0 to 1
+    let shares = {};         // strategy name -> the share of the voters who vote by it, from 0 to 1,
+                             // of those who vote by none of the strategies above it
     let strategyPhrases = {}; // strategy name -> what the status line says of it
+    let strategyOf = {};     // strategy name -> the strategy whose voters it leaves out, if any
     let unsupported = {};    // strategy name -> the methods it cannot do
+    let strategySliders = {}; // strategy name -> its slider
     let voters = {};      // deviation -> {sigma, beta_params} from the backend, where
                           // beta_params is [a, b] along one axis, per pixel
     let hovered = [0.5, 0.5];  // point whose voters are shown in the strip and the shade
@@ -486,7 +485,12 @@
     // What an answer depends on besides the candidates' positions and the sliders. An answer to
     // other settings (or to a candidate added or removed since, whose colours shifted) is not drawn;
     // one to an older slider value is, so sliding it shows the newest diagram it can, like a drag.
-    const settings = () => JSON.stringify([method, distribution, pixelMedian, strategy, candidates.length]);
+    const settings = () => JSON.stringify([method, distribution, pixelMedian, candidates.length]);
+
+    // The shares of the strategies that apply to the method: none in the Voronoi diagram,
+    // which has no election, nor in a method a strategy cannot do.
+    const applied = () => Object.fromEntries(Object.entries(shares).map(([name, share]) =>
+      [name, method === "voronoi" || (unsupported[name] ?? []).includes(method) ? 0 : share]));
 
     // Ask the backend for the win regions, traced on `grid` points per axis. While an answer is
     // on its way, only remember that another is needed: it is asked for as soon as the answer is
@@ -509,7 +513,7 @@
       if (moving && performance.now() - moving.start >= MOVE) moving = null;  // it has arrived
       if (moving) grid = dragGrid;  // on its way: the coarser grid, like a drag
       const part = shift();
-      const asked = settings(), sliders = [deviation, levels, power, strategic];
+      const asked = settings(), sliders = [deviation, levels, power, applied()];
       if (grid === finalGrid) message.textContent = `Computing ${labels[method]}…`;
       const start = performance.now();
       try {
@@ -517,7 +521,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            candidates, method, distribution, deviation, levels, power, strategy, strategic, grid,
+            candidates, method, distribution, deviation, levels, power, ...sliders[3], grid,
             pixel_median: part > 0 ? "geometric" : "marginal", shift: part,
           }),
         });
@@ -543,13 +547,15 @@
     }
 
     // What the diagram shows, and how long it took (round trip, and computing it on the backend).
-    function describe(deviation, levels, power, strategic, total, server) {
+    function describe(deviation, levels, power, applies, total, server) {
       const tail = ` · ${candidates.length} candidates · ${total} ms (${server} ms computing)`;
       let name = labels[method];
       if (scoreMethods.includes(method)) name += `, ${levels} categories${levels === 2 ? " (approval)" : ""}`;
       if (scoreMethods.includes(method)) name += `, p = ${power.toFixed(2)}`;
-      if (strategy !== "sincere" && method !== "voronoi")
-        name += ` · ${Math.round(100 * strategic)}% ${strategyPhrases[strategy]}`;
+      for (const [strategy, share] of Object.entries(applies)) {
+        const others = applies[strategyOf[strategy]] > 0 ? "of the others " : "";
+        if (share > 0) name += ` · ${Math.round(100 * share)}% ${others}${strategyPhrases[strategy]}`;
+      }
       if (method === "voronoi") {  // nearest candidate, no voters involved but for where it is drawn
         const where = geometric() ? " · only where voters have their geometric median" : "";
         message.textContent = `${name}${where}${tail}`;
@@ -629,7 +635,6 @@
     function choices(row, options, pick, group = [row]) {
       for (const { name, label = name, tex, description = "" } of options) {
         const button = document.createElement("button");
-        button.dataset.name = name;
         if (tex) typeset(button, { label, tex });
         else button.textContent = label;
         button.title = description;
@@ -656,15 +661,10 @@
       updateStrategies();
     }
 
-    // The voters vote by a strategy only in an election: not in the Voronoi diagram, which has
-    // none, and not in a method the strategy cannot do; neither can be picked while the other is.
-    // The share slider only applies to a strategy other than sincere voting.
+    // A strategy's slider only applies to the methods it can do (applied), like the score sliders.
     function updateStrategies() {
-      for (const button of strategies.querySelectorAll("button"))
-        button.disabled = method === "voronoi" || (unsupported[button.dataset.name] ?? []).includes(method);
-      for (const button of methods.querySelectorAll("button"))
-        button.disabled = (unsupported[strategy] ?? []).includes(button.dataset.name);
-      strategicSlider.disabled = strategy === "sincere" || method === "voronoi";
+      for (const [name, slider] of Object.entries(strategySliders))
+        slider.disabled = method === "voronoi" || (unsupported[name] ?? []).includes(method);
     }
 
 
@@ -722,22 +722,29 @@
       "2^(-1/p) of the way, not halfway). For Score only.";
     powerSlider.addEventListener("input", () => { pickPower(); compute(dragGrid); });
     powerSlider.addEventListener("change", () => compute());
-    // The strategy of the voters, and the share of them who vote by it. The slider recomputes
-    // like the others.
-    choices(strategies, config.strategies, name => { strategy = name; updateStrategies(); });
+    // A slider for the share of the voters of each strategy, 0 at first: every voter sincere. Each
+    // recomputes like the others.
     strategyPhrases = Object.fromEntries(config.strategies.map(({ name, phrase }) => [name, phrase]));
+    strategyOf = Object.fromEntries(config.strategies.map(({ name, of }) => [name, of]));
     unsupported = config.unsupported;
-    strategy = config.strategies[0].name;
-    strategies.querySelector("button").classList.add("active");
-    function pickStrategic() {
-      strategic = Number(strategicSlider.valueAsNumber.toFixed(2));  // the step is 0.05
-      strategicValue.textContent = `${Math.round(100 * strategic)}%`;
+    for (const { name, label, description } of config.strategies) {
+      const row = document.createElement("div");
+      const slider = document.createElement("input");
+      const value = document.createElement("output");
+      row.className = "choices";
+      row.append(Object.assign(document.createElement("span"), { textContent: `${label}:` }), slider, value);
+      Object.assign(slider, { type: "range", min: 0, max: 1, step: config.strategic_step, value: 0,
+                              title: description });
+      const pick = () => {
+        shares[name] = Number(slider.valueAsNumber.toFixed(2));  // the step is 0.05
+        value.textContent = `${Math.round(100 * shares[name])}%`;
+      };
+      slider.addEventListener("input", () => { pick(); compute(dragGrid); });
+      slider.addEventListener("change", () => compute());
+      strategies.append(row);
+      strategySliders[name] = slider;
+      pick();
     }
-    Object.assign(strategicSlider, { min: 0, max: 1, step: config.strategic_step, value: config.strategic });
-    strategicSlider.title = "The share of the voters of every pixel who vote by the strategy; " +
-      "the others vote sincerely.";
-    strategicSlider.addEventListener("input", () => { pickStrategic(); compute(dragGrid); });
-    strategicSlider.addEventListener("change", () => compute());
     choices(pixelMedians, config.pixel_medians, name => {
       const from = shift();  // where the diagram is now, also in the middle of a move
       pixelMedian = name;
@@ -757,7 +764,6 @@
     pickDeviation();
     pickLevels();
     pickPower();
-    pickStrategic();
     pickMethod(null);  // none yet: the categories and power sliders wait for Score
     updatePixelMedians();
     draw();

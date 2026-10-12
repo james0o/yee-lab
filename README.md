@@ -6,7 +6,7 @@ A Yee diagram compares voting methods. Candidates are fixed points $c_1, \dots, 
 - every voter ranks the candidates by distance (closest first),
 - the pixel is coloured by the winner of that election.
 
-![The web UI: IRV with five candidates and Beta voters](docs/figures/ui.png)
+![The web UI: IRV with five candidates, Beta voters and pixels at their geometric median](docs/figures/ui.png)
 
 ## What is different here
 
@@ -59,9 +59,10 @@ Then open http://127.0.0.1:8000. [yeelab/web/app.py](src/yeelab/web/app.py) serv
 - **Candidates:** drag one to move it, click empty space to add one (up to 8), right-click to remove one. The diagram follows the drag, typically within 5–40 ms; IRV with 8 candidates, which needs every ranking cell, within about 0.1–0.2 s.
 - **Method:** Voronoi (no voters, the reference), FPTP, Two-round, IRV, DAC (descending acquiescing coalitions), Borda, Baldwin, Nanson, Schulze, Condorcet, Minimax, Black, King of the hill, Score, STAR or IRV set + KOTH + Score. The tooltip of a method says what it does and which blocks it is built from.
 - **Score categories** and **Score power p** (Score and STAR): the number of scores on a ballot, 2 (approval) to 11, and how sparingly the top scores are given, $p$ from 1 (in proportion to the distance) to 2, by default 1.5.
-- **Strategy** and **Strategic voters:** every voter votes sincerely, or a share of them vote strategically ([docs/math.pdf](docs/math.pdf), chapter "Strategic voting"):
-  - **Bullet:** they rank their first choice first and all other candidates equal below it.
-  - **Burial:** of the two candidates with the most first choices, they rank the one they like less last (on a score ballot: 0). Not for STAR.
+- **Bullet voters**, **Burying voters** and **Compromising voters:** the share of the voters who vote strategically, all 0 (every voter sincere) at first ([docs/math.pdf](docs/math.pdf), chapter "Strategic voting"). The frontrunners are the two candidates with the most first choices.
+  - **Bullet voters** rank their first choice first and all other candidates equal below it.
+  - **Burying voters**, a share of the others, rank last the frontrunner they like less (on a score ballot: 0).
+  - **Compromising voters**, a share of the others, rank first the frontrunner they like more if neither is their first choice (on a score ballot: the top score). Some voters bury and compromise both.
 - **Voters:** Beta, or normal for the original Yee model.
 - **Deviation:** $D$ from $0.05$ to $0.4$.
 - **Hover** over the square to see the voters of that pixel: their 2D density over the square and their distribution along $x$ above it.
@@ -113,15 +114,18 @@ ballot  = Score(6, power=1.5)                   # scores 0 to 5 by the part of t
 score   = Highest(Tally(ballot))
 star    = Unbeaten(ScoreComparisons(ballot), among=Highest(Tally(ballot), n=2))
 
-from yeelab.build import Bullet, Burial
+from yeelab.build import Bullet, Burial, Compromise
 
-Bullet(borda, share=0.3)                        # Borda where 30% of the voters bullet vote
-Burial(borda, share=0.3)                        # Borda where 30% of the voters bury a frontrunner
+Bullet(borda, share=0.3)                  # Borda where 30% of the voters bullet vote
+Burial(borda, share=0.3)                  # Borda where 30% of the voters bury a frontrunner
+Compromise(fptp, share=0.3)               # FPTP where 30% of the voters compromise on a frontrunner
+Bullet(Burial(Compromise(borda, share=0.4), share=0.2), share=0.3)  
+# 30% bullet vote; of the others 20% bury, 40% compromise
 ```
 
-A **ballot** (`Plurality`, `BordaCount`) gives a candidate points by their position among the remaining candidates, `Tally` averages those points over the voters of a pixel into **totals**, and a **winner** block chooses: `Eliminate` drops the lowest total (`how="min"`), every total at most the mean (`how="mean"`) or all but the highest (`how="all"`) until `until` candidates are left, one by default, and `Highest(totals, n)` is `Eliminate(totals, how="all", until=n)`. The Condorcet methods start from `Pairwise()` (who ranks one candidate above another): `Margins` and `StrongestPaths` give **diffs** (how strongly one candidate beats another), `Weakest` gives a candidate its weakest diff as its total, `Unbeaten` elects the candidate no one beats (none in a Condorcet cycle), `Unbeaten(diffs, among=...)` only among the candidates another block chooses (a runoff, where a tie is a draw; `a | b` chooses the candidates of both), and `Fallback(first, second)` uses `second` where `first` elects no one. A **score ballot** gives every candidate a score from 0 to `levels - 1`, the top score to the closest candidate and 0 to the farthest; the others' scores depend on how far the candidates are and not only on their order. `Score` gives them the score by where their distance is between the closest and the farthest, that part of the way to the power `power`: 1 is in proportion, more keeps the top scores for the near candidates. With two levels it is an approval ballot, approving the candidates beyond $2^{-1/p}$ of the way. $p = 1.5$ fits real ballots best ([docs/math.pdf](docs/math.pdf), sections 3.8 and 3.9, also on the other ways of scoring that `score.py` keeps for comparison). STAR puts the two highest scoring candidates head to head on `ScoreComparisons`: each voter supports the finalist they scored higher, and abstains if their scores tie. Score shares are summed over a fine grid of voters instead of polygons because their borders are curved; they are within about $10^{-3}$ of exact shares ([docs/math.pdf](docs/math.pdf), section 3.8). A block checks its input when it is built (`Highest(BordaCount())` raises `TypeError: Highest expects CandidateTotals, got a Ballot`), and `repr` gives back the expression.
+A **ballot** gives each candidate points, [`Tally`](src/yeelab/build/blocks.py#L639) averages them over the voters of a pixel, and a **winner** block ([`Highest`](src/yeelab/build/blocks.py#L866), [`Eliminate`](src/yeelab/build/blocks.py#L739), [`Unbeaten`](src/yeelab/build/blocks.py#L967), [`Fallback`](src/yeelab/build/blocks.py#L1057)) picks the winner. **Condorcet methods** start from [`Pairwise()`](src/yeelab/build/blocks.py#L513). [`Score`](src/yeelab/build/blocks.py#L298) ballots give scores from 0 to `levels - 1` by distance; `power` sets how sparingly the top scores are given. A block checks its input when it is built, and `repr` gives back the expression.
 
-Each method computes only the shares it needs (`method.needs`): first choices for FPTP, pairwise shares for ranked methods (the Borda score of $c$ among the remaining candidates $S$ is $\sum_{e \in S} d_{ce}$, with $d_{ce}$ the share ranking $c$ above $e$), the whole profile for IRV, which runs on the compiled rounds of `voting.py`, and cardinal score shares for Score and STAR. Every block that decides also computes its own gap, and the margin is the smallest of them, so the borders of a built method are traced like any other. `method.evaluate(voters)` returns the winner and the margin; `margin/regions.py` draws the methods of `yeelab.build.METHODS`.
+`method.evaluate(voters)` returns the **winner** and the **margin**. Each method computes only the shares it needs; the details are in [docs/math.pdf](docs/math.pdf).
 
 ## License
 
