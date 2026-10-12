@@ -45,14 +45,22 @@
       <div class="joint" id="joint">
         <canvas id="square" width="1000" height="1000"></canvas>
       </div>
-      <table id="metrics" title="Assignment regret is r/(r+L), weighted by 1/(1+(d/L)^2), where L is the median candidate spacing. Boundary F1 uses ε = 0.01 + (0.04−0.01)e^(−d_edge/0.1), so tolerance grows near the square's edge.">
+      <table id="metrics" title="Boundary distances are symmetric and weighted by boundary length and centrality exp(−4‖x−(0.5,0.5)‖²). Lower is better.">
         <thead><tr><th>Voronoi agreement</th><th>Score</th></tr></thead>
         <tbody>
           <tr><td>Assignment</td><td id="metric-assignment">—</td></tr>
           <tr><td>Inside candidate hull</td><td id="metric-inside">—</td></tr>
-          <tr><td>Boundaries</td><td id="metric-boundaries">—</td></tr>
+          <tr><td>Boundary distance, center-weighted mean</td><td id="metric-boundaries">—</td></tr>
+          <tr><td>Boundary distance inside hull, equal-weight mean</td><td id="metric-boundary-hull">—</td></tr>
         </tbody>
       </table>
+      <details class="metric-help">
+        <summary>How the metrics are calculated</summary>
+        <p>Let d<sub>min</sub>(x) be the nearest candidate distance, d<sub>a</sub>(x) the distance to the assigned candidate, r(x) = d<sub>a</sub>(x) − d<sub>min</sub>(x), and L the median distance between candidate pairs. The regret loss is ℓ(x) = r(x)/(r(x)+L), weighted by area and w<sub>a</sub>(x) = 1/(1+(d<sub>min</sub>(x)/L)²).</p>
+        <p>Assignment = 100 × (1 − Σw<sub>a</sub>ℓ/Σw<sub>a</sub>). Inside hull uses the same formula, summing only over grid points inside the candidates’ convex hull.</p>
+        <p>For boundaries, each sample is projected to the nearest point on every segment of the other boundary. For segment endpoints a and b, the closest point is a + t(b−a), where t = clamp(((x−a)·(b−a))/‖b−a‖², 0, 1); distance is the minimum Euclidean distance over segments. This is measured in both directions.</p>
+        <p>Center-weighted boundary distance uses weight w<sub>b</sub>(x) = exp(−4‖x−(0.5,0.5)‖²), multiplied by represented segment length. It is the weighted mean Σwd/Σw. The hull-only metric clips both diagrams’ boundary segments to the candidates’ convex hull and gives its uniformly spaced samples equal weight. Distances are shown as percentages of the square’s width; lower is better.</p>
+      </details>
     </div>
     <div class="controls">
       <div class="choices" id="distributions"><span>Voters:</span></div>
@@ -61,7 +69,7 @@
         <label><input type="checkbox" id="showJoint">joint distribution</label>
       </div>
       <div class="choices"><span>Show on diagram:</span>
-        <label><input type="checkbox" id="showBoundaries">boundaries + Voronoi tolerance</label>
+        <label><input type="checkbox" id="showBoundaries">diagram + Voronoi boundaries</label>
         <label><input type="checkbox" id="showHull">candidate convex hull</label>
       </div>
       <div class="choices"><span>Deviation:</span><input type="range" id="deviation"><output id="deviationValue"></output></div>
@@ -91,6 +99,7 @@
     const assignmentMetric = document.getElementById("metric-assignment");
     const insideMetric = document.getElementById("metric-inside");
     const boundariesMetric = document.getElementById("metric-boundaries");
+    const hullBoundariesMetric = document.getElementById("metric-boundary-hull");
     const methods = document.getElementById("methods");
     const ideals = document.getElementById("ideals");
     const distributions = document.getElementById("distributions");
@@ -225,14 +234,6 @@
     function drawBoundaryOverlay() {
       if (!showBoundaries.checked || !regions) return;
       if (!boundaryPath) boundaryPath = pathOfBoundaries(regions);
-      for (const [x1, y1, x2, y2, tolerance] of voronoiBoundaries) {
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.strokeStyle = "rgba(0, 165, 195, 0.2)";
-        ctx.lineWidth = 2 * tolerance;
-        ctx.stroke();
-      }
       ctx.beginPath();
       for (const [x1, y1, x2, y2] of voronoiBoundaries) {
         ctx.moveTo(x1, y1);
@@ -241,6 +242,7 @@
       ctx.strokeStyle = "#007c91";
       ctx.lineWidth = 1.5 / canvas.width;
       ctx.stroke();
+      ctx.setLineDash([]);
       ctx.strokeStyle = "#171717";
       ctx.lineWidth = 2.5 / canvas.width;
       ctx.lineJoin = "round";
@@ -294,20 +296,20 @@
         drawBoundaryOverlay();
         if (showHull.checked && candidates.length) {
           const hull = convexHull(candidates);
-          if (hull.length >= 2) {
-            const path = new Path2D();
-            path.moveTo(...hull[0]);
-            for (const point of hull.slice(1)) path.lineTo(...point);
-            if (hull.length >= 3) path.closePath();
+          if (hull.length) {
+            const hullPath = new Path2D();
+            hullPath.moveTo(...hull[0]);
+            for (const point of hull.slice(1)) hullPath.lineTo(...point);
+            if (hull.length >= 3) hullPath.closePath();
             ctx.lineJoin = "round";
             ctx.strokeStyle = "#111";
             ctx.lineWidth = 4 / canvas.width;
             ctx.setLineDash([8 / canvas.width, 5 / canvas.width]);
-            ctx.stroke(path);
+            ctx.stroke(hullPath);
             ctx.strokeStyle = "#00e5ff";
             ctx.lineWidth = 2 / canvas.width;
             ctx.setLineDash([8 / canvas.width, 5 / canvas.width]);
-            ctx.stroke(path);
+            ctx.stroke(hullPath);
             ctx.setLineDash([]);
           }
         }
@@ -658,10 +660,16 @@
           boundaryPath = null;
           draw();
           describe(...sliders, Math.round(performance.now() - start), Math.round(answer.ms));
-          const { assignment, inside_hull, boundaries } = answer.metrics;
+          const { assignment, inside_hull, boundary_mean, boundary_hull_mean } = answer.metrics;
           assignmentMetric.textContent = `${assignment.toFixed(1)}%`;
           insideMetric.textContent = inside_hull === null ? "n/a" : `${inside_hull.toFixed(1)}%`;
-          boundariesMetric.textContent = `${boundaries.toFixed(1)}%`;
+          boundariesMetric.textContent = formatBoundaryDistance(boundary_mean);
+          hullBoundariesMetric.textContent = formatBoundaryDistance(boundary_hull_mean);
+        }
+
+        function formatBoundaryDistance(mean) {
+          return mean === null ? "n/a"
+            : `${(100 * mean).toFixed(2)}%`;
         }
       } catch (error) {
         if (asked === settings()) message.textContent = `Error: ${error.message}`;

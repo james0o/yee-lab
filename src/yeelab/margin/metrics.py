@@ -1,13 +1,6 @@
 """Agreement scores for a Yee diagram compared with the candidates' Voronoi diagram."""
 
 import numpy as np
-from scipy.spatial import cKDTree
-
-from yeelab.margin.regions import nearest, regions
-
-_INTERIOR_TOLERANCE = 0.02
-_EDGE_TOLERANCE = 0.05
-_EDGE_DECAY = 0.1
 
 
 def _convex_hull(points):
@@ -70,49 +63,7 @@ def _assignment_score(candidates, points, assigned, mask, scale, area_weights):
     return float(100 * (1 - np.average(loss[mask], weights=weight[mask])))
 
 
-def _boundary_points(winner, margin, points):
-    boundaries = []
-    for axis in (0, 1):
-        first = [slice(None), slice(None)]
-        second = [slice(None), slice(None)]
-        first[axis], second[axis] = slice(None, -1), slice(1, None)
-        first, second = tuple(first), tuple(second)
-        change = winner[first] != winner[second]
-        if not change.any():
-            continue
-        first_margin = margin[first][change]
-        second_margin = margin[second][change]
-        denominator = first_margin + second_margin
-        fraction = np.divide(first_margin, denominator, out=np.full_like(first_margin, 0.5),
-                             where=np.isfinite(denominator) & (denominator > 0))
-        fraction = np.clip(fraction, 0, 1)
-        start, end = points[first][change], points[second][change]
-        boundaries.append(start + fraction[:, None] * (end - start))
-    return np.concatenate(boundaries) if boundaries else np.empty((0, 2))
-
-
-def _edge_tolerance(points):
-    edge_distance = np.minimum.reduce(
-        (points[:, 0], 1 - points[:, 0], points[:, 1], 1 - points[:, 1])
-    )
-    return _INTERIOR_TOLERANCE + (_EDGE_TOLERANCE - _INTERIOR_TOLERANCE) * np.exp(
-        -edge_distance / _EDGE_DECAY
-    )
-
-
-def _boundary_score(actual, reference):
-    if not len(actual) or not len(reference):
-        return 100.0 if not len(actual) and not len(reference) else 0.0
-    actual_distance = cKDTree(reference).query(actual)[0]
-    reference_distance = cKDTree(actual).query(reference)[0]
-    precision = np.mean(actual_distance <= _edge_tolerance(actual))
-    recall = np.mean(reference_distance <= _edge_tolerance(reference))
-    return float(200 * precision * recall / (precision + recall)) if precision + recall else 0.0
-
-
-def voronoi_boundary_segments(candidates, model, size, pixel_median, shift):
-    """Return subdivided shared Voronoi boundaries and the local acceptance tolerance."""
-    cells = regions("voronoi", candidates, model, size, pixel_median, shift)
+def _shared_boundary_segments(cells):
     edges = {}
     for cell in cells:
         for polygon in cell["polygons"]:
@@ -126,25 +77,164 @@ def voronoi_boundary_segments(candidates, model, size, pixel_median, shift):
                         edge["count"] += 1
                     else:
                         edges[key] = {"start": start, "end": end, "count": 1}
+    return [(edge["start"], edge["end"]) for edge in edges.values() if edge["count"] == 2]
 
+
+def _clip_segments(segments, hull):
+    """Clip segments to a counter-clockwise convex polygon."""
+    clipped = []
+    for start, end in segments:
+        direction = end - start
+        lower, upper = 0.0, 1.0
+        for edge_start, edge_end in zip(hull, np.roll(hull, -1, axis=0)):
+            edge = edge_end - edge_start
+            offset = edge[0] * (start[1] - edge_start[1]) - edge[1] * (start[0] - edge_start[0])
+            slope = edge[0] * direction[1] - edge[1] * direction[0]
+            if abs(slope) < 1e-15:
+                if offset < 0:
+                    break
+                continue
+            crossing = -offset / slope
+            if slope > 0:
+                lower = max(lower, crossing)
+            else:
+                upper = min(upper, crossing)
+            if lower >= upper:
+                break
+        else:
+            clipped_start = start + lower * direction
+            clipped_end = start + upper * direction
+            if np.linalg.norm(clipped_end - clipped_start) > 1e-12:
+                clipped.append((clipped_start, clipped_end))
+    return clipped
+
+
+def _sample_segments(segments, spacing=0.005):
+    """Sample a collection uniformly by total arc length."""
+    if not segments:
+        return np.empty((0, 2)), np.empty(0)
+    segment_array = np.asarray(segments, dtype=np.float64)
+    lengths = np.linalg.norm(segment_array[:, 1] - segment_array[:, 0], axis=1)
+    keep = lengths > 1e-12
+    segment_array, lengths = segment_array[keep], lengths[keep]
+    if not len(lengths):
+        return np.empty((0, 2)), np.empty(0)
+    total_length = lengths.sum()
+    if total_length <= 0:
+        return np.empty((0, 2)), np.empty(0)
+    count = max(1, int(np.ceil(total_length / spacing)))
+    distances = (np.arange(count) + 0.5) * total_length / count
+    cumulative = np.cumsum(lengths)
+    indices = np.searchsorted(cumulative, distances, side="right")
+    starts = np.concatenate([[0.0], cumulative[:-1]])[indices]
+    fractions = (distances - starts) / lengths[indices]
+    points = segment_array[indices, 0] + fractions[:, None] * (
+        segment_array[indices, 1] - segment_array[indices, 0]
+    )
+    return points, np.full(count, total_length / count)
+
+
+def _sample_boundaries(cells, hull=None):
+    segments = _shared_boundary_segments(cells)
+    if hull is not None:
+        segments = _clip_segments(segments, hull)
+    return _sample_segments(segments)
+
+
+def _centrality(points):
+    radius_squared = ((points - 0.5) ** 2).sum(axis=-1)
+    return np.exp(-4 * radius_squared)
+
+
+def _point_to_segments(points, segments):
+    """Exact nearest Euclidean distance to continuous line segments (clamped projection)."""
+    segments = np.asarray(segments, dtype=np.float64)
+    if not len(points) or not len(segments):
+        return np.full(len(points), np.inf)
+    starts, directions = segments[:, 0], segments[:, 1] - segments[:, 0]
+    squared_lengths = np.sum(directions * directions, axis=1)
+    keep = squared_lengths > 1e-24
+    starts, directions, squared_lengths = starts[keep], directions[keep], squared_lengths[keep]
+    if not len(squared_lengths):
+        return np.full(len(points), np.inf)
+    result = np.empty(len(points))
+    for index, point in enumerate(points):
+        fractions = np.clip(
+            np.sum((point - starts) * directions, axis=1) / squared_lengths, 0, 1
+        )
+        projections = starts + fractions[:, None] * directions
+        result[index] = np.sqrt(np.min(np.sum((point - projections) ** 2, axis=1)))
+    return result
+
+
+def _symmetric_boundary_distances(actual_segments, reference_segments, actual, actual_lengths,
+                                  reference, reference_lengths, central_weight):
+    actual_to_reference = _point_to_segments(actual, reference_segments)
+    reference_to_actual = _point_to_segments(reference, actual_segments)
+    if not np.isfinite(actual_to_reference).all() or not np.isfinite(reference_to_actual).all():
+        return None
+
+    actual_weights = actual_lengths * central_weight(actual)
+    reference_weights = reference_lengths * central_weight(reference)
+    actual_weights /= actual_weights.sum()
+    reference_weights /= reference_weights.sum()
+    distances = np.concatenate([actual_to_reference, reference_to_actual])
+    weights = np.concatenate([actual_weights / 2, reference_weights / 2])
+    return float(np.average(distances, weights=weights))
+
+
+def boundary_distance_metrics(actual_cells, reference_cells, candidates):
+    """Symmetric boundary distances for all boundaries and within the candidate hull."""
+    actual_segments = _shared_boundary_segments(actual_cells)
+    reference_segments = _shared_boundary_segments(reference_cells)
+    actual, actual_lengths = _sample_boundaries(actual_cells)
+    reference, reference_lengths = _sample_boundaries(reference_cells)
+    if not len(actual) or not len(reference):
+        return {
+            "boundary_mean": None,
+            "boundary_hull_mean": None,
+        }
+
+    all_boundaries = _symmetric_boundary_distances(
+        actual_segments, reference_segments, actual, actual_lengths, reference, reference_lengths,
+        _centrality,
+    )
+    hull = _convex_hull(candidates)
+    if hull is None:
+        hull_boundaries = None
+    else:
+        actual_inside_segments = _clip_segments(actual_segments, hull)
+        reference_inside_segments = _clip_segments(reference_segments, hull)
+        actual_inside, actual_inside_lengths = _sample_segments(actual_inside_segments)
+        reference_inside, reference_inside_lengths = _sample_segments(reference_inside_segments)
+        hull_boundaries = _symmetric_boundary_distances(
+            actual_inside_segments, reference_inside_segments,
+            actual_inside, actual_inside_lengths, reference_inside, reference_inside_lengths,
+            lambda points: np.ones(len(points)),
+        ) if len(actual_inside) and len(reference_inside) else None
+
+    return {
+        "boundary_mean": all_boundaries,
+        "boundary_hull_mean": hull_boundaries,
+    }
+
+
+def voronoi_boundary_segments(cells):
+    """Return shared Voronoi boundary segments, without the outer square perimeter."""
     segments = []
-    for edge in edges.values():
-        if edge["count"] != 2:
-            continue
-        start, end = edge["start"], edge["end"]
+    for start, end in _shared_boundary_segments(cells):
         length = np.linalg.norm(end - start)
-        parts = max(1, int(np.ceil(length / 0.005)))
-        points = start + np.linspace(0, 1, parts + 1)[:, None] * (end - start)
-        tolerances = _edge_tolerance((points[:-1] + points[1:]) / 2)
+        count = max(1, int(np.ceil(length / 0.005)))
+        points = start + np.linspace(0, 1, count + 1)[:, None] * (end - start)
         segments.extend([
-            [*first.tolist(), *last.tolist(), float(tolerance)]
-            for first, last, tolerance in zip(points[:-1], points[1:], tolerances)
+            [*first.tolist(), *last.tolist()]
+            for first, last in zip(points[:-1], points[1:])
         ])
     return segments
 
 
-def voronoi_agreement(candidates, points, winner, margin):
-    """Compute whole-square regret, convex-hull regret, and tolerant boundary F1 (0–100)."""
+def voronoi_agreement(candidates, points, winner, actual_cells, reference_cells):
+    """Compute whole-square regret, convex-hull regret, and weighted boundary distances."""
     candidates = np.asarray(candidates, dtype=np.float64)
     pairwise = np.linalg.norm(candidates[:, None] - candidates[None, :], axis=-1)
     pairwise[pairwise == 0] = np.nan
@@ -152,7 +242,6 @@ def voronoi_agreement(candidates, points, winner, margin):
     if not np.isfinite(scale) or scale <= 0:
         scale = 1.0
 
-    voronoi_winner, voronoi_margin = nearest(candidates, points)
     area_weights = _area_weights(points)
     inside_score = None
     hull = _convex_hull(candidates)
@@ -165,8 +254,5 @@ def voronoi_agreement(candidates, points, winner, margin):
     return {
         "assignment": _assignment_score(candidates, points, winner, full, scale, area_weights),
         "inside_hull": inside_score,
-        "boundaries": _boundary_score(
-            _boundary_points(winner, margin, points),
-            _boundary_points(voronoi_winner, voronoi_margin, points),
-        ),
+        **boundary_distance_metrics(actual_cells, reference_cells, candidates),
     }

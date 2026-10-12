@@ -384,16 +384,19 @@ def diagram_regions(request: DiagramRequest):
     shares = {name: getattr(request, name) for name in STRATEGIES}
     if method != "voronoi" and any(shares.values()):
         method = strategic(MARGINS[method] if isinstance(method, str) else method, shares)
-    shapes, points, winner, margin = diagram(
+    shapes, points, winner, _ = diagram(
         method, request.candidates, model, request.grid, request.pixel_median, request.shift
+    )
+    reference_shapes = regions(
+        "voronoi", request.candidates, model, request.grid, request.pixel_median, request.shift
     )
     payload = {
         "regions": shapes,
-        "metrics": voronoi_agreement(request.candidates, points, winner, margin),
+        "metrics": voronoi_agreement(
+            request.candidates, points, winner, shapes, reference_shapes
+        ),
         "overlays": {
-            "voronoi_boundaries": voronoi_boundary_segments(
-                request.candidates, model, request.grid, request.pixel_median, request.shift
-            ),
+            "voronoi_boundaries": voronoi_boundary_segments(reference_shapes),
         },
         "ms": round(1000 * (time.perf_counter() - start), 1),
     }
