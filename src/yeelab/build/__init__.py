@@ -1,7 +1,7 @@
 """Voting methods built from small blocks, like in Scratch but with Python constructors:
 
     from yeelab.build import (AntiPlurality, BordaCount, Bullet, Burial, Compromise, DescendingCoalitions,
-                              Eliminate, Fallback,
+                              Conditional, Eliminate,
                               Highest, Margins, Mix, Pairwise, Plurality, Schedules, Score,
                               ScoreAvg, ScoreCluster, ScoreComparisons, ScoreDH, ScoreHybrid,
                               StrongestPaths, Tally, Unbeaten, Weakest)
@@ -18,7 +18,7 @@
     schulze = Unbeaten(StrongestPaths(M))
     condorcet = Unbeaten(M)
     minimax = Highest(Weakest(M))
-    black   = Fallback(condorcet, borda)
+    black   = Conditional(condorcet, when_true=condorcet, when_false=borda)
     koth    = Unbeaten(M, against=fptp, order=Tally(Plurality()))  # king of the hill
     # the two finalists head to head; a tie is a draw (no one, voting.CYCLE)
     two_round = Unbeaten(M, among=Highest(Tally(Plurality()), n=2))
@@ -62,7 +62,7 @@ from yeelab.build.blocks import (
     CandidateTotals,
     DescendingCoalitions,
     Eliminate,
-    Fallback,
+    Conditional,
     Highest,
     Margins,
     Mix,
@@ -91,7 +91,7 @@ from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Ballots, Scored, Score
 __all__ = [
     "AntiPlurality", "Ballot", "Ballots", "BordaCount", "Bullet", "Burial", "CandidateTotals", "Compromise",
     "DescendingCoalitions",
-    "Eliminate", "Fallback", "Highest", "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise",
+    "Conditional", "Eliminate", "Highest", "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise",
     "Plurality", "Schedules", "Score", "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH",
     "ScoreHybrid", "StrongestPaths", "Tally", "Unbeaten", "Union", "Weakest", "Winner", "METHODS",
     "FIRST", "PAIRWISE", "PROFILE", "Scored", "ScoredPairwise", "Share", "Voters",

@@ -22,7 +22,7 @@ Every block has one type of output:
                      DescendingCoalitions(),
                      Unbeaten(diffs, among=...),
                      Unbeaten(diffs, against=winner, order=totals),
-                     Fallback(first, second), first | second
+                     Conditional(condition, when_true, when_false), first | second
 
 A ranked ballot gives weight(k, C) points to the candidate at position k (0 = closest)
 of C; both count only the remaining candidates, and a higher total is better. A score
@@ -101,7 +101,7 @@ Blocks are frozen dataclasses, so equal blocks are equal methods and hash alike,
 repr(block) is the expression that builds it: eval(repr(block)) == block.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Literal
 
 import numpy as np
@@ -765,6 +765,117 @@ class Winner(Block):
     def __or__(self, other):
         return Union(self, other)
 
+    def __eq__(self, other):
+        if isinstance(other, Winner):
+            return WinnerComparison(self, other, equal=True)
+        return NotImplemented
+
+    def __ne__(self, other):
+        if isinstance(other, Winner):
+            return WinnerComparison(self, other, equal=False)
+        return NotImplemented
+
+    def __hash__(self):
+        return hash((type(self), *(getattr(self, item.name) for item in fields(self))))
+
+    def same_as(self, other: object) -> bool:
+        """Whether `other` is the same method definition (not a voting condition)."""
+        return _same_value(self, other)
+
+
+def _same_value(first, second) -> bool:
+    """Structural equality that does not turn Winner comparisons into conditions."""
+    if first is second:
+        return True
+    if type(first) is not type(second):
+        return False
+    if is_dataclass(first) and not isinstance(first, type):
+        return all(_same_value(getattr(first, item.name), getattr(second, item.name)) for item in fields(first))
+    if isinstance(first, tuple):
+        return len(first) == len(second) and all(_same_value(a, b) for a, b in zip(first, second))
+    if isinstance(first, (set, frozenset)):
+        return first == second
+    if isinstance(first, dict):
+        return first.keys() == second.keys() and all(_same_value(first[key], second[key]) for key in first)
+    return first == second
+
+
+class Condition(Block):
+    """A deferred boolean expression composed from voting-method results."""
+
+    def evaluate(self, voters: Voters) -> tuple[np.ndarray, np.ndarray]:
+        raise NotImplementedError
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        raise NotImplementedError
+
+    def __and__(self, other):
+        if not isinstance(other, Condition):
+            return NotImplemented
+        return CombinedCondition(self, other, "and")
+
+    def __or__(self, other):
+        if not isinstance(other, Condition):
+            return NotImplemented
+        return CombinedCondition(self, other, "or")
+
+
+@dataclass(frozen=True)
+class WinnerComparison(Condition):
+    first: Winner
+    second: Winner
+    equal: bool
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return self.first.needs | self.second.needs
+
+    def evaluate(self, voters: Voters) -> tuple[np.ndarray, np.ndarray]:
+        first, first_margin = self.first.select(voters)
+        second, second_margin = self.second.select(voters)
+        condition = (first == second).all(axis=-1)
+        if not self.equal:
+            condition = ~condition
+        return condition, np.minimum(first_margin, second_margin)
+
+    def __bool__(self):
+        # Keep ordinary structural equality checks useful; use the expression only as
+        # Conditional's argument to evaluate it against voters.
+        same = self.first.same_as(self.second)
+        return same if self.equal else not same
+
+    def __repr__(self):
+        operator = "==" if self.equal else "!="
+        return f"({self.first!r} {operator} {self.second!r})"
+
+
+@dataclass(frozen=True)
+class CombinedCondition(Condition):
+    first: Condition
+    second: Condition
+    operator: Literal["and", "or"]
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return self.first.needs | self.second.needs
+
+    def evaluate(self, voters: Voters) -> tuple[np.ndarray, np.ndarray]:
+        first, first_margin = self.first.evaluate(voters)
+        second, second_margin = self.second.evaluate(voters)
+        if self.operator == "and":
+            condition = first & second
+        else:
+            condition = first | second
+        return condition, np.minimum(first_margin, second_margin)
+
+    def __bool__(self):
+        raise TypeError("A combined voting condition must be evaluated by Conditional")
+
+    def __repr__(self):
+        operator = "&" if self.operator == "and" else "|"
+        return f"({self.first!r} {operator} {self.second!r})"
+
 
 def _highest(totals: np.ndarray, n: int) -> Result:
     """(chosen (..., C), margin) of the n highest totals (ties: the lowest index): the
@@ -781,7 +892,7 @@ def _highest(totals: np.ndarray, n: int) -> Result:
     return chosen, last - rest.max(axis=-1)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Eliminate(Winner):
     """Drops candidates round by round until `until` are left, by default one, the winner:
 
@@ -938,7 +1049,7 @@ class Highest(Eliminate):
         return f"Highest({self.totals!r}{n}{among})"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Schedules(Winner):
     """The winners of every elimination schedule: each round drops some number of the
     lowest totals of the remaining candidates, tallied again among them, in every way to
@@ -991,7 +1102,7 @@ class Schedules(Winner):
         return f"Schedules({self.totals!r})"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class DescendingCoalitions(Winner):
     """Descending acquiescing coalitions (DAC, Woodall). A voter acquiesces to a set of
     candidates if they rank no candidate outside it above one in it, and every set scores
@@ -1018,7 +1129,7 @@ class DescendingCoalitions(Winner):
         return descending_coalitions(voters.rankings, voters.probs, voters.bullet)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Unbeaten(Winner):
     """The candidate no one beats, or the one beaten the least. beaten[e] = max_{f != e}
     s[f, e] is the strongest diff into e: negative if e beats everyone, positive if
@@ -1108,51 +1219,57 @@ class Unbeaten(Winner):
         return f"Unbeaten({', '.join(args)})"
 
 
-@dataclass(frozen=True)
-class Fallback(Winner):
-    """The candidates `first` chooses, or where it chooses no one (a voting.CYCLE, a
-    draw), those of `second`. The margin is first's where it chooses someone, and the
-    smaller of the two where not: the choice changes where either one would."""
+@dataclass(frozen=True, eq=False)
+class Conditional(Winner):
+    """Choose `when_true` or `when_false` according to `condition`.
 
-    first: Winner
-    second: Winner
+    A Winner used as the condition is true wherever it elects a candidate. A Condition
+    compares methods' results and combines those comparisons with `&` and `|`. The result
+    margin is the smallest of the condition and chosen branch gaps.
+    """
+
+    condition: Winner | Condition
+    when_true: Winner
+    when_false: Winner
 
     def __post_init__(self):
-        _expect(self, self.first, Winner, "a Winner")
-        _expect(self, self.second, Winner, "a Winner")
+        if not isinstance(self.condition, (Winner, Condition)):
+            raise TypeError(f"Conditional expects a Winner or Condition, got "
+                            f"{type(self.condition).__name__} {self.condition!r}")
+        _expect(self, self.when_true, Winner, "a Winner as when_true")
+        _expect(self, self.when_false, Winner, "a Winner as when_false")
 
     @property
     def seats(self) -> int | None:
-        return self.first.seats if self.first.seats == self.second.seats else None
+        return self.when_true.seats if self.when_true.seats == self.when_false.seats else None
 
     @property
     def needs(self) -> frozenset[Share]:
-        return self.first.needs | self.second.needs
+        condition_needs = self.condition.needs if isinstance(self.condition, Winner) else frozenset()
+        return condition_needs | self.when_true.needs | self.when_false.needs
 
-    def evaluate(self, voters: Voters) -> Result:
-        self._one_seat()
-        winner, margin = self.first.evaluate(voters)
-        cycle = winner == CYCLE
-        if cycle.any():
-            other, gap = self.second.evaluate(voters)
-            winner = np.where(cycle, other, winner)
-            margin = np.where(cycle, np.minimum(margin, gap), margin)
-        return winner, margin
+    def _condition(self, voters: Voters) -> tuple[np.ndarray, np.ndarray]:
+        if isinstance(self.condition, Winner):
+            winner, margin = self.condition.evaluate(voters)
+            condition = winner != CYCLE
+        else:
+            condition, margin = self.condition.evaluate(voters)
+        return condition, margin
 
     def select(self, voters: Voters) -> Result:
-        chosen, margin = self.first.select(voters)
-        empty = ~chosen.any(axis=-1)
-        if empty.any():
-            other, gap = self.second.select(voters)
-            chosen = np.where(empty[..., None], other, chosen)
-            margin = np.where(empty, np.minimum(margin, gap), margin)
-        return chosen, margin
+        condition, condition_margin = self._condition(voters)
+        yes, yes_margin = self.when_true.select(voters)
+        no, no_margin = self.when_false.select(voters)
+        chosen = np.where(condition[..., None], yes, no)
+        margin = np.where(condition, yes_margin, no_margin)
+        return chosen, np.minimum(condition_margin, margin)
 
     def __repr__(self):
-        return f"Fallback({self.first!r}, {self.second!r})"
+        return (f"Conditional({self.condition!r}, when_true={self.when_true!r}, "
+                f"when_false={self.when_false!r})")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Union(Winner):
     """first | second: the candidates either one chooses, e.g. the winners of two methods
     as the finalists of a runoff, Unbeaten(diffs, among=koth | irv). The margin is the

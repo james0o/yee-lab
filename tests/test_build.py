@@ -2,7 +2,7 @@
 
 A ballot's fast tally must be the same sum over the profile for any remaining
 candidates. Highest chooses the n highest totals and is Eliminate(totals, how="all"); a
-block that chooses several candidates is no method, and first | second and Fallback
+block that chooses several candidates is no method, and first | second and Conditional
 choose sets. The score ballots tally the parts of the top score not given, which
 test_score.py checks; here the highest mean score must win (with two levels: the most
 approved candidate), with its lead as the margin, also between candidates nearly all
@@ -16,7 +16,7 @@ voters in test_strategic.py.
 """
 
 import re
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from itertools import product
 
 import numpy as np
@@ -29,9 +29,9 @@ from yeelab.build import (
     PROFILE,
     AntiPlurality,
     BordaCount,
+    Conditional,
     DescendingCoalitions,
     Eliminate,
-    Fallback,
     Highest,
     Margins,
     Mix,
@@ -111,9 +111,10 @@ def test_highest_chooses_the_n_highest_totals():
 
 def test_a_method_chooses_one_candidate():
     """Blocks that choose several candidates only select(); evaluate() is for a winner.
-    A Fallback of two such blocks chooses as many, a Union a number that varies."""
+    A Conditional of two such blocks chooses as many, a Union a number that varies."""
     two, irv = Highest(Tally(Plurality()), n=2), METHODS["irv"]
-    assert [block.seats for block in (two, irv, two | irv, Fallback(two, two), Fallback(irv, two))] \
+    assert [block.seats for block in (two, irv, two | irv, Conditional(two, two, two),
+                                      Conditional(irv, two, irv))] \
         == [2, 1, None, 2, None]
     assert all(method.seats == 1 for method in METHODS.values())
     assert Schedules(Tally(Plurality())).seats is None
@@ -124,9 +125,9 @@ def test_a_method_chooses_one_candidate():
             block.evaluate(Voters(first=np.full((2, 4), 0.25)))
 
 
-def test_union_and_fallback_choose_sets(profile):
-    """first | second is either one's candidates, with the smaller margin; a Fallback of
-    sets takes second's where first chooses no one."""
+def test_union_and_conditional_choose_sets(profile):
+    """first | second is either one's candidates; Conditional chooses its true or false
+    branch according to whether the condition elects anyone."""
     voters = voters_of(*profile)
     fptp, irv, condorcet, two = METHODS["fptp"], METHODS["irv"], METHODS["condorcet"], Highest(Tally(BordaCount()), n=2)
     chosen, margin = (fptp | irv).select(voters)
@@ -135,13 +136,53 @@ def test_union_and_fallback_choose_sets(profile):
     np.testing.assert_array_equal(margin, np.minimum(margin_a, margin_b))
     assert (chosen.sum(axis=-1) == 2).any() and (chosen.sum(axis=-1) == 1).any()  # not vacuous
 
-    chosen, margin = Fallback(condorcet, two).select(voters)
+    chosen, margin = Conditional(condorcet, condorcet, two).select(voters)
     winner, margin_c = condorcet.evaluate(voters)
     cycle = winner == CYCLE
     finalists, margin_two = two.select(voters)
     np.testing.assert_array_equal(chosen[cycle], finalists[cycle])
     np.testing.assert_array_equal(chosen[~cycle].argmax(axis=-1), winner[~cycle])
     np.testing.assert_array_equal(margin, np.where(cycle, np.minimum(margin_c, margin_two), margin_c))
+
+    conditional = Conditional(condorcet, condorcet, two)
+    chosen, margin = conditional.select(voters)
+    expected = np.where(cycle[..., None], finalists, winner[..., None] == np.arange(finalists.shape[-1]))
+    np.testing.assert_array_equal(chosen, expected)
+    np.testing.assert_array_equal(margin, np.where(cycle, np.minimum(margin_c, margin_two), margin_c))
+
+
+def test_star_two_round_uses_conditional_finalists(profile):
+    voters = voters_of(*profile)
+    scored = Scored(6, power=1.5)
+    voters = replace(voters, unscored={scored: np.zeros_like(voters.first)})
+    fptp_winner, fptp_margin = METHODS["fptp"].evaluate(voters)
+    two_winner, two_margin = METHODS["two_round"].evaluate(voters)
+    condorcet_winner, condorcet_margin = METHODS["condorcet"].evaluate(voters)
+    expected_condition = ((fptp_winner == two_winner) & (two_winner != condorcet_winner))
+    expected_gap = np.minimum(np.minimum(fptp_margin, two_margin), condorcet_margin)
+    finalists = METHODS["star_two_round"].among
+    assert isinstance(finalists, Conditional)
+    condition, gap = finalists._condition(voters)
+    np.testing.assert_array_equal(condition, expected_condition)
+    np.testing.assert_array_equal(gap, expected_gap)
+
+    score_chosen, score_margin = METHODS["score"].select(voters)
+    condorcet_chosen, condorcet_margin = METHODS["condorcet"].select(voters)
+    two_chosen, two_margin = METHODS["two_round"].select(voters)
+    expected_chosen = np.where(
+        condition[..., None], score_chosen | condorcet_chosen, score_chosen | two_chosen)
+    expected_margin = np.minimum(
+        gap,
+        np.where(condition, np.minimum(score_margin, condorcet_margin),
+                 np.minimum(score_margin, two_margin)))
+    chosen, margin = finalists.select(voters)
+    np.testing.assert_array_equal(chosen, expected_chosen)
+    np.testing.assert_array_equal(margin, expected_margin)
+
+
+def test_conditional_method_repr_is_rebuildable():
+    assert eval(repr(METHODS["black"])) == METHODS["black"]
+    assert eval(repr(METHODS["star_two_round"])) == METHODS["star_two_round"]
 
 
 # the shares of the score ballots below: two and six levels, by every rule
@@ -382,7 +423,7 @@ def test_methods_are_the_fifteen_expressions_they_print_as():
         "schulze": Unbeaten(StrongestPaths(margins)),
         "condorcet": Unbeaten(margins),
         "minimax": Highest(Weakest(margins)),
-        "black": Fallback(Unbeaten(margins), Highest(Tally(BordaCount()))),
+        "black": Conditional(Unbeaten(margins), Unbeaten(margins), Highest(Tally(BordaCount()))),
         "koth": koth,
         "score": Highest(Tally(Score(6, power=1.5))),
         "star": Unbeaten(ScoreComparisons(Score(6, power=1.5)), among=Highest(Tally(Score(6, power=1.5)), n=2)),
@@ -398,13 +439,15 @@ def test_methods_are_the_fifteen_expressions_they_print_as():
     assert repr(fptp | (irv | borda)) == f"{fptp!r} | ({irv!r} | {borda!r})"
     blocks = [*expected.values(), *BALLOTS, *PAIR_BLOCKS, fptp | irv | borda, fptp | (irv | borda),
               Unbeaten(StrongestPaths(margins), against=METHODS["black"], order=Weakest(margins)),
-              Unbeaten(margins, among=fptp | borda), Fallback(Highest(Tally(BY_MEAN), n=3), fptp | irv),
+              Unbeaten(margins, among=fptp | borda),
+              Conditional(Highest(Tally(BY_MEAN), n=3), fptp, irv),
               Eliminate(Tally(BordaCount()), how="min", until=2), Highest(Tally(Plurality()), n=2),
               Schedules(Tally(BordaCount())), Highest(Weakest(margins), among=fptp | irv),
               Eliminate(Tally(Plurality()), how="all", among=Schedules(Tally(Plurality()))),
               Mix(BY_GAP, BY_MEAN, share=0.25)]
     for block in blocks:
         assert eval(repr(block)) == block
+    assert eval(repr(METHODS["star_two_round"])) == METHODS["star_two_round"]
 
 
 def test_blocks_are_frozen_and_hashable():
@@ -421,7 +464,7 @@ def test_blocks_are_frozen_and_hashable():
 
 def test_needs():
     """The shares each block reads: a Tally counted again among finalists the profile,
-    other totals as they are; a runoff, Fallback, Union and a king those of all their
+    other totals as they are; a runoff, Conditional, Union and a king those of all their
     parts."""
     margins = Margins(Pairwise())
     assert METHODS["fptp"].needs == Highest(Tally(Plurality()), n=2).needs == {FIRST}  # no profile
@@ -450,9 +493,10 @@ def test_needs():
     assert Schedules(Tally(BordaCount())).needs == {PAIRWISE}
     assert Highest(Tally(Plurality()), among=Highest(Tally(Plurality()), n=2)).needs == {FIRST, PROFILE}
     assert Highest(Weakest(margins), among=METHODS["fptp"]).needs == {PAIRWISE, FIRST}
-    assert Fallback(METHODS["fptp"], METHODS["schulze"]).needs == {FIRST, PAIRWISE}
-    assert Fallback(METHODS["irv"], METHODS["fptp"]).needs == {PROFILE, FIRST}
-    assert Fallback(METHODS["condorcet"], Highest(Tally(BY_MEAN))).needs == {PAIRWISE, Scored(2, "avg")}
+    assert Conditional(METHODS["fptp"], METHODS["fptp"], METHODS["schulze"]).needs == {FIRST, PAIRWISE}
+    assert Conditional(METHODS["irv"], METHODS["irv"], METHODS["fptp"]).needs == {PROFILE, FIRST}
+    assert Conditional(METHODS["condorcet"], METHODS["condorcet"], Highest(Tally(BY_MEAN))).needs \
+        == {PAIRWISE, Scored(2, "avg")}
     assert Unbeaten(margins, against=METHODS["irv"], order=Tally(Plurality())).needs == {PAIRWISE, PROFILE, FIRST}
     assert Unbeaten(margins, against=METHODS["borda"], order=Weakest(margins)).needs == {PAIRWISE}
 
@@ -498,8 +542,8 @@ MARGINS = Margins(Pairwise())
      "Unbeaten expects CandidateTotals as order, got a Ballot: Plurality()"),
     (lambda: Unbeaten(MARGINS, among=Tally(Plurality())), TypeError,
      "Unbeaten expects a Winner as among, got CandidateTotals: Tally(Plurality())"),
-    (lambda: Fallback(BordaCount(), METHODS["borda"]), TypeError,
-     "Fallback expects a Winner, got a Ballot: BordaCount()"),
+    (lambda: Conditional(BordaCount(), METHODS["borda"], METHODS["borda"]), TypeError,
+     "Conditional expects a Winner or Condition, got BordaCount BordaCount()"),
     (lambda: METHODS["fptp"] | Tally(Plurality()), TypeError,
      "Union expects a Winner, got CandidateTotals: Tally(Plurality())"),
     (lambda: Highest(Tally(Plurality()), among=Tally(Plurality())), TypeError,

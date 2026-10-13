@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from matplotlib.path import Path as MplPath
 
-from yeelab.build import (AntiPlurality, Highest, Mix, Plurality, Schedules, Score, ScoreAvg, ScoreCluster,
+from yeelab.build import (AntiPlurality, Conditional, Highest, Mix, Plurality, Schedules, Score, ScoreAvg, ScoreCluster,
                           ScoreComparisons, ScoreDH, ScoreHybrid, Tally, Unbeaten)
 from yeelab.margin.metrics import voronoi_agreement
 from yeelab.margin.regions import MARGINS, grid, nearest, regions, winners
@@ -304,9 +304,15 @@ def test_score_sliders_apply_to_nested_score_ballots():
     assert response.status_code == 200
 
     ballot = Score(2, power=2)
+
     expected = Unbeaten(
         ScoreComparisons(ballot),
-        among=Highest(Tally(ballot)) | MARGINS["two_round"],
+        among=Conditional(
+            (MARGINS["fptp"] == MARGINS["two_round"])
+            & (MARGINS["two_round"] != MARGINS["condorcet"]),
+            when_true=Highest(Tally(ballot)) | MARGINS["condorcet"],
+            when_false=Highest(Tally(ballot)) | MARGINS["two_round"],
+        ),
     )
     assert response.json()["regions"] == json.loads(
         json.dumps(regions(expected, CANDIDATES.tolist(), MODELS[0], 64))

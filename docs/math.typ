@@ -805,7 +805,7 @@ two lowest or a score at the mean, and there the gap of that round is $0$.
 
 These two are only in the web UI as well, built from blocks as
 `Highest(Weakest(Margins(Pairwise())))` and
-`Fallback(Unbeaten(Margins(Pairwise())), Highest(Tally(BordaCount())))`. Both compare
+`Conditional(Unbeaten(Margins(Pairwise())), when_true=Unbeaten(Margins(Pairwise())), when_false=Highest(Tally(BordaCount())))`. Both compare
 candidates by the margins of their head-to-head results,
 
 $ ell_(i j) = pi_(i j) - pi_(j i) = 2 pi_(i j) - 1 = -ell_(j i), $ <eq-link>
@@ -2813,7 +2813,7 @@ by hand: every block that decides computes the gap of its decision, and the marg
 smallest of them. `Highest` has the lead of the top score (with `among`, among the
 candidates chosen, and their margin), `Eliminate` the gap of each round, `Schedules`
 that of every round of every schedule, `DescendingCoalitions` that of every round,
-`Unbeaten` the gaps below and `Fallback` those of the method that decides. Baldwin and
+`Unbeaten` the gaps below and `Conditional` those of the condition and selected method. Baldwin and
 Nanson are in @sec-baldwin-nanson, Minimax and Black in @sec-minimax-black, DAC in
 @sec-dac, the score methods in @sec-score and IRV set + KOTH + Score in @sec-irv-set.
 
@@ -2869,11 +2869,17 @@ margins themselves stand in: the margin is positive, at most the margin on the p
 (as $p_(w e) >= ell_(w e)$), and $0$ on the border of the Condorcet region, so it
 vanishes on the same borders.
 
-*Fallback.* `Fallback(first, second)` elects the winner of `first`, and where `first`
-elects no one (`CYCLE`), the winner of `second`; Black is the Condorcet winner with Borda
-as the second. The winner changes where the decision of the method in charge flips, so
-outside the cycles the margin is that of `first`, and inside a cycle the smaller of the
-two:
+*Conditional.* `Conditional(condition, when_true, when_false)` chooses `when_true` where
+the condition is true, and `when_false` elsewhere. Method-result comparisons such as
+`fptp == two_round` and `two_round != condorcet` create deferred Boolean conditions;
+combine them with `&` or `|`. Their input shares are collected from the methods in the
+expression. A Winner block used directly as the condition is true where it elects a
+candidate; Black uses the Condorcet method this way, with Borda as `when_false`. The
+result margin includes the smallest method margin in the condition and the selected
+method's gap. For Black, the margin is the Condorcet margin outside cycles and the
+smaller of the Condorcet and Borda margins inside them. Use `.same_as(other)` when a
+regular Python Boolean comparison of method definitions is needed; the `==` and `!=`
+operators build deferred conditions for use by `Conditional`:
 
 $ mu = cases(mu_"first" & "where" "first" "elects someone", min(mu_"first", mu_"second") & "in a cycle of" "first") . $
 

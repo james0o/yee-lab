@@ -5,8 +5,8 @@ from yeelab.build.blocks import (
     AntiPlurality,
     BordaCount,
     DescendingCoalitions,
+    Conditional,
     Eliminate,
-    Fallback,
     Highest,
     Margins,
     Pairwise,
@@ -35,7 +35,7 @@ two_round = Unbeaten(M, among=Highest(Tally(Plurality()), n=2))
 schulze = Unbeaten(StrongestPaths(M))                # no one beats them along the strongest paths
 condorcet = Unbeaten(M)                              # the Condorcet winner; CYCLE where there is none
 minimax = Highest(Weakest(M))                        # the smallest worst defeat
-black = Fallback(condorcet, borda)                   # the Condorcet winner, else Borda
+black = Conditional(condorcet, condorcet, borda)     # the Condorcet winner, else Borda
 # king of the hill: the fptp winner, or the most first choices among those who beat it
 koth = Unbeaten(M, against=fptp, order=Tally(Plurality()))
 
@@ -45,14 +45,22 @@ SCORE_POWER = 1.5  # the web UI's default; the one power that fits real ballots 
 score_ballot = Score(6, power=SCORE_POWER)
 score = Highest(Tally(score_ballot))
 # STAR: the two highest mean scores, head to head on the scores of each ballot (equal
-# scores abstain); a tie is a draw
+# scores abstain by default); a tie is a draw
 star = Unbeaten(ScoreComparisons(score_ballot), among=Highest(Tally(score_ballot), n=2))
 # the highest mean score among the winners of every elimination schedule (the fewest
 # first choices out, any number at a time: IRV, FPTP, the top two and all between) and
 # the king of the hill
-irv_set_koth_score = Highest(Tally(score_ballot), among=Schedules(Tally(Plurality())) | koth)
+#irv_set_koth_score = Highest(Tally(score_ballot), among=Schedules(Tally(Plurality())) | koth)
 star_two_round = Unbeaten(ScoreComparisons(score_ballot), among= score | two_round)
 score_two_runoff = Unbeaten(M, among=score | two_round)
+
+
+finalists = Conditional(
+    (fptp == two_round) & (two_round != condorcet),
+    when_true=score | condorcet,
+    when_false=score | two_round,
+)
+sun_two_round = Unbeaten(ScoreComparisons(score_ballot), among = finalists)
 
 top3 = Highest(Tally(Plurality()), n=3)
 top2 = Highest(Tally(AntiPlurality()), n=2, among=top3)
@@ -73,8 +81,8 @@ METHODS: dict[str, Winner] = {
     "koth": koth,
     "score": score,
     "star": star,
-    "irv_set_koth_score": irv_set_koth_score,
     "star_two_round": star_two_round,
     "score_two_runoff": score_two_runoff,
     "system321": system321,
+    "sun_two_round": sun_two_round,
 }
