@@ -58,9 +58,19 @@ class Scored:
 
 @dataclass(frozen=True)
 class ScoredPairwise:
-    """Strict pairwise preferences induced by the scores on one cardinal ballot."""
+    """Pairwise preferences induced by the scores on one cardinal ballot.
+
+    When `tie_weight` is nonzero, the ballot's ordinal preference counts by that share
+    only where the pair has equal scores.
+    """
 
     scored: Scored
+    tie_weight: float = 0.0
+
+    def __post_init__(self):
+        if (isinstance(self.tie_weight, bool) or not isinstance(self.tie_weight, int | float)
+                or not np.isfinite(self.tie_weight) or not 0 <= self.tie_weight <= 1):
+            raise ValueError(f"Score comparison tie weight must be between 0 and 1, got {self.tie_weight!r}")
 
 
 @dataclass(frozen=True)
@@ -113,16 +123,19 @@ class Voters:
                                              "cells")})
 
     def compared(self, key: ScoredPairwise) -> np.ndarray:
-        """The strict score comparisons of `key`, moved by the burying and compromising
-        voters against the frontrunners (strategic.burying, compromising), which they only
-        note: unlike the scores, the comparisons do not add up over the strategies, so
-        they are computed for all of them together from the ballots, once they are
-        known."""
+        """The pairwise preferences of `key`, moved by burying and compromising voters
+        against the frontrunners (strategic.burying, compromising), which they only note:
+        unlike the scores, the comparisons do not add up over the strategies, so they are
+        computed for all of them together from the ballots, once they are known."""
         comparisons = self.scored_pairwise[key]
         if self.frontrunners is None:
             return comparisons
         grid = self.grid(key.scored)
-        moved = grid.moved(*self.frontrunners, self.bury, self.compromise, self.cells.reshape(-1, 2))
+        if key.tie_weight:
+            moved = grid.moved(*self.frontrunners, self.bury, self.compromise, self.cells.reshape(-1, 2),
+                               key.tie_weight)
+        else:
+            moved = grid.moved(*self.frontrunners, self.bury, self.compromise, self.cells.reshape(-1, 2))
         return comparisons + self.kept * moved.reshape(comparisons.shape)
 
     def grid(self, scored: Scored):
@@ -157,4 +170,3 @@ class Voters:
         if self.rankings is not None:
             return self.rankings.shape[1]
         return self._marked.shape[-1]
-

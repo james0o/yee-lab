@@ -457,6 +457,18 @@ def test_needs():
     assert Unbeaten(margins, against=METHODS["borda"], order=Weakest(margins)).needs == {PAIRWISE}
 
 
+def test_score_comparisons_can_weight_ordinal_preferences_on_ties():
+    ballot = Score(6)
+    comparisons = ScoreComparisons(ballot, tie_weight=0.35)
+    assert comparisons.needs == {ScoredPairwise(ballot.scored, tie_weight=0.35)}
+    assert repr(comparisons) == "ScoreComparisons(Score(6), tie_weight=0.35)"
+    assert eval(repr(comparisons)) == comparisons
+    assert ScoreComparisons(ballot).needs == {ScoredPairwise(ballot.scored)}
+    for weight in (-0.1, 1.1, True, float("nan"), "0.5"):
+        with pytest.raises(ValueError, match="Score comparison tie weight"):
+            ScoreComparisons(ballot, tie_weight=weight)
+
+
 MARGINS = Margins(Pairwise())
 
 

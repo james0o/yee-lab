@@ -23,9 +23,9 @@ voting depends on the voter alone. Burial and compromise depend on the frontrunn
 which change from point to point, so the method runs on the points of each pair of
 frontrunners apart, and the poll's margin is a gap too (_Frontrunners). Their score
 shares come from the ballots of the voter grid, for each pair at its points only
-(margin.shares.ScoreGrid). The score comparisons of STAR's runoff do not add up over the
-strategies like the scores, so the strategies only note them, and Voters.compared counts
-all of them together when the method reads them.
+(margin.shares.ScoreGrid). Runoff comparisons do not add up over the strategies like the
+scores, so the strategies only note them, and Voters.compared counts all of them together
+when the method reads them.
 """
 
 from dataclasses import dataclass, field, replace
@@ -53,7 +53,8 @@ def bulleted(voters: Voters, share: float) -> Voters:
                          of each first choice go to bullet
         unscored         (1 - s) u[c] + s (the sum of f over the others): a bullet voter
                          gives c none of the top score unless c is their first
-        scored_pairwise  (1 - s) x[c, e] + s (f[c] - f[e])
+        scored_pairwise  (1 - s) x[c, e] + s (f[c] - f[e]): bullet voters also rank
+                         every candidate below their first choice equal
 
     The pairwise and score shares need `first`; the profile has its own. The bullet
     voters neither bury nor compromise: `kept`, the part of the voters who may, shrinks."""

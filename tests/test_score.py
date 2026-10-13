@@ -50,9 +50,10 @@ from yeelab.margin import shares as shares_module
 from yeelab.margin.shares import (GRID_CELLS, GRID_SUB, Model, ScoreGrid, _grid_lines, _voter_grid, ballots,
                                   buried_shares, first_choice_shares, pairwise_shares, raised_shares, ranking_shares,
                                   score_comparison_shares, unscored_shares)
-from yeelab.score import (AVG, CLUSTER, COMPARISONS, DELTA, DHONDT, GIVEN, HYBRID, KAPPA, MAX_CANDIDATES, MAX_LEVELS,
-                          MU, POWER, RAISED, RANGE, RULES, UNSCORED, ballot_table, comparisons, distances,
-                          from_distances, given, moved_comparisons, raised, scored, tabulate, unscored)
+from yeelab.score import (AVG, BITS, BallotTable, CLUSTER, COMPARISONS, DELTA, DHONDT, GIVEN, HYBRID, KAPPA,
+                          MAX_CANDIDATES, MAX_LEVELS, MU, POWER, RAISED, RANGE, RULES, UNSCORED, ballot_table,
+                          comparisons, distances, from_distances, given, moved_comparisons, raised, scored, tabulate,
+                          unscored)
 
 FIVE = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
 CANDIDATES = {2: np.random.default_rng(5).random((2, 2)), 3: np.random.default_rng(3).random((3, 2)),
@@ -741,6 +742,55 @@ def test_the_ballots_of_the_voter_grid_are_kept():
     lines = _grid_lines(model)
     np.testing.assert_array_equal(ballots(candidates, model, 6).codes,
                                   ballot_table(lines, lines, candidates, 6, GRID_SUB).codes)
+
+
+def test_tie_weight_interpolates_ordinal_preferences_only_on_equal_scores():
+    def encode(values):
+        return sum(value << (BITS * candidate) for candidate, value in enumerate(values))
+
+    def ranked(candidates):
+        return sum(candidate << (BITS * position) for position, candidate in enumerate(candidates))
+
+    table = BallotTable(
+        (1, 1),
+        np.array([0, 2]),
+        np.array([encode((0, 0, 1)), encode((0, 1, 0))]),
+        np.array([ranked((0, 1, 2)), ranked((2, 0, 1))]),
+        np.array([0.25, 0.75]),
+        3,
+        1,
+        True,
+    )
+    strict = tabulate(table, COMPARISONS)[..., 0, 0]
+    half_weight = tabulate(table, COMPARISONS, 0.5)[..., 0, 0]
+    full_weight = tabulate(table, COMPARISONS, 1.0)[..., 0, 0]
+    np.testing.assert_allclose(strict, [[0, 0.75, 0.25], [-0.75, 0, -0.5], [-0.25, 0.5, 0]])
+    np.testing.assert_allclose(half_weight, [[0, 0.875, -0.125], [-0.875, 0, -0.5], [0.125, 0.5, 0]])
+    np.testing.assert_allclose(full_weight, [[0, 1, -0.5], [-1, 0, -0.5], [0.5, 0.5, 0]])
+    unordered = BallotTable(table.shape, table.start, table.codes, table.orders, table.weights,
+                            table.candidates, table.top, False)
+    with pytest.raises(ValueError, match="ordinal score comparisons need a ballot table by order"):
+        tabulate(unordered, COMPARISONS, 0.5)
+
+
+def test_full_score_tie_weight_matches_ordinary_pairwise_margins():
+    model = MODELS[0]
+    candidates = CANDIDATES[5]
+    actual = score_comparison_shares(candidates, model, model.medians, 6, power=1.5, tie_weight=1.0)
+    pairwise = pairwise_shares(candidates, model)
+    expected = pairwise - np.swapaxes(pairwise, -1, -2)
+    np.testing.assert_allclose(actual, expected, rtol=0, atol=6e-4)
+
+
+def test_moved_comparisons_move_weighted_tie_preferences_with_strategies():
+    code = 1 << BITS | 1 << (2 * BITS)
+    order = 0 | 1 << BITS | 2 << (2 * BITS)
+    table = BallotTable((1, 1), np.array([0, 1]), np.array([code]), np.array([order]), np.array([1.0]),
+                        3, 2, True)
+    moved = moved_comparisons(table, 1, 2, 0.4, 0.6, tie_weight=0.5)[..., 0, 0]
+    np.testing.assert_allclose(moved[1, 2], 0.38)
+    np.testing.assert_allclose(moved[1, 0], 0.9)
+    np.testing.assert_allclose(moved[2, 0], 0.0)
 
 
 def test_unscored_rejects_what_it_cannot_do():

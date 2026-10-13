@@ -49,8 +49,9 @@ A diff s[c, e] = -s[e, c] says that c beats e where it is positive. PairDiffs ar
 transitive (PairDiffs.transitive) if the candidates that beat each other cannot form a
 cycle: Margins are not, StrongestPaths are.
 
-ScoreComparisons(Score(...)) compares the cardinal scores on each ballot: a voter who
-gives a pair equal scores abstains. It does not use ranked pairwise shares.
+ScoreComparisons(Score(...), tie_weight=w) compares the cardinal scores on each ballot.
+When a voter gives a pair equal scores, their ordinal preference counts by `w`: 0 is the
+STAR runoff, 1 is ordinary pairwise ranking. The default is 0.
 
 Unbeaten(diffs) elects the candidate no one beats. Unbeaten(diffs, against=winner,
 order=totals) only asks that of the winner of `against`, the king: if someone beats it,
@@ -581,23 +582,28 @@ class PairDiffs(Block):
 
 @dataclass(frozen=True)
 class ScoreComparisons(PairDiffs):
-    """Strict score-ballot preferences: voters giving both candidates the same score abstain."""
+    """Score-ballot preferences; `tie_weight` weights ordinal preferences on equal scores."""
 
     ballot: Score
+    tie_weight: float = 0.0
     transitive = False
 
     def __post_init__(self):
         _expect(self, self.ballot, Score, "a Score ballot")
+        if (isinstance(self.tie_weight, bool) or not isinstance(self.tie_weight, int | float)
+                or not np.isfinite(self.tie_weight) or not 0 <= self.tie_weight <= 1):
+            raise ValueError(f"Score comparison tie weight must be between 0 and 1, got {self.tie_weight!r}")
 
     @property
     def needs(self) -> frozenset[Share]:
-        return frozenset({ScoredPairwise(self.ballot.scored)})
+        return frozenset({ScoredPairwise(self.ballot.scored, self.tie_weight)})
 
     def evaluate(self, voters: Voters) -> np.ndarray:
-        return voters.compared(ScoredPairwise(self.ballot.scored))
+        return voters.compared(ScoredPairwise(self.ballot.scored, self.tie_weight))
 
     def __repr__(self):
-        return f"ScoreComparisons({self.ballot!r})"
+        tie_weight = f", tie_weight={self.tie_weight!r}" if self.tie_weight != 0 else ""
+        return f"ScoreComparisons({self.ballot!r}{tie_weight})"
 
 
 @dataclass(frozen=True)

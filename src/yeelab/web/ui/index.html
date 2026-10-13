@@ -80,6 +80,7 @@
       <div class="choices" id="methods"><span>Voting method:</span></div>
       <div class="choices"><span>Score categories:</span><input type="range" id="levels" min="2" step="1"><output id="levelsValue"></output></div>
       <div class="choices"><span>Score power p:</span><input type="range" id="power"><output id="powerValue"></output></div>
+      <div class="choices"><span>Runoff tie weight:</span><input type="range" id="tieWeight"><output id="tieWeightValue"></output></div>
       <div id="strategies"></div>
       <div class="choices" id="ideals"><span>Ideal scenario:</span></div>
       <p>Drag a candidate to move it · click empty space to add one · right-click to remove</p>
@@ -116,6 +117,8 @@
     const levelsValue = document.getElementById("levelsValue");
     const powerSlider = document.getElementById("power");
     const powerValue = document.getElementById("powerValue");
+    const tieWeightSlider = document.getElementById("tieWeight");
+    const tieWeightValue = document.getElementById("tieWeightValue");
     const strategies = document.getElementById("strategies");  // a row with a slider per strategy
     const joint = document.getElementById("joint");
     const votersText = document.getElementById("voters");
@@ -177,6 +180,8 @@
     let fixedScoreLevels = {};  // method -> fixed category counts when no category slider applies
     let levels = 0;          // their number of scores on a ballot
     let power = 0;           // their part of the way is raised to this power
+    let tieWeightMethods = []; // methods with score comparisons in their runoff
+    let tieWeight = 0;       // ordinal weight of voters who tie on score in a runoff
     let shares = {};         // strategy name -> the share of the voters who vote by it, from 0 to 1,
                              // of those who vote by none of the strategies above it
     let strategyPhrases = {}; // strategy name -> what the status line says of it
@@ -616,7 +621,7 @@
     // What an answer depends on besides the candidates' positions and the sliders. An answer to
     // other settings (or to a candidate added or removed since, whose colours shifted) is not drawn;
     // one to an older slider value is, so sliding it shows the newest diagram it can, like a drag.
-    const settings = () => JSON.stringify([method, distribution, pixelMedian, candidates.length]);
+    const settings = () => JSON.stringify([method, distribution, pixelMedian, candidates.length, tieWeight]);
 
     // The shares of the strategies that apply to the method: none in the Voronoi diagram,
     // which has no election, nor in a method a strategy cannot do.
@@ -644,8 +649,8 @@
       if (moving && performance.now() - moving.start >= MOVE) moving = null;  // it has arrived
       if (moving) grid = dragGrid;  // on its way: the coarser grid, like a drag
       const part = shift();
-      const asked = settings(), sliders = [deviation, levels, power, applied()];
-      const key = JSON.stringify([candidates, distribution, deviation, levels, power, shares, part]);
+      const asked = settings(), sliders = [deviation, levels, power, tieWeight, applied()];
+      const key = JSON.stringify([candidates, distribution, deviation, levels, power, tieWeight, shares, part]);
       if (grid === finalGrid) message.textContent = `Computing ${labels[method]}…`;
       const start = performance.now();
       try {
@@ -653,7 +658,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            candidates, method, distribution, deviation, levels, power, ...sliders[3], grid,
+            candidates, method, distribution, deviation, levels, power, tie_weight: tieWeight, ...sliders[4], grid,
             pixel_median: part > 0 ? "geometric" : "marginal", shift: part,
           }),
         });
@@ -712,7 +717,7 @@
     }
 
     // What the diagram shows, and how long it took (round trip, and computing it on the backend).
-    function describe(deviation, levels, power, applies, total, server) {
+    function describe(deviation, levels, power, tieWeight, applies, total, server) {
       const tail = ` · ${candidates.length} candidates · ${total} ms (${server} ms computing)`;
       let name = labels[method];
       if (scorePowerMethods.includes(method)) {
@@ -721,6 +726,8 @@
         name += `, ${categories} categories${categories === 2 ? " (approval)" : ""}${fixed ? " (fixed)" : ""}`;
         name += `, p = ${power.toFixed(2)}`;
       }
+      if (tieWeightMethods.includes(method))
+        name += `, runoff tie weight = ${tieWeight.toFixed(2)}`;
       for (const [strategy, share] of Object.entries(applies)) {
         const others = applies[strategyOf[strategy]] > 0 ? "of the others " : "";
         if (share > 0) name += ` · ${Math.round(100 * share)}% ${others}${strategyPhrases[strategy]}`;
@@ -828,6 +835,7 @@
       method = name;
       levelsSlider.disabled = !scoreLevelMethods.includes(method);
       powerSlider.disabled = !scorePowerMethods.includes(method);
+      tieWeightSlider.disabled = !tieWeightMethods.includes(method);
       updateStrategies();
     }
 
@@ -871,6 +879,7 @@
     scorePowerMethods = config.scores;
     scoreLevelMethods = config.score_levels;
     fixedScoreLevels = config.fixed_score_levels;
+    tieWeightMethods = config.score_comparisons;
     function pickLevels() {
       levels = levelsSlider.valueAsNumber;
       levelsValue.textContent = levels === 2 ? "2 (approval)" : `${levels} (scores 0 to ${levels - 1})`;
@@ -894,6 +903,17 @@
       "2^(-1/p) of the way, not halfway). For Score only.";
     powerSlider.addEventListener("input", () => { pickPower(); compute(dragGrid); });
     powerSlider.addEventListener("change", () => compute());
+    Object.assign(tieWeightSlider, {
+      min: 0, max: 1, step: config.tie_weight_step, value: config.tie_weight,
+    });
+    function pickTieWeight() {
+      tieWeight = Number(tieWeightSlider.valueAsNumber.toFixed(2));
+      tieWeightValue.textContent = tieWeight.toFixed(2);
+    }
+    tieWeightSlider.title = "How much voters who gave both runoff candidates the same score count "
+      + "by their ordinal preference: 0 is STAR (they abstain), 1 is an ordinary pairwise runoff.";
+    tieWeightSlider.addEventListener("input", () => { pickTieWeight(); compute(dragGrid); });
+    tieWeightSlider.addEventListener("change", () => compute());
     // A slider for the share of the voters of each strategy, 0 at first: every voter sincere. Each
     // recomputes like the others.
     strategyPhrases = Object.fromEntries(config.strategies.map(({ name, phrase }) => [name, phrase]));

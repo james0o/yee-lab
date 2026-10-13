@@ -16,9 +16,9 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
                                       the shares of koth, and the score shares below for
                                       the final
     score                             the part of the top score a candidate does not
-                                      get, and STAR the strict cardinal comparisons of
-                                      each pair: these voters have curved borders, so
-                                      the shares come from a grid of voters, not polygons
+                                      get, and score comparisons: these voters have
+                                      curved borders, so the shares come from a grid of
+                                      voters, not polygons
 
 (Borda needs only pairwise shares: a ballot gives c one point per candidate ranked
 below c, so c's expected score is sum_e d[c, e].)
@@ -400,12 +400,13 @@ def unscored_shares(candidates, model: Model, levels: int, medians,
 def score_comparison_shares(candidates, model: Model, medians, levels: int,
                             rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
                             mu: float = score.MU, kappa: float = score.KAPPA,
-                            power: float = score.POWER, by_order: bool = False) -> np.ndarray:
-    """Strict score-comparison differences at each median: equal scores abstain. From the
-    kept ballots, like unscored_shares."""
+                            power: float = score.POWER, by_order: bool = False,
+                            tie_weight: float = 0.0) -> np.ndarray:
+    """Score-comparison differences at each median, weighting ordinal preferences where
+    the pair has equal scores by `tie_weight`. From the kept ballots, like unscored_shares."""
     mass = _voter_grid(model, medians)[1]
-    table = ballots(candidates, model, levels, rule, delta, mu, kappa, power, by_order)
-    short = score.tabulate(table, score.COMPARISONS).astype(np.float64)
+    table = ballots(candidates, model, levels, rule, delta, mu, kappa, power, by_order or tie_weight > 0)
+    short = score.tabulate(table, score.COMPARISONS, tie_weight).astype(np.float64)
     n, m = len(candidates), len(medians)
     comparisons = np.zeros((m, m, n, n), dtype=np.float64)
     for c in range(n):
@@ -507,11 +508,12 @@ class ScoreGrid:
         compromising adds."""
         return self._at(self._pair_points[score.RAISED], ((a, b), (b, a)), cells) / (self.levels - 1)
 
-    def moved(self, a: int, b: int, bury: float, compromise: float, cells: np.ndarray) -> np.ndarray:
-        """(P, C, C): how much the strict score comparisons of the voters of each point
+    def moved(self, a: int, b: int, bury: float, compromise: float, cells: np.ndarray,
+              tie_weight: float = 0.0) -> np.ndarray:
+        """(P, C, C): how much the score comparisons of the voters of each point
         move where `bury` of them bury and `compromise` of them compromise against the
         frontrunners a and b (score.moved_comparisons); only the pairs with a or b move."""
-        short = score.moved_comparisons(self.table, a, b, bury, compromise)
+        short = score.moved_comparisons(self.table, a, b, bury, compromise, tie_weight)
         n = len(self.candidates)
         pairs = [(c, e) for c in range(n) for e in range(c + 1, n) if a in (c, e) or b in (c, e)]
         values = self._at(short, pairs, cells)

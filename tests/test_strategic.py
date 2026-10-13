@@ -98,13 +98,17 @@ def _tied_pairwise(levels, shares):
 
 def _every_share(rankings, probs, seed=0):
     """Every share a method may need: those of a complete profile (voters_of), and random
-    score shares of SCORE_BALLOT."""
+    score shares of the built-in score ballots."""
     voters = voters_of(rankings, probs)
     rng = np.random.default_rng(seed)
     n = rankings.shape[1]
-    above = rng.random((*voters.shape, n, n))
-    return replace(voters, unscored={SCORE_BALLOT.scored: rng.random((*voters.shape, n))},
-                   scored_pairwise={ScoredPairwise(SCORE_BALLOT.scored): above - np.swapaxes(above, -1, -2)})
+    scored = (SCORE_BALLOT.scored, Score(3, power=1.5, fixed=True).scored)
+    unscored = {ballot: rng.random((*voters.shape, n)) for ballot in scored}
+    comparisons = {}
+    for ballot in scored:
+        above = rng.random((*voters.shape, n, n))
+        comparisons[ScoredPairwise(ballot)] = above - np.swapaxes(above, -1, -2)
+    return replace(voters, unscored=unscored, scored_pairwise=comparisons)
 
 
 class _Grid:
@@ -150,8 +154,9 @@ def _strategy_shares(rankings, probs, seed=0):
     voters = _every_share(rankings, probs, seed)
     shape = voters.shape
     cells = np.stack(np.meshgrid(np.arange(shape[0]), np.arange(shape[1]), indexing="ij"), axis=-1)
-    grid = _Grid(voters.unscored[SCORE_BALLOT.scored], seed + 1)
-    return replace(voters, ballots={Ballots(SCORE_BALLOT.scored): grid}, cells=cells)
+    grids = {Ballots(scored): _Grid(values, seed + i + 1)
+             for i, (scored, values) in enumerate(voters.unscored.items())}
+    return replace(voters, ballots=grids, cells=cells)
 
 
 def _grid_of(voters):
@@ -272,6 +277,24 @@ def test_the_shares_of_bullet_voters(profile):
                                + BULLET * lead, rtol=0, atol=1e-12)
 
 
+def test_bullet_voters_keep_their_equal_rankings_when_scores_tie():
+    key = ScoredPairwise(SCORE_BALLOT.scored, tie_weight=0.5)
+    first = np.array([[0.4, 0.35, 0.25]])
+    strict = np.array([[[0, 0.2, 0.3], [-0.2, 0, 0.4], [-0.3, -0.4, 0]]])
+    voters = Voters(first=first, scored_pairwise={key: strict})
+    share = 0.3
+
+    moved = bulleted(voters, share)
+    lead = first[..., :, None] - first[..., None, :]
+    expected = (1 - share) * strict + share * lead
+    np.testing.assert_allclose(moved.scored_pairwise[key], expected, rtol=0, atol=1e-12)
+    method = Unbeaten(
+        ScoreComparisons(SCORE_BALLOT, tie_weight=key.tie_weight),
+        among=Highest(Tally(SCORE_BALLOT), n=2),
+    )
+    assert Bullet(method, share).needs >= {FIRST, key}
+
+
 def test_bullet_ballots_are_tallied_with_equal_candidates_sharing(profile):
     """Among any remaining candidates: equal candidates share the mean points of the
     positions they take, so a bullet ballot whose first choice is out counts equally for
@@ -341,10 +364,13 @@ def test_burial_and_compromise_are_the_method_on_moved_rankings(profile, strateg
     voters, n = _strategy_shares(rankings, probs), rankings.shape[1]
     share, moved_profile = (BURIAL, _buried_profile) if strategy is Burial else (COMPROMISE, _compromised_profile)
     pairs, gap = _pairs(voters)
-    grid, key, comparisons = _grid_of(voters), SCORE_BALLOT.scored, ScoredPairwise(SCORE_BALLOT.scored)
     for name, method in METHODS.items():
         winner, margin = strategy(method, share).evaluate(voters)
         expected, expected_margin = np.empty_like(winner), np.empty_like(margin)
+        comparisons = next((need for need in method.needs if isinstance(need, ScoredPairwise)),
+                           ScoredPairwise(SCORE_BALLOT.scored))
+        key = comparisons.scored
+        grid = voters.grid(key)
         for pair in np.unique(pairs):
             at = pairs == pair
             a, b = np.flatnonzero((pair >> np.arange(n)) & 1)

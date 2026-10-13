@@ -1739,15 +1739,19 @@ square with another winner than with sincere voters:
 
 == STAR's runoff <sec-star-strategy>
 
-STAR's runoff reads the strict score comparisons $x_(i j)$, the share of the voters who
-score $c_i$ above $c_j$ minus that who score $c_j$ above $c_i$ (@sec-score). Burying and
-compromising move only the comparisons of a frontrunner with another candidate, but
-unlike the scores these do not add up over the strategies: a voter who buries $b$ and
-compromises on $a$ scores $a$ above $b$ whatever they did before, which neither change
-alone tells. So the comparisons are counted for each kind of voter on its own: of the
-voters who do not bullet vote, $(1 - q)(1 - y)$ vote sincerely, $q (1 - y)$ bury,
-$(1 - q) y$ compromise and $q y$ do both, and each moves the comparisons by its own
-ballots,
+STAR's runoff reads the score comparisons $x_(i j)$, the share of the voters who score
+$c_i$ above $c_j$ minus that who score $c_j$ above $c_i$ (@sec-score). The runoff tie
+weight $w$ adds $w$ times the ordinal margin among voters who gave the pair the same
+score. Thus $w = 0$ is STAR, where they abstain, and $w = 1$ is an ordinary pairwise
+runoff. These ordinal comparisons must be computed from the same individual ballots as
+the score ties; their separate aggregate totals do not say which tied-score voters prefer
+which candidate. Burying and compromising move only the comparisons of a frontrunner
+with another candidate, but unlike the scores these do not add up over the strategies: a
+voter who buries $b$ and compromises on $a$ scores $a$ above $b$ whatever they did
+before, which neither change alone tells. So the comparisons are counted for each kind
+of voter on its own: of the voters who do not bullet vote, $(1 - q)(1 - y)$ vote
+sincerely, $q (1 - y)$ bury, $(1 - q) y$ compromise and $q y$ do both, and each moves
+the comparisons by its own ballots,
 
 $ x'_(i j) = x_(i j) + (1 - b) sum_"kind" w_"kind"
   sum_(k, l) mu_k thin (m^"kind"_(i j k l)) thin nu_l , $

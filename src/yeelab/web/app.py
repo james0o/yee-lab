@@ -18,7 +18,7 @@ from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
-from yeelab.build import (Bullet, Burial, Compromise, Score, Winner)
+from yeelab.build import (Bullet, Burial, Compromise, Score, ScoreComparisons, Winner)
 from yeelab.build.methods import SCORE_POWER
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
@@ -49,6 +49,8 @@ assert DEVIATION in DEVIATIONS
 SCORE_LEVELS = 6
 MAX_LEVELS = 11
 MIN_POWER, MAX_POWER, POWER_STEP = 1.0, 2.0, 0.05
+TIE_WEIGHT = 0.0
+TIE_WEIGHT_STEP = 0.05
 
 
 def _score_ballots(block) -> list[Score]:
@@ -78,9 +80,39 @@ def _score_ballot_settings(block, levels: int, power: float):
     return updated_block if changed else block
 
 
+def _score_comparisons(block) -> list[ScoreComparisons]:
+    """Find ScoreComparisons nested in a built method."""
+    if isinstance(block, ScoreComparisons):
+        return [block]
+    if not is_dataclass(block):
+        return []
+    return [comparison for field in fields(block)
+            for comparison in _score_comparisons(getattr(block, field.name))]
+
+
+def _score_comparison_settings(block, tie_weight: float):
+    """Replace tie weights while preserving the built method's structure."""
+    if isinstance(block, ScoreComparisons):
+        return ScoreComparisons(block.ballot, tie_weight=tie_weight)
+    if not is_dataclass(block):
+        return block
+    updated_block = copy(block)
+    changed = False
+    for field in fields(block):
+        value = getattr(block, field.name)
+        updated = _score_comparison_settings(value, tie_weight)
+        if updated is not value:
+            object.__setattr__(updated_block, field.name, updated)
+            changed = True
+    return updated_block if changed else block
+
+
 # Whether the UI sliders apply is derived from each method's built blocks.
 SCORE_METHODS = {name: _score_ballots(method) for name, method in MARGINS.items()}
 SCORE_METHODS = {name: ballots for name, ballots in SCORE_METHODS.items() if ballots}
+SCORE_COMPARISON_METHODS = {name: _score_comparisons(method) for name, method in MARGINS.items()}
+SCORE_COMPARISON_METHODS = {name: comparisons for name, comparisons in SCORE_COMPARISON_METHODS.items()
+                            if comparisons}
 SCORE_LEVEL_METHODS = [name for name, ballots in SCORE_METHODS.items()
                        if any(not ballot.fixed for ballot in ballots)]
 SCORE_POWER_METHODS = list(SCORE_METHODS)
@@ -190,8 +222,10 @@ METHOD_INFO = {
               "sliders' defaults."},
     "star": {"label": "STAR", "description": "STAR: the two candidates with the highest total "
              "score advance to a runoff. Each voter gives the runoff vote to the finalist they "
-             "scored higher; voters who gave both finalists the same score abstain. The score "
-             "categories and power use the same sliders as Score."},
+             "scored higher; voters who gave both finalists the same score abstain by default. "
+             "The runoff tie-weight slider lets those voters use their ordinal preference, from "
+             "0 (STAR) to 1 (ordinary pairwise runoff). The score categories and power use the "
+             "same sliders as Score."},
     "irv_set_koth_score": {"label": "IRV set + KOTH + Score", "description": "IRV set + KOTH + "
                            "Score: the candidates with the fewest first choices among the "
                            "remaining ones are eliminated, any number of them in a round, in every "
@@ -269,6 +303,7 @@ class DiagramRequest(BaseModel):
     deviation: float = DEVIATION
     levels: int = Field(SCORE_LEVELS, ge=2, le=MAX_LEVELS)  # SCORES only
     power: float = Field(SCORE_POWER, ge=MIN_POWER, le=MAX_POWER)  # SCORES only
+    tie_weight: float = Field(TIE_WEIGHT, ge=0, le=1)  # ScoreComparisons only
     # the share of the voters of each strategy (STRATEGIES), of those not voting by the ones before
     bullet: float = Field(0.0, ge=0, le=1)
     burial: float = Field(0.0, ge=0, le=1)
@@ -331,6 +366,11 @@ def _method_option(name: str, method: Winner) -> dict[str, str]:
     label = info.get("label", name.replace("_", " ").title())
     expression = repr(method)
     description = info.get("description")
+    if name in SCORE_COMPARISON_METHODS and name != "star":
+        tie_description = ("The runoff tie-weight slider counts ordinal preferences when both "
+                           "candidates received the same score: 0 abstains (STAR), 1 is ordinary "
+                           "pairwise runoff.")
+        description = f"{description}\n{tie_description}" if description else tie_description
     return {
         "name": name,
         "label": label,
@@ -357,6 +397,7 @@ def config():
         # the methods of the categories and power sliders, their defaults and ranges
         "scores": SCORE_POWER_METHODS,
         "score_levels": SCORE_LEVEL_METHODS,
+        "score_comparisons": list(SCORE_COMPARISON_METHODS),
         "fixed_score_levels": FIXED_SCORE_LEVELS,
         "levels": SCORE_LEVELS,
         "max_levels": MAX_LEVELS,
@@ -364,6 +405,8 @@ def config():
         "min_power": MIN_POWER,
         "max_power": MAX_POWER,
         "power_step": POWER_STEP,
+        "tie_weight": TIE_WEIGHT,
+        "tie_weight_step": TIE_WEIGHT_STEP,
         # a slider for the share of the voters of each strategy, and the methods it cannot do
         "strategies": [{"name": name, **info} for name, info in STRATEGIES.items()],
         "unsupported": UNSUPPORTED,
@@ -383,8 +426,9 @@ def diagram_regions(request: DiagramRequest):
     start = time.perf_counter()
     spread = SPREAD if request.distribution == "beta" else None
     model = Model(request.distribution, request.deviation, spread)
-    if request.method in SCORE_METHODS:
+    if request.method in SCORE_METHODS or request.method in SCORE_COMPARISON_METHODS:
         method = _score_ballot_settings(MARGINS[request.method], request.levels, request.power)
+        method = _score_comparison_settings(method, request.tie_weight)
     else:
         method = request.method
     shares = {name: getattr(request, name) for name in STRATEGIES}

@@ -13,8 +13,8 @@ psi_c along a grid edge. Two neighbouring regions get the same crossing, a / (a 
 along the edge from the side with margin a, so they meet without gaps. The grid only
 has to be fine enough to catch thin slivers; the shares come from the Chebyshev
 interpolant (ranking_cells.interpolate_to), which is exact to ~1e-5 at any point. The
-Score totals and STAR's strict score comparisons are computed at the grid points
-themselves.
+Score totals and score comparisons are computed at the grid points themselves. A
+nonzero runoff tie weight also needs the voter-grid ballots split by ordinal order.
 
 Polygons follow GeoJSON: an outer ring counter-clockwise, then its holes clockwise.
 A region can have several polygons (FPTP flares at the walls) and holes (an island
@@ -103,7 +103,7 @@ def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Vote
             share: score_comparison_shares(candidates, model, medians, share.scored.levels,
                                            share.scored.rule, share.scored.delta, mu=share.scored.mu,
                                            kappa=share.scored.kappa, power=share.scored.power,
-                                           by_order=share.scored in ordered)
+                                           by_order=share.scored in ordered, tie_weight=share.tie_weight)
             for share in score_pairs
         }
     grids = [share for share in needs if isinstance(share, Ballots)]

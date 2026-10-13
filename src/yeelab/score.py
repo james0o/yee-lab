@@ -572,7 +572,7 @@ CELLS = 4096  # rectangles per task of the compiled sums (threads.py)
 
 
 @njit(cache=True, nogil=True, error_model="numpy")
-def _tabulate(start, codes, orders, weights, n, top, kind, first, stop, out):
+def _tabulate(start, codes, orders, weights, n, top, kind, tie_weight, first, stop, out):
     """tabulate() of the rectangles first <= k < stop into out (C or C * C, X * Y)."""
     for k in range(first, stop):
         for row in range(out.shape[0]):
@@ -591,6 +591,17 @@ def _tabulate(start, codes, orders, weights, n, top, kind, first, stop, out):
                             difference = weight if below_c < below_e else -weight
                             out[c * n + e, k] += difference
                             out[e * n + c, k] -= difference
+                        elif tie_weight:
+                            position_c = position_e = 0
+                            for position in range(n):
+                                candidate = (ranked >> (BITS * position)) & MASK
+                                if candidate == c:
+                                    position_c = position
+                                elif candidate == e:
+                                    position_e = position
+                            difference = tie_weight * weight * (1 if position_c < position_e else -1)
+                            out[c * n + e, k] += difference
+                            out[e * n + c, k] -= difference
             else:
                 for above in range(1 if kind == RAISED else 0, n):  # the candidates in order
                     c = (ranked >> (BITS * above)) & MASK
@@ -602,26 +613,27 @@ def _tabulate(start, codes, orders, weights, n, top, kind, first, stop, out):
                             out[e * n + c, k] += weight * (top - ((code >> (BITS * e)) & MASK))
 
 
-def tabulate(table: BallotTable, kind: int) -> np.ndarray:
+def tabulate(table: BallotTable, kind: int, tie_weight: float = 0.0) -> np.ndarray:
     """The mean over the voters of every rectangle of the table (float32): for UNSCORED
     the points below the top score of each candidate (C, X, Y), for COMPARISONS the share
     strictly scoring c above e minus e above c (C, C, X, Y), for GIVEN given() and for
     RAISED raised(), which need a table by_order. Chunks of the rectangles run in
     parallel threads."""
-    if kind in (GIVEN, RAISED) and not table.by_order:
-        raise ValueError("what burying takes back and compromising adds need a ballot table by order")
+    if (kind in (GIVEN, RAISED) or tie_weight > 0) and not table.by_order:
+        raise ValueError("ordinal score comparisons need a ballot table by order")
     n = table.candidates
     cells = table.shape[0] * table.shape[1]
     out = np.empty((n if kind == UNSCORED else n * n, cells), dtype=np.float32)
     threads.in_chunks(lambda a, b: _tabulate(table.start, table.codes, table.orders, table.weights, n, table.top,
-                                             kind, a, b, out), cells, CELLS)
+                                             kind, tie_weight, a, b, out), cells, CELLS)
     return out.reshape((n,) * (1 if kind == UNSCORED else 2) + table.shape)
 
 
 @njit(cache=True, nogil=True, error_model="numpy")
-def _moved(start, codes, orders, weights, n, top, a, b, bury, compromise, first, stop, out):
+def _moved(start, codes, orders, weights, n, top, a, b, bury, compromise, tie_weight, first, stop, out):
     """moved_comparisons() of the rectangles first <= k < stop into out (C * C, X * Y)."""
     scores, moved = np.empty(n, dtype=np.int64), np.empty(n, dtype=np.int64)
+    positions, moved_positions = np.empty(n, dtype=np.int64), np.empty(n, dtype=np.int64)
     kinds = (bury * (1 - compromise), (1 - bury) * compromise, bury * compromise)  # bury, compromise, both
     for k in range(first, stop):
         for row in range(out.shape[0]):
@@ -632,6 +644,7 @@ def _moved(start, codes, orders, weights, n, top, a, b, bury, compromise, first,
             for position in range(n):
                 c = (ranked >> (BITS * position)) & MASK
                 scores[c] = top - ((code >> (BITS * c)) & MASK)
+                positions[c] = position
                 if c == a:
                     position_a = position
                 elif c == b:
@@ -645,24 +658,37 @@ def _moved(start, codes, orders, weights, n, top, a, b, bury, compromise, first,
                     continue
                 for c in range(n):
                     moved[c] = scores[c]
+                    moved_positions[c] = positions[c]
                 if kind != 1:  # buries: the frontrunner ranked lower gets 0
                     moved[lower] = 0
+                    for c in range(n):
+                        if positions[c] > positions[lower]:
+                            moved_positions[c] -= 1
+                    moved_positions[lower] = n - 1
                 if kind != 0:  # compromises: the other the top score
                     moved[upper] = top
+                    if positions[upper] > 0:
+                        for c in range(n):
+                            if moved_positions[c] < positions[upper]:
+                                moved_positions[c] += 1
+                        moved_positions[upper] = 0
                 for c in (a, b):  # the pairs with a or b, (a, b) once
                     for e in range(n):
                         if e == c or (c == b and e == a):
                             continue
-                        before = 1 if scores[c] > scores[e] else -1 if scores[c] < scores[e] else 0
-                        after = 1 if moved[c] > moved[e] else -1 if moved[c] < moved[e] else 0
+                        before = (1 if scores[c] > scores[e] else -1 if scores[c] < scores[e]
+                                  else tie_weight * (1 if positions[c] < positions[e] else -1))
+                        after = (1 if moved[c] > moved[e] else -1 if moved[c] < moved[e]
+                                 else tie_weight * (1 if moved_positions[c] < moved_positions[e] else -1))
                         if after != before:
                             change = weight * share * (after - before)
                             out[c * n + e, k] += change
                             out[e * n + c, k] -= change
 
 
-def moved_comparisons(table: BallotTable, a: int, b: int, bury: float, compromise: float) -> np.ndarray:
-    """How much the strict score comparisons of a table by order move, (C, C, X, Y) float32,
+def moved_comparisons(table: BallotTable, a: int, b: int, bury: float, compromise: float,
+                      tie_weight: float = 0.0) -> np.ndarray:
+    """How much the score comparisons of a table by order move, (C, C, X, Y) float32,
     where `bury` of the voters bury and `compromise` of them compromise against the
     frontrunners a and b, each whatever the other does (blocks.Burial, Compromise): a
     burying voter gives the frontrunner they rank lower 0, a compromising one gives the one
@@ -677,7 +703,7 @@ def moved_comparisons(table: BallotTable, a: int, b: int, bury: float, compromis
     cells = table.shape[0] * table.shape[1]
     out = np.empty((n * n, cells), dtype=np.float32)
     threads.in_chunks(lambda first, stop: _moved(table.start, table.codes, table.orders, table.weights, n, table.top,
-                                                 a, b, float(bury), float(compromise), first, stop, out),
+                                             a, b, float(bury), float(compromise), float(tie_weight), first, stop, out),
                       cells, CELLS)
     return out.reshape((n, n) + table.shape)
 

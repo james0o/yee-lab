@@ -255,6 +255,8 @@ def test_config_lists_every_method():
     assert "system321" in config["scores"]
     assert "system321" not in config["score_levels"]
     assert config["fixed_score_levels"]["system321"] == [3]
+    assert config["score_comparisons"] == ["star", "star_two_round", "system321"]
+    assert config["tie_weight"] == 0 and config["tie_weight_step"] == 0.05
     assert config["levels"] == 6 and config["max_levels"] == 11
     assert descriptions["score"].endswith("\nHighest(Tally(Score(6, power=1.5)))")
     assert descriptions["star"].endswith(
@@ -266,6 +268,29 @@ def test_config_lists_every_method():
     assert (config["min_power"], config["max_power"], config["power_step"]) == (1.0, 2.0, 0.05)
     for gone in ("deltas", "delta", "clusters", "mu", "kappa", "powers"):
         assert gone not in config
+
+
+def test_runoff_tie_weight_is_applied_to_nested_score_comparisons():
+    client = TestClient(app)
+    request = {
+        "candidates": CANDIDATES.tolist(), "method": "star", "levels": 2, "power": 2,
+        "grid": 64,
+    }
+    default = client.post("/api/regions", json=request)
+    explicit_zero = client.post("/api/regions", json={**request, "tie_weight": 0})
+    weighted = client.post("/api/regions", json={**request, "tie_weight": 0.5})
+    assert default.status_code == explicit_zero.status_code == weighted.status_code == 200
+    assert default.json()["regions"] == explicit_zero.json()["regions"]
+
+    ballot = Score(2, power=2)
+    expected = Unbeaten(
+        ScoreComparisons(ballot, tie_weight=0.5),
+        among=Highest(Tally(ballot), n=2),
+    )
+    assert weighted.json()["regions"] == json.loads(
+        json.dumps(regions(expected, CANDIDATES.tolist(), MODELS[0], 64))
+    )
+    assert client.post("/api/regions", json={**request, "tie_weight": 1.1}).status_code == 422
 
 
 def test_score_sliders_apply_to_nested_score_ballots():
