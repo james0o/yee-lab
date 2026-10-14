@@ -50,8 +50,6 @@ mj = Highest(Tally(score_ballot, statistic="median"))
 # scores abstain by default); a tie is a draw
 star = Unbeaten(ScoreComparisons(score_ballot), among=Highest(Tally(score_ballot), n=2))
 star_two_round = Unbeaten(ScoreComparisons(score_ballot), among= score | two_round)
-score_two_runoff = Unbeaten(M, among=score | two_round)
-
 
 finalists = Conditional(
     (fptp == two_round) & (two_round != condorcet),
@@ -63,6 +61,18 @@ sun_two_round = Unbeaten(ScoreComparisons(score_ballot), among = finalists)
 top3 = Highest(Tally(Plurality()), n=3)
 top2 = Highest(Tally(AntiPlurality()), n=2, among=top3)
 system321 = Unbeaten(ScoreComparisons(Score(3, power=SCORE_POWER, fixed=True)), among=top2)
+
+score_two = Conditional((fptp == score), when_true=score, when_false=two_round)
+
+smj_fin = Conditional(
+   (mj == two_round),
+    when_true=mj,
+    when_false=score
+
+)
+smj_two = Unbeaten(ScoreComparisons(score_ballot), among= smj_fin | two_round)
+smj_end = Conditional(((smj_two == two_round) & (smj_two == fptp)), when_true=star, when_false=smj_two)
+
 
 METHODS: dict[str, Winner] = {
     "fptp": fptp,
@@ -80,8 +90,8 @@ METHODS: dict[str, Winner] = {
     "score": score,
     "star": star,
     "star_two_round": star_two_round,
-    "score_two_runoff": score_two_runoff,
     "system321": system321,
-    "sun_two_round": sun_two_round,
     "mj": mj,
+    "smj_two": smj_two,
+    "smj_end": smj_end,
 }
