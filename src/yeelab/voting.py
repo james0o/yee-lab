@@ -1,9 +1,8 @@
 """Shared compiled logic for Condorcet cycles and instant-runoff rounds.
 
 The rounds give the IRV winner and its margin together; the margin costs nothing extra,
-and IRV methods built from yeelab.build return both. irv_schedules does the same for
-every way to split the eliminations into rounds (blocks.Schedules), and
-descending_coalitions for descending acquiescing coalitions (blocks.DescendingCoalitions).
+and IRV methods built from yeelab.build return both. descending_coalitions does the same
+for descending acquiescing coalitions (blocks.DescendingCoalitions).
 """
 
 import numpy as np
@@ -63,63 +62,6 @@ def _irv_points(rankings, probs, bullet, winner, margin):
         for c in range(n_candidates):
             if alive[c]:
                 winner[p] = c
-        margin[p] = gap
-
-
-@njit(cache=True, nogil=True, error_model="numpy")
-def _schedule_points(rankings, probs, bullet, chosen, margin):
-    """irv_schedules for probs (P, R) and bullet (P, C), or (P, 0) for none, into chosen
-    (P, C), all False, and margin (P,). A bullet ballot counts for its first choice
-    while it remains, and then the same for every remaining candidate, which is left
-    out as in _irv_points.
-
-    A round of a schedule keeps the k highest tallies of the candidates it starts with, so
-    what follows depends only on those: every set of remaining candidates (a bit mask)
-    that some schedule reaches is tallied once. Its highest tally wins the schedule that
-    keeps one there, and the k-th highest minus the next is the gap of keeping k.
-    """
-    n_ballots, n_candidates = rankings.shape
-    full = (1 << n_candidates) - 1
-    seen = np.zeros(1 << n_candidates, dtype=np.int64)  # the last point (+ 1) that reached a set
-    stack = np.empty(1 << n_candidates, dtype=np.int64)
-    tally = np.empty(n_candidates)
-    order = np.empty(n_candidates, dtype=np.int64)
-    for p in range(probs.shape[0]):
-        gap = np.inf
-        seen[full] = p + 1
-        stack[0] = full
-        size = 1
-        while size > 0:
-            size -= 1
-            alive = stack[size]
-            tally[:] = 0.0
-            for r in range(n_ballots):
-                k = 0
-                while not (alive >> rankings[r, k]) & 1:
-                    k += 1
-                tally[rankings[r, k]] += probs[p, r]
-            if bullet.shape[1] > 0:  # the others' tallies are not read
-                tally += bullet[p]
-            # the remaining candidates, highest tally first (ties: the lowest index)
-            left = 0
-            for c in range(n_candidates):
-                if (alive >> c) & 1:
-                    i = left
-                    while i > 0 and tally[order[i - 1]] < tally[c]:
-                        order[i] = order[i - 1]
-                        i -= 1
-                    order[i] = c
-                    left += 1
-            chosen[p, order[0]] = True
-            kept = 1 << order[0]  # the k highest
-            for k in range(1, left):
-                if tally[order[k - 1]] > 0:  # two empty tallies decide nothing (irv_rounds)
-                    gap = min(gap, tally[order[k - 1]] - tally[order[k]])
-                if k > 1 and seen[kept] != p + 1:
-                    seen[kept] = p + 1
-                    stack[size] = kept
-                    size += 1
-                kept |= 1 << order[k]
         margin[p] = gap
 
 
@@ -220,31 +162,6 @@ def descending_coalitions(rankings: np.ndarray, probs: np.ndarray,
     threads.in_chunks(lambda a, b: _coalition_points(prefixes, flat[a:b], ballots[a:b], winner[a:b],
                                                      margin[a:b]), len(flat), CHUNK)
     return winner.reshape(shape), margin.reshape(shape)
-
-
-def irv_schedules(rankings: np.ndarray, probs: np.ndarray,
-                  bullet: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """The winners of every elimination schedule (blocks.Schedules on first choices):
-    each round drops some number of the fewest first choices among the remaining
-    candidates, in every way to split the C - 1 eliminations into rounds. Returns
-    (chosen (..., C) bool, margin (...)) for rankings (R, C), their shares probs
-    (..., R) and the bullet ballots (..., C), None for none (as in irv_rounds).
-
-    The margin is the smallest gap of any round of any schedule, the k-th highest tally
-    minus the next where the round keeps k: a winner changes only where some round's
-    decision flips, and there its gap is 0. Two empty tallies decide nothing, as in
-    irv_rounds: the candidates a round drops then have no ballots to pass on.
-    """
-    shape = probs.shape[:-1]
-    flat = np.ascontiguousarray(probs.reshape(-1, probs.shape[-1]))
-    rankings = np.ascontiguousarray(rankings, dtype=np.int64)
-    n = rankings.shape[1]
-    ballots = _bullet(bullet, len(flat))
-    chosen = np.zeros((len(flat), n), dtype=np.bool_)
-    margin = np.empty(len(flat))
-    threads.in_chunks(lambda a, b: _schedule_points(rankings, flat[a:b], ballots[a:b], chosen[a:b],
-                                                    margin[a:b]), len(flat), CHUNK)
-    return chosen.reshape(*shape, n), margin.reshape(shape)
 
 
 def irv_rounds(rankings: np.ndarray, probs: np.ndarray,

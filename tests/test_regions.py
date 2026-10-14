@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from matplotlib.path import Path as MplPath
 
-from yeelab.build import (AntiPlurality, Conditional, Highest, Mix, Plurality, Schedules, Score, ScoreAvg, ScoreCluster,
+from yeelab.build import (AntiPlurality, Conditional, Highest, Mix, Plurality, Score, ScoreAvg, ScoreCluster,
                           ScoreComparisons, ScoreDH, ScoreHybrid, Tally, Unbeaten)
 from yeelab.margin.metrics import borders, voronoi_agreement
 from yeelab.margin.regions import MARGINS, grid, nearest, regions, voronoi_borders, winners
@@ -275,7 +275,7 @@ def test_first_choice_regions_tile_even_with_normal_voters_outside():
 
 def test_config_lists_every_method():
     """The UI makes a button of each; a built method's tooltip ends with its expression.
-    Score, STAR and IRV set + KOTH + Score use the score settings."""
+    Score and STAR use the score settings."""
     config = TestClient(app).get("/api/config").json()
     methods = config["methods"]
     assert [m["name"] for m in methods] == list(MARGINS)
@@ -287,7 +287,7 @@ def test_config_lists_every_method():
     assert descriptions["nanson"].endswith('\nEliminate(Tally(BordaCount()), how="mean")')
     # the categories and power sliders: their method, their defaults, which it is listed
     # with, and their ranges
-    assert {"score", "star", "irv_set_koth_score", "star_two_round"} <= set(config["scores"])
+    assert {"score", "star", "star_two_round"} <= set(config["scores"])
     assert "system321" in config["scores"]
     assert "system321" not in config["score_levels"]
     assert config["fixed_score_levels"]["system321"] == [3]
@@ -297,9 +297,6 @@ def test_config_lists_every_method():
     assert descriptions["score"].endswith("\nHighest(Tally(Score(6, power=1.5)))")
     assert descriptions["star"].endswith(
         "\nUnbeaten(ScoreComparisons(Score(6, power=1.5)), among=Highest(Tally(Score(6, power=1.5)), n=2))")
-    assert descriptions["irv_set_koth_score"].endswith(
-        "\nHighest(Tally(Score(6, power=1.5)), among=Schedules(Tally(Plurality())) | Unbeaten(Margins(Pairwise()), "
-        "against=Highest(Tally(Plurality())), order=Tally(Plurality())))")
     assert config["power"] == 1.5
     assert (config["min_power"], config["max_power"], config["power_step"]) == (1.0, 2.0, 0.05)
     for gone in ("deltas", "delta", "clusters", "mu", "kappa", "powers"):
@@ -556,12 +553,6 @@ def test_api_builds_score_from_levels_and_power():
         approval = Highest(Tally(Score(2, power=power)))
         assert (shapes("score", levels=2, power=power)
                 == json.loads(json.dumps(regions(approval, CANDIDATES.tolist(), MODELS[0], 64))))
-    # IRV set + KOTH + Score scores its finalists on the same ballot
-    assert shapes("irv_set_koth_score") == shapes("irv_set_koth_score", levels=6, power=1.5)
-    approval = Highest(Tally(Score(2, power=2)), among=Schedules(Tally(Plurality())) | MARGINS["koth"])
-    assert (shapes("irv_set_koth_score", levels=2, power=2)
-            == json.loads(json.dumps(regions(approval, CANDIDATES.tolist(), MODELS[0], 64))))
-
     for settings in ({"levels": 1}, {"levels": 12}, {"levels": 2.5}, {"power": 0.95}, {"power": 2.05},
                      {"power": "x"}):
         request = {"candidates": CANDIDATES.tolist(), "method": "score", **settings}
@@ -599,19 +590,6 @@ def test_api_builds_majority_judgment_from_levels_and_power():
     assert method["description"].endswith('\nHighest(Tally(Score(6, power=1.5), statistic="median"))')
     for strategy in ("bullet", "burial", "compromise"):
         assert shapes(**{strategy: 0.5}) != shapes(), strategy
-
-
-def test_the_king_of_the_hill_adds_a_finalist_to_the_irv_set():
-    """With wide voters the king of the hill is a finalist the IRV set does not have, and
-    wherever that changes the winner, the king wins."""
-    model = Model("normal", 0.3)
-    irv_set_score = Highest(Tally(Score(6, power=1.5)), among=Schedules(Tally(Plurality())))
-    _, without, _ = winners(irv_set_score, CANDIDATES, model, 64)
-    _, king, _ = winners("koth", CANDIDATES, model, 64)
-    _, with_king, margin = winners("irv_set_koth_score", CANDIDATES, model, 64)
-    changed = (without != with_king) & (margin > 1e-6)
-    assert changed.mean() > 0.01
-    np.testing.assert_array_equal(with_king[changed], king[changed])
 
 
 def test_api_offers_deviations_from_005():

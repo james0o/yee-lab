@@ -2,7 +2,7 @@
 
     from yeelab.build import (AntiPlurality, BordaCount, Bullet, Burial, Compromise, DescendingCoalitions,
                               Conditional, Eliminate,
-                              Highest, Margins, Mix, Pairwise, Plurality, Schedules, Score,
+                              Highest, Margins, Mix, Pairwise, Plurality, Score,
                               ScoreAvg, ScoreCluster, ScoreComparisons, ScoreDH, ScoreHybrid,
                               StrongestPaths, Tally, Unbeaten, Weakest)
 
@@ -30,9 +30,6 @@
     # majority judgment: the highest median score, ties by Balinski and Laraki's tie-break
     mj    = Highest(Tally(ballot, statistic="median"))
     star  = Unbeaten(ScoreComparisons(ballot), among=Highest(Tally(ballot), n=2))
-    # the highest mean score among the winners of every elimination schedule (IRV, FPTP,
-    # the top two and all between) and the king of the hill
-    irv_set_koth_score = Highest(Tally(ballot), among=Schedules(Tally(Plurality())) | koth)
     # any of them where 30% of the voters bullet vote: their first choice first and all
     # other candidates equal below it
     Bullet(borda, share=0.3)
@@ -74,7 +71,6 @@ from yeelab.build.blocks import (
     PairShares,
     Pairwise,
     Plurality,
-    Schedules,
     Score,
     ScoreComparisons,
     ScoreAvg,
@@ -96,7 +92,7 @@ __all__ = [
     "AntiPlurality", "Ballot", "Ballots", "BordaCount", "Bullet", "Burial", "CandidateTotals", "Compromise",
     "DescendingCoalitions",
     "Conditional", "Eliminate", "Highest", "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise",
-    "Plurality", "Schedules", "Score", "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH",
+    "Plurality", "Score", "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH",
     "ScoreHybrid", "StrongestPaths", "Tally", "Unbeaten", "Union", "Weakest", "Winner", "METHODS",
     "FIRST", "PAIRWISE", "PROFILE", "Graded", "Scored", "ScoredPairwise", "Share", "Voters",
 ]

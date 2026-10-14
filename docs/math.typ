@@ -853,7 +853,7 @@ holds some of them but not all. Every set with a higher score than one that cuts
 $cal(E)$ was taken while $cal(E)$ was larger, and holds all of $cal(E)$ or none of it
 since. So the method is a sequence of at most $C - 1$ rounds: the set $T$ with the
 highest score among those that cut $cal(E)$ (ties: the lowest bit mask) keeps
-$cal(E) inter T$. At the median $(0.51, 0.51)$ of @sec-irv-set ($D = 0.3$), where D is a
+$cal(E) inter T$. At the median $(0.51, 0.51)$ where D is a
 centrist squeezed between A and E:
 
 #align(center, table(
@@ -870,7 +870,7 @@ centrist squeezed between A and E:
 ))
 
 A wins, narrowly: 27.7 % of the voters rank A last, which is the score of the set of B,
-C, D and E, and would have left D. D beats A head to head (@sec-irv-set), so DAC is not a
+C, D and E, and would have left D. D beats A head to head, so DAC is not a
 Condorcet method.
 
 *Majorities.* Two sets that more than half of the voters acquiesce to share a voter, and
@@ -1492,71 +1492,6 @@ of every rectangle at each score of the two that each strategy moves, from the b
 table by order. With burial and compromise the update takes about 0.4 to 0.9 s at
 $G = 160$ for 5 candidates, against 0.07 to 0.2 s for Score.
 
-== IRV set + KOTH + Score (`irv_set_koth_score`) <sec-irv-set>
-
-This method is only in the web UI as well, built from blocks as
-`Highest(Tally(Score(6, power=1.5)), among=Schedules(Tally(Plurality())) | koth)`: the
-highest mean score (@sec-score) among the finalists $F = W union {k}$, the winners $W$ of
-a family of elimination methods and the winner $k$ of king of the hill.
-
-*The IRV set $W$.* An elimination schedule splits the $C - 1$ eliminations into rounds,
-$d_1 + dots + d_t = C - 1$ with every $d_j >= 1$. Round $j$ drops the $d_j$ candidates
-with the fewest first choices among the remaining candidates $S$, the shares $s_i^S$ of
-IRV, counted again after every round (ties: the first candidate stays). A schedule is a
-choice of where, among the $C - 2$ places between two eliminations, a round ends, so
-there are $2^(C - 2)$ of them. One at a time is IRV and all at once FPTP. $C - 2$ and
-then one is the two-round system: with complete rankings the first choices among two
-candidates are their pairwise shares $pi_(i j)$, so the second round is their majority.
-`Schedules(Tally(Plurality()))` chooses the set $W$ of the winners of all schedules.
-
-*The king $k$* (`koth`) is the candidate with the most first choices or, if someone beats
-it head to head, the one with the most first choices among those who do.
-`Highest(totals, among=...)` then elects the highest total in $F$. The score ballot is
-that of Score, marked once among all candidates, so the scores compared in $F$ are those
-Score compares. (A `Tally` of a ranked ballot is counted again among the finalists, as
-among the remaining candidates of a round.)
-
-*Properties.* A candidate with more than half of the first choices has the most first
-choices among every set of remaining candidates, so it wins every schedule; it also beats
-everyone, so it is the king too and the only finalist. A candidate is in $W$ only if it
-has the most first choices among some set that a schedule reaches. A centrist squeezed
-between two large flanks never does. With the candidates A–E, Beta voters (`rms`) and
-$D = 0.3$, at the median $(0.51, 0.51)$, candidate D has 19 % of the first choices against 28 % for
-A and 27 % for E, and 26 % among the three of them against 41 % and 34 %, so every
-schedule drops it and $W = {A, E}$. Yet D beats A by 59 to 41 % and E by 66 to 34 %, and
-it has the highest mean score. The king brings such a centrist back where it beats the
-candidate with the most first choices and has the most first choices of those who do, as
-D does here; where another challenger has more first choices, the centrist stays out.
-How often the king adds a finalist to $W$ depends on how wide the voters are: with
-A–E it does at about 7 % of the pixels at $D = 0.3$, for Beta and normal voters alike, but at
-less than 0.1 % at $D <= 0.2$, the default of the UI included. The king is the only
-finalist besides $W$, so wherever it changes the winner, $k$ wins.
-
-The two parts differ in burial, ranking a rival insincerely low. While a voter's first
-choice remains, the ballot counts for it whatever the order below, so burial cannot bring
-one's own first choice into $W$. It can make it the king: voters who rank a challenger $j$
-above the candidate with the most first choices can rank $j$ below it instead, and if $j$
-then no longer beats it, the next challenger becomes $k$.
-
-*Computing $W$.* A round keeps the $m$ highest tallies of the set $S$ it starts with, and
-what follows depends only on the set it keeps. Every set that some schedule reaches is
-therefore tallied once per pixel, in a compiled loop like that of IRV (@sec-compiled): the
-sets are bit masks on a stack, and a set is pushed when it is first reached. With the
-tallies of $S$ sorted, $s^S_((1)) >= s^S_((2)) >= dots$, the top one is in $W$ (the
-schedule that keeps one candidate next), and keeping $m$ leads to the set of the $m$
-highest. With 8 random candidates the 64 schedules reach on average 8 of the 247 sets of
-two or more candidates per pixel, and at most about 30. The winners change only where a
-round's decision flips, where two neighbouring tallies of a reached set tie, so
-
-$ mu_W = min_S min_(m = 1)^(|S| - 1) (s^S_((m)) - s^S_((m + 1))) $
-
-over the sets $S$ that schedules reach. The margin of the method is the smallest of
-$mu_W$, the margin of king of the hill and the lead of the top mean score in $F$ over the
-next one in $F$ ($infinity$ where $F$ has one member). Like the margin of IRV, it also
-vanishes where some decision flips but the winner stays. The method needs the whole
-profile, like IRV, the first-choice and pairwise shares of king of the hill and the score
-shares of Score, and an update costs about as much as IRV and Score together.
-
 == Ties <sec-ties>
 
 Exact ties are broken by the order of the candidates: `argmax` and `argmin` take the
@@ -1625,7 +1560,7 @@ next to the pairwise or score shares; `Bullet` adds them to what the method need
 The methods on the whole profile keep the rankings with $(1 - b) P(r)$, and the bullet
 ballots with $b s_k$ for every first choice $c_k$, taken from the profile itself.
 
-- *IRV* (and every schedule of @sec-irv-set). A bullet ballot counts for its first
+- *IRV.* A bullet ballot counts for its first
   choice while that remains. Once it is out, the ballot counts $1 slash abs(cal(R))$ for each of
   the remaining candidates $cal(R)$. That adds the same to every remaining tally, so it
   changes no elimination and no gap, and the compiled rounds leave it out: the ballot
@@ -1655,11 +1590,11 @@ the FPTP winner:
   methods, the runoffs of the two-round system and STAR, and king of the hill elect it;
 - its Borda score $(C - 1) slash 2 + (C s_i - 1) slash 2$ and its mean score are the
   highest;
-- IRV and every schedule drop the fewest first choices, never the most;
+- IRV drops the fewest first choices, never the most;
 - in DAC the set of all eligible candidates but the one with the fewest first choices has
   the highest score among those that cut them, round after round.
 
-The tests check this for all fifteen methods.
+The tests check this for all methods.
 
 #figure(
   image("figures/bullet.png", width: 100%),
@@ -1687,7 +1622,6 @@ $b = 1$. The part of the square with another winner than with sincere voters:
   [Condorcet, Black], [2.3%], [5.0%],
   [STAR], [2.4%], [5.2%],
   [IRV], [3.3%], [6.4%],
-  [IRV set + KOTH + Score], [3.5%], [7.1%],
   [DAC], [3.3%], [7.6%],
   [Score], [4.5%], [8.3%],
   [Borda], [5.4%], [10.6%],
@@ -1713,8 +1647,8 @@ above $b$ still does. With $q$ the share of the voters who bury and $a$, $b$ the
 frontrunners of the pixel:
 
 - *Profile.* Every ranking comes twice: as it is, with $(1 - q) P(r)$, and with the one
-  of $a$ and $b$ it ranks lower moved last, with $q P(r)$. IRV, DAC and the schedules of
-  @sec-irv-set run on these $2 R$ rankings.
+  of $a$ and $b$ it ranks lower moved last, with $q P(r)$. IRV and DAC run on these
+  $2 R$ rankings.
 - *Pairwise shares.* $pi'_(i j) = pi_(i j) + q sum_r P(r) ([i "above" j "in" r'] - [i
   "above" j "in" r])$, with $r'$ the buried ranking. Only the pairs of $a$ or $b$ with a
   third candidate change. The sum needs the profile, so burial makes the pairwise
@@ -1769,7 +1703,6 @@ burying voters. The part of the square with another winner than with sincere vot
   [FPTP, Two-round], [0], [0], [0],
   [IRV], [0.5%], [1.4%], [3.3%],
   [KOTH], [0.8%], [3.4%], [33%],
-  [IRV set + KOTH + Score], [2.2%], [4.7%], [11%],
   [Baldwin, Nanson, Schulze, Minimax], [1.5%], [5.5%], [43–44%],
   [Condorcet, Black], [1.5–1.6%], [5.9%], [45%],
   [DAC], [2.2%], [6.2%], [27%],
@@ -1817,8 +1750,7 @@ last.
 *Empty tallies.* Where all voters compromise, no voter has a third candidate first, and
 IRV's first rounds drop candidates with empty tallies. Two empty tallies tie, but that
 decides nothing: such a candidate has no ballots to pass on, and gets none, since it goes
-before any candidate with ballots, so their order changes no winner. The compiled rounds
-of IRV and of the schedules leave these ties out of the margin, which would otherwise be
+before any candidate with ballots, so their order changes no winner. The compiled rounds of IRV leave these ties out of the margin, which would otherwise be
 0 on the whole square.
 
 *All voters.* At $y = 1$ every first choice is a frontrunner, so FPTP elects the one of
@@ -1854,7 +1786,6 @@ square with another winner than with sincere voters:
   [KOTH], [0.4%], [0.5%], [0.5%],
   [STAR], [0.5%], [0.7%], [1.2%],
   [Baldwin, Nanson, Schulze, Condorcet, Minimax, Black], [0.7%], [0.8%], [1.2%],
-  [IRV set + KOTH + Score], [1.7%], [2.2%], [3.4%],
   [IRV], [1.9%], [1.9%], [1.9%],
   [Score], [2.4%], [4.2%], [7.1%],
   [Borda], [2.7%], [4.0%], [6.6%],
@@ -2771,11 +2702,9 @@ voters the cells are taken in the box of @sec-normal and summed with Owen's T.
 *The whole profile.* IRV needs the first choices among every set of remaining
 candidates. In a benchmark with 8 candidates it visited 106 of the 247 sets of two or
 more, so computing sets lazily saves little, and IRV uses the full arrangement. So does
-IRV set + KOTH + Score (@sec-irv-set), which needs the same first choices for its
-schedules, and DAC (@sec-dac), whose coalitions are the first $k$ candidates of every
-ranking.
+DAC (@sec-dac), which needs the first $k$ candidates of every ranking.
 
-All three are sums of edge terms: the Green integrals of @sec-edges for Beta voters and
+Both are sums of edge terms: the Green integrals of @sec-edges for Beta voters and
 the signed triangles of @sec-normal for normal voters.
 
 *Bullet voters* (@sec-bullet) need the shares of their method, and next to pairwise or
@@ -2871,8 +2800,7 @@ remain are therefore compiled with numba:
 - the clipping of a polygon by a bisector (`ranking_cells`), which with a vectorized
   test of which cells a bisector crosses takes the arrangement of 8 candidates from
   120 ms to 5 ms;
-- the rounds of IRV (@ch-methods), and the schedules of IRV set + KOTH + Score, each set
-  of remaining candidates tallied once (@sec-irv-set);
+- the rounds of IRV (@ch-methods);
 - the rounds of DAC, on the scores of all sets of candidates as bit masks (@sec-dac);
 - which candidates a round of Baldwin or Nanson drops (`build/rounds.py`); their Borda
   scores (@eq-borda-pairwise) are one `einsum` of numpy per round;
@@ -2936,18 +2864,16 @@ $psi_c$ below changes only with the winner:
   [Nanson], [smallest distance of a Borda score from the mean over all rounds],
   [Score], [lead of the top mean score over the second],
   [Majority judgment], [smallest gap $gamma$ of @eq-mj-gap between the winner and another candidate],
-  [IRV set + KOTH + Score], [the smallest of $mu_W$ of @sec-irv-set, the margin of KOTH and the lead of the top mean score in $F$],
   table.hline(),
 ))
 
 All methods are built from blocks (`yeelab.build`), and the margin is never put together
 by hand: every block that decides computes the gap of its decision, and the margin is the
 smallest of them. `Highest` has the lead of the top score (with `among`, among the
-candidates chosen, and their margin), `Eliminate` the gap of each round, `Schedules`
-that of every round of every schedule, `DescendingCoalitions` that of every round,
+candidates chosen, and their margin), `Eliminate` the gap of each round, `DescendingCoalitions` that of every round,
 `Unbeaten` the gaps below and `Conditional` those of the condition and selected method. Baldwin and
 Nanson are in @sec-baldwin-nanson, Minimax and Black in @sec-minimax-black, DAC in
-@sec-dac, the score methods in @sec-score and IRV set + KOTH + Score in @sec-irv-set.
+@sec-dac and the score methods in @sec-score.
 
 *IRV.* On each side of a curve where some round's two lowest tallies tie, the gap of
 that round tends to $0$. So $mu$ is continuous, and it vanishes on every curve where an

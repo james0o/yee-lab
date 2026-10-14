@@ -38,7 +38,6 @@ from yeelab.build import (
     Graded,
     Highest,
     Plurality,
-    Schedules,
     Score,
     ScoreComparisons,  # for eval(repr(...))
     Scored,
@@ -48,10 +47,9 @@ from yeelab.build import (
     Voters,
 )
 from yeelab.build.strategic import POLL, bulleted, burying, compromising
-from yeelab.voting import irv_rounds, irv_schedules
+from yeelab.voting import irv_rounds
 
-from references import (TOLERANCE, dac_reference, elimination_reference, levels_of, random_profiles,
-                        schedules_reference, voters_of)
+from references import TOLERANCE, dac_reference, elimination_reference, levels_of, random_profiles, voters_of
 
 # the shares of the voters who bullet vote, bury and compromise, where any shares will do
 BULLET, BURIAL, COMPROMISE = 0.3, 0.4, 0.6
@@ -247,9 +245,7 @@ def test_strategies_are_blocks():
     for name, bullet, polled in (("fptp", {FIRST}, {FIRST}), ("irv", {PROFILE}, {PROFILE, FIRST}),
                                  ("borda", {PAIRWISE, FIRST}, {PAIRWISE, PROFILE, FIRST}),
                                  ("score", {scored, FIRST}, {scored, Ballots(scored), FIRST}),
-                                 ("star", star | {FIRST}, star | {Ballots(scored), FIRST}),
-                                 ("irv_set_koth_score", {PROFILE, FIRST, PAIRWISE, scored},
-                                  {PROFILE, FIRST, PAIRWISE, scored, Ballots(scored)})):
+                                 ("star", star | {FIRST}, star | {Ballots(scored), FIRST})):
         assert Bullet(METHODS[name], 0.5).needs == bullet, name
         assert Burial(METHODS[name], 0.5).needs == polled - ({PROFILE} if name == "fptp" else set()), name
         assert Compromise(METHODS[name], 0.5).needs == polled | ({PROFILE} if name == "fptp" else set()), name
@@ -381,7 +377,7 @@ def test_where_all_voters_bullet_vote_the_most_first_choices_win(profile):
 def test_bullet_voters_of_bullet_voters(profile):
     """b of the voters bullet vote, and a of the rest: 1 - (1 - a)(1 - b) of them do."""
     voters = _every_share(*profile)
-    for name in ("irv", "dac", "borda", "schulze", "star", "irv_set_koth_score"):
+    for name in ("irv", "dac", "borda", "schulze", "star"):
         winner, margin = Bullet(METHODS[name], 0.6).evaluate(voters)
         nested, nested_margin = Bullet(Bullet(METHODS[name], 0.2), 0.5).evaluate(voters)
         clear = margin > TOLERANCE
@@ -524,8 +520,7 @@ def test_compromise_keeps_the_two_round_system_which_fptp_and_irv_become(profile
 def test_two_empty_tallies_decide_nothing():
     """Where no voter has candidates 2 and 3 first, they go first, in either order, and
     take no ballots with them: the margin of IRV is the smaller of the lead of the other
-    two and the smaller of their tallies, which the last of 2 and 3 to go falls short of.
-    Every schedule is decided by the same."""
+    two and the smaller of their tallies, which the last of 2 and 3 to go falls short of."""
     rankings = np.array(list(permutations(range(4))))
     probs = np.random.default_rng(4).dirichlet(np.full(len(rankings), 0.5), size=50)
     probs[:, rankings[:, 0] >= 2] = 0
@@ -535,9 +530,6 @@ def test_two_empty_tallies_decide_nothing():
     np.testing.assert_array_equal(winner, first.argmax(axis=-1))
     expected = np.minimum(first[:, :2].min(axis=-1), np.abs(first[:, 0] - first[:, 1]))
     np.testing.assert_allclose(margin, expected, rtol=0, atol=1e-12)
-    chosen, schedules_margin = irv_schedules(rankings, probs)
-    assert (schedules_margin > 0).all()
-    np.testing.assert_array_equal(chosen, np.eye(4, dtype=bool)[first.argmax(axis=-1)])
 
 
 def test_strategic_voters_need_their_shares():
@@ -571,19 +563,15 @@ def test_strategies_match_the_references_on_weak_orders(profile, bullet, bury, c
     on the weak orders of all kinds of voters, on the points of each pair of frontrunners:
     the rankings as they are, buried, compromised and both, with (1 - b) times the
     products of the shares, and the bullet ballots with b of each first choice, which
-    neither burying nor compromising changes; the schedules too, with up to five
-    candidates. With bullet voters alone there is no poll."""
+    neither burying nor compromising changes. With bullet voters alone there is no poll."""
     rankings, probs = profile
     voters, n = voters_of(rankings, probs), rankings.shape[1]
     pairs, gap = _pairs(voters)
     first = probs.astype(np.float64) @ np.eye(n)[rankings[:, 0]]
     methods = {name: METHODS[name] for name in REFERENCED}
-    if n <= 5:
-        methods["schedules"] = Schedules(Tally(Plurality()))
     for name, method in methods.items():
         strategic = Bullet(Burial(Compromise(method, compromise), bury), bullet)
-        choose = strategic.select if name == "schedules" else strategic.evaluate
-        result, margin = choose(voters)
+        result, margin = strategic.evaluate(voters)
         expected, expected_margin = np.empty_like(result), np.empty_like(margin)
         for pair in np.unique(pairs):
             at = pairs == pair
@@ -592,10 +580,7 @@ def test_strategies_match_the_references_on_weak_orders(profile, bullet, bury, c
                                                   compromise, a, b)
             levels = np.concatenate([levels_of(every), 1 - np.eye(n, dtype=np.int64)])
             shares = np.concatenate([(1 - bullet) * weights, bullet * first[at]], axis=-1)
-            if name == "schedules":
-                expected[at], expected_margin[at] = schedules_reference(Plurality(), levels, shares,
-                                                                        weigh=_tied_weights)
-            elif name == "dac":
+            if name == "dac":
                 expected[at], expected_margin[at] = dac_reference(levels, shares)
             elif isinstance(method, Eliminate) and isinstance(method.totals, Tally):  # not minimax: Weakest
                 left, expected_margin[at] = elimination_reference(method.totals.ballot, method.how, levels, shares,

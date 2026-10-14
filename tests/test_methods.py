@@ -11,12 +11,9 @@ likewise; Unbeaten among everyone is Unbeaten itself.
 
 The methods of the whole profile are checked on the ranking shares of the profiles
 (conftest.py): every elimination, down to one and to two candidates (Highest is
-Eliminate(totals, how="all")); Schedules, the winners of every elimination schedule, by
-the compiled voting.irv_schedules and by one tally per round; Highest(totals,
-among=finalists), the highest total among the finalists, and irv_set_koth_score, the
-highest mean score among the schedules' winners and king of the hill; DAC, whose margin
-also bounds how much the shares must change to change the winner. The references are
-those of references.py and those below.
+Eliminate(totals, how="all")); Highest(totals, among=finalists), the highest total among
+the finalists; and DAC, whose margin also bounds how much the shares must change to
+change the winner. The references are those of references.py and those below.
 """
 
 import numpy as np
@@ -31,7 +28,6 @@ from yeelab.build import (
     Margins,
     Pairwise,
     Plurality,
-    Schedules,
     Score,
     Scored,
     ScoredPairwise,
@@ -43,8 +39,7 @@ from yeelab.build import (
 )
 from yeelab.voting import CYCLE
 
-from references import (TOLERANCE, dac_reference, elimination_reference, levels_of, random_profiles,
-                        schedules_reference, voters_of)
+from references import TOLERANCE, dac_reference, elimination_reference, levels_of, random_profiles, voters_of
 
 BALLOTS = [Plurality(), BordaCount()]
 # every elimination: the four methods and the one other combination of these blocks
@@ -214,12 +209,6 @@ RUNOFFS = [
     _runoff(Margins(Pairwise()), METHODS["fptp"], METHODS["condorcet"]),
     _runoff(StrongestPaths(Margins(Pairwise())), METHODS["borda"], METHODS["fptp"]),
 ]
-
-
-@pytest.fixture(scope="module")
-def plurality_schedules(profile):
-    """schedules_reference on first choices, once per profile: (chosen, margin)."""
-    return schedules_reference(Plurality(), *profile)
 
 
 def _highest_among_reference(totals, chosen, margin):
@@ -434,24 +423,6 @@ def test_the_candidates_kept_match_reference(profile, method):
     assert (chosen.sum(axis=-1) == method.until).all()
 
 
-@pytest.mark.parametrize("ballot", BALLOTS, ids=repr)
-def test_schedules_match_reference(profile, plurality_schedules, ballot):
-    """Every schedule's winner and the smallest gap of all their rounds: on first choices
-    by the compiled voting.irv_schedules, and by one tally per round of every schedule."""
-    rankings, probs = profile
-    voters = voters_of(rankings, probs)
-    if isinstance(ballot, Plurality):
-        expected, expected_margin = plurality_schedules
-    else:
-        expected, expected_margin = schedules_reference(ballot, rankings, probs)
-    clear = expected_margin > TOLERANCE
-    assert clear.mean() > 0.5  # not vacuous
-    method = Schedules(Tally(ballot))
-    for chosen, margin in (method.select(voters), method.rounds(voters)):
-        np.testing.assert_array_equal(chosen[clear], expected[clear])
-        np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-5)
-
-
 def test_highest_among_the_finalists(profile):
     """The highest total among the candidates a Winner chooses, with the smaller margin;
     a Tally counted again among them, other totals as they are. The most first choices
@@ -492,36 +463,6 @@ def test_highest_among_no_one_is_no_one(d):
     assert (expected == CYCLE).any() and (expected != CYCLE).any()  # not vacuous
     np.testing.assert_array_equal(winner, expected)
     np.testing.assert_array_equal(margin, expected_margin)
-
-
-def test_irv_set_koth_score_matches_reference(profile, plurality_schedules):
-    """The highest mean score among the winners of every schedule and king of the hill,
-    with the smallest margin of them all; and without the king, among the winners of
-    every schedule alone."""
-    rankings, probs = profile
-    n = rankings.shape[1]
-    unscored = np.random.default_rng(n).random(probs.shape[:-1] + (n,))
-    voters = voters_of(rankings, probs)
-    voters = Voters(voters.first, voters.pairwise, rankings, probs, unscored={Scored(6, power=1.5): unscored})
-    chosen, gap = plurality_schedules
-    king, king_margin = _koth_reference(voters.first.astype(np.float64), voters.pairwise.astype(np.float64))
-    with_king = chosen | (np.arange(n) == king[..., None])
-    irv_set_score = Highest(Tally(Score(6, power=1.5)), among=Schedules(Tally(Plurality())))
-    results = []
-    for method, finalists, finalists_margin in ((irv_set_score, chosen, gap),
-                                                (METHODS["irv_set_koth_score"], with_king,
-                                                 np.minimum(gap, king_margin))):
-        expected, expected_margin = _highest_among_reference(-unscored, finalists, finalists_margin)
-        winner, margin = method.evaluate(voters)
-        results.append((winner, margin))
-        clear = expected_margin > TOLERANCE
-        assert clear.mean() > 0.5, method  # not vacuous
-        np.testing.assert_array_equal(winner[clear], expected[clear], err_msg=repr(method))
-        np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-5, err_msg=repr(method))
-    # the king is the one finalist more: where the winner changes, the king wins
-    (without, _), (with_, margin) = results
-    changed = (without != with_) & (margin > TOLERANCE)
-    np.testing.assert_array_equal(with_[changed], king[changed])
 
 
 def test_dac_matches_reference(profile):

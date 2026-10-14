@@ -9,7 +9,7 @@ approved candidate), with its lead as the margin, also between candidates nearly
 voters give the top score. A Mix of two ballots must tally the mix of their voters, and
 be the one ballot itself where all voters mark it. Ties go to the lowest index.
 
-METHODS are the fifteen expressions, every block prints as the expression that builds
+METHODS are the built expressions, every block prints as the expression that builds
 it, needs the shares it reads, and fails when built from wrong blocks or arguments. The
 methods themselves are checked against references in test_methods.py, the strategic
 voters in test_strategic.py.
@@ -38,7 +38,6 @@ from yeelab.build import (
     Mix,
     Pairwise,
     Plurality,
-    Schedules,
     Score,
     ScoreAvg,
     ScoreCluster,
@@ -119,10 +118,8 @@ def test_a_method_chooses_one_candidate():
                                       Conditional(irv, two, irv))] \
         == [2, 1, None, 2, None]
     assert all(method.seats == 1 for method in METHODS.values())
-    assert Schedules(Tally(Plurality())).seats is None
     for block, chooses in ((two, "2 candidates"), (two | irv, "a number of candidates"),
-                           (Eliminate(Tally(Plurality()), how="min", until=3), "3 candidates"),
-                           (Schedules(Tally(Plurality())), "a number of candidates")):
+                           (Eliminate(Tally(Plurality()), how="min", until=3), "3 candidates")):
         with pytest.raises(ValueError, match=re.escape(f"{block!r} chooses {chooses}, not a winner")):
             block.evaluate(Voters(first=np.full((2, 4), 0.25)))
 
@@ -429,14 +426,11 @@ def test_methods_are_the_fifteen_expressions_they_print_as():
         "koth": koth,
         "score": Highest(Tally(Score(6, power=1.5))),
         "star": Unbeaten(ScoreComparisons(Score(6, power=1.5)), among=Highest(Tally(Score(6, power=1.5)), n=2)),
-        "irv_set_koth_score": Highest(Tally(Score(6, power=1.5)), among=Union(Schedules(Tally(Plurality())), koth)),
     }
     assert {name: METHODS[name] for name in expected} == expected
     assert list(METHODS)[:len(expected)] == list(expected)
     fptp, irv, borda = METHODS["fptp"], METHODS["irv"], METHODS["borda"]
     assert repr(koth) == "Unbeaten(Margins(Pairwise()), against=Highest(Tally(Plurality())), order=Tally(Plurality()))"
-    assert repr(METHODS["irv_set_koth_score"]) == (
-        f"Highest(Tally(Score(6, power=1.5)), among=Schedules(Tally(Plurality())) | {koth!r})")
     assert repr(Eliminate(Tally(BordaCount()), how="mean", until=2)) == 'Eliminate(Tally(BordaCount()), how="mean", until=2)'
     assert repr(fptp | (irv | borda)) == f"{fptp!r} | ({irv!r} | {borda!r})"
     blocks = [*expected.values(), *BALLOTS, *PAIR_BLOCKS, fptp | irv | borda, fptp | (irv | borda),
@@ -444,8 +438,7 @@ def test_methods_are_the_fifteen_expressions_they_print_as():
               Unbeaten(margins, among=fptp | borda),
               Conditional(Highest(Tally(BY_MEAN), n=3), fptp, irv),
               Eliminate(Tally(BordaCount()), how="min", until=2), Highest(Tally(Plurality()), n=2),
-              Schedules(Tally(BordaCount())), Highest(Weakest(margins), among=fptp | irv),
-              Eliminate(Tally(Plurality()), how="all", among=Schedules(Tally(Plurality()))),
+              Highest(Weakest(margins), among=fptp | irv),
               Mix(BY_GAP, BY_MEAN, share=0.25)]
     for block in blocks:
         assert eval(repr(block)) == block
@@ -476,7 +469,6 @@ def test_needs():
     assert METHODS["koth"].needs == METHODS["two_round"].needs == {FIRST, PAIRWISE}
     assert METHODS["score"].needs == {Scored(6, power=1.5)} == {Scored(6, "range", power=1.5)}
     assert METHODS["star"].needs == {Scored(6, power=1.5), ScoredPairwise(Scored(6, power=1.5))}
-    assert METHODS["irv_set_koth_score"].needs == {PROFILE, FIRST, PAIRWISE, Scored(6, power=1.5)}
     assert Unbeaten(margins, among=METHODS["koth"] | METHODS["irv"]).needs == {FIRST, PAIRWISE, PROFILE}
     assert Unbeaten(margins, among=METHODS["borda"] | METHODS["minimax"]).needs == {PAIRWISE}
     assert Eliminate(Tally(Plurality()), how="min", until=2).needs == {PROFILE}
@@ -489,10 +481,6 @@ def test_needs():
                         (ScoreCluster, "cluster")):
         assert Highest(Tally(score(6))).needs == {Scored(6, rule)}
     assert Eliminate(Tally(BY_GAP), how="min").needs == {Scored(2, "dhondt")}
-    assert Highest(Tally(Score(6, power=1.5)), among=Schedules(Tally(Plurality()))).needs == {
-        PROFILE, Scored(6, power=1.5)}
-    assert Schedules(Tally(Plurality())).needs == {PROFILE}
-    assert Schedules(Tally(BordaCount())).needs == {PAIRWISE}
     assert Highest(Tally(Plurality()), among=Highest(Tally(Plurality()), n=2)).needs == {FIRST, PROFILE}
     assert Highest(Weakest(margins), among=METHODS["fptp"]).needs == {PAIRWISE, FIRST}
     assert Conditional(METHODS["fptp"], METHODS["fptp"], METHODS["schulze"]).needs == {FIRST, PAIRWISE}
@@ -540,19 +528,17 @@ def test_tally_takes_the_mean_unless_told_otherwise():
 
 
 def test_the_median_is_a_tally_like_any_other():
-    """Majority judgment (METHODS["mj"]) is Highest of the median of Score's ballot. Every
-    block that takes totals takes it and reads the shares of every score: Highest with n
-    and among, Eliminate of the lowest, Schedules (every schedule elects the candidate
-    ahead) and the order of a king's challengers; not the mean of the totals, which are
-    only an order. The median of a Mix is that of the mix of its voters, of one ballot
-    where all voters mark it."""
+    """Majority judgment (METHODS["mj"]) is Highest of the median of Score's ballot.
+    Blocks that take totals read the shares of every score: Highest with n and among,
+    Eliminate of the lowest, and the order of a king's challengers; not the mean of the
+    totals, which are only an order. The median of a Mix is that of the mix of its
+    voters, of one ballot where all voters mark it."""
     median = Tally(Score(6, power=1.5), statistic="median")
     graded = Graded(Scored(6, power=1.5))
     assert METHODS["mj"] == Highest(median) and METHODS["mj"].seats == 1
     assert repr(METHODS["mj"]) == 'Highest(Tally(Score(6, power=1.5), statistic="median"))'
     assert eval(repr(METHODS["mj"])) == METHODS["mj"]
     assert METHODS["mj"].needs == Highest(median, n=2).needs == Eliminate(median, how="min").needs == {graded}
-    assert Schedules(median).needs == {graded}
     assert Highest(median, among=METHODS["fptp"]).needs == {graded, FIRST}
     assert Unbeaten(MARGINS, against=METHODS["fptp"], order=median).needs == {PAIRWISE, FIRST, graded}
     mixed = Mix(Score(6), ScoreAvg(6), share=0.25)
@@ -573,9 +559,6 @@ def test_the_median_is_a_tally_like_any_other():
     chosen, gap = Highest(median, n=2).select(voters)
     np.testing.assert_array_equal(chosen, totals >= np.sort(totals, axis=-1)[..., -2:-1])
     np.testing.assert_array_equal(gap, np.diff(np.sort(totals, axis=-1)[..., -3:-1], axis=-1)[..., 0])
-    for chosen_, margin_ in (Schedules(median).select(voters), Schedules(median).rounds(voters)):
-        np.testing.assert_array_equal(chosen_, winner[..., None] == np.arange(5))
-        assert (margin_ <= margin).all()
     expected = majority_totals(0.75 * shares[Graded(Scored(6))] + 0.25 * shares[Graded(Scored(6, "avg"))])
     np.testing.assert_allclose(Tally(mixed, statistic="median").evaluate(voters), expected, rtol=0, atol=1e-15)
     np.testing.assert_array_equal(Tally(Mix(Score(6), ScoreAvg(6), share=0), statistic="median").evaluate(voters),
@@ -617,8 +600,6 @@ MARGINS = Margins(Pairwise())
      "Union expects a Winner, got CandidateTotals: Tally(Plurality())"),
     (lambda: Highest(Tally(Plurality()), among=Tally(Plurality())), TypeError,
      "Highest expects a Winner as among, got CandidateTotals: Tally(Plurality())"),
-    (lambda: Schedules(BordaCount()), TypeError,
-     "Schedules expects a Tally (it tallies the remaining candidates again), got a Ballot: BordaCount()"),
     # arguments that do not go together, or out of their range
     (lambda: Unbeaten(MARGINS, against=METHODS["fptp"]), ValueError,
      "Unbeaten takes against and order together, or neither"),

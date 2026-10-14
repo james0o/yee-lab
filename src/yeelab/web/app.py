@@ -233,13 +233,6 @@ METHOD_INFO = {
            "taken out and the medians of the rest compared, here a share of the voters at a "
            "time, since the voters of a pixel are a distribution. With two categories it is "
            "approval voting. The score categories and power use the same sliders as Score."},
-    "irv_set_koth_score": {"label": "IRV set + KOTH + Score", "description": "IRV set + KOTH + "
-                           "Score: the candidates with the fewest first choices among the "
-                           "remaining ones are eliminated, any number of them in a round, in every "
-                           "possible way: one at a time (IRV), all at once (FPTP), all but two and "
-                           "then one (two-round) and all between. Of the winners of all these and "
-                           "the King of the hill winner, the highest mean score wins. The score "
-                           "categories and power use the same sliders as Score."},
     "voronoi": {"label": "Voronoi", "description": "The nearest candidate to the pixel, without "
                 "voters: what the ranked methods draw when all voters are at their pixel. With "
                 "pixels at geometric medians it is drawn only where the voters above have one, "

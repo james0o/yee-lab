@@ -72,49 +72,6 @@ def elimination_reference(ballot, how, rankings, probs, until=1, weigh=ranking_w
     return left, margin
 
 
-def compositions(total):
-    """Every way to write total as an ordered sum of whole numbers of at least 1."""
-    if total == 0:
-        yield ()
-    for first in range(1, total + 1):
-        for rest in compositions(total - first):
-            yield (first, *rest)
-
-
-def schedules_reference(ballot, rankings, probs, weigh=ranking_weights):
-    """Schedules(Tally(ballot)) point by point, from its definition: for every way to
-    split the C - 1 eliminations into rounds, each round drops that many of the lowest
-    totals of the remaining candidates (ties: the lowest index stays), tallied again
-    among them. The winners of all schedules (..., C) and the smallest gap of any round:
-    the lowest total kept minus the highest dropped. With the `weigh` of weak orders
-    (test_strategic.py), rankings are their levels."""
-    n = rankings.shape[1]
-    schedules = list(compositions(n - 1))
-    assert len(schedules) == 2 ** (n - 2)
-    weights = {}  # by the remaining candidates
-    chosen = np.zeros(probs.shape[:-1] + (n,), dtype=bool)
-    margin = np.empty(probs.shape[:-1])
-    for point in np.ndindex(*probs.shape[:-1]):
-        shares, gaps, tallied = probs[point].astype(np.float64), [np.inf], {}
-        for schedule in schedules:
-            alive = np.ones(n, dtype=bool)
-            for drop in schedule:
-                key = alive.tobytes()
-                if key not in weights:
-                    weights[key] = weigh(ballot, rankings, alive)
-                if key not in tallied:  # the schedules share their first rounds
-                    tallied[key] = shares @ weights[key]
-                remaining = np.flatnonzero(alive)
-                totals = tallied[key][remaining]
-                highest = np.argsort(-totals, kind="stable")  # ties: the lowest index first
-                keep = len(remaining) - drop
-                gaps.append(totals[highest[keep - 1]] - totals[highest[keep]])
-                alive[remaining[highest[keep:]]] = False
-            chosen[point + (np.flatnonzero(alive)[0],)] = True
-        margin[point] = min(gaps)
-    return chosen, margin
-
-
 def levels_of(rankings):
     """The rankings (R, C), best first, as weak orders: L[r, c] = position of c."""
     return np.argsort(rankings, axis=1)

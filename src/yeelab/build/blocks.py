@@ -19,7 +19,6 @@ Every block has one type of output:
     Winner           Highest(totals, n=...),            the candidates chosen and the
                      Highest(totals, among=winner),     margin at every point;
                      Eliminate(totals, how=..., until=...),  a method chooses one, its
-                     Schedules(Tally(ballot)),          winner
                      DescendingCoalitions(),
                      Unbeaten(diffs, among=...),
                      Unbeaten(diffs, against=winner, order=totals),
@@ -78,14 +77,6 @@ the finalist more voters score higher. first | second (Union) chooses the candid
 methods as the finalists of a runoff. Highest(totals, among=finalists) is the highest
 total among them, a Tally counted again among them.
 
-Schedules(Tally(ballot)) chooses the winners of every elimination schedule, every way
-to drop the lowest totals some at a time: one at a time is Eliminate(how="min"), all
-at once Highest. On first choices that is IRV, FPTP, the top two and all between, and
-
-    Highest(Tally(Score(6, power=1.5)), among=Schedules(Tally(Plurality())) | koth)
-
-the highest mean score among their winners and the king of the hill.
-
 DescendingCoalitions() is descending acquiescing coalitions (DAC): every set of
 candidates scores the share of the voters who rank all of it above all others, and from
 the highest score down each set makes the candidates outside it ineligible, unless
@@ -116,7 +107,7 @@ from yeelab.build.judgment import majority_totals
 from yeelab.build.rounds import drop_below_mean, drop_lowest
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Graded, Scored, ScoredPairwise, Share, Voters
 from yeelab.score import AVG, CLUSTER, DELTA, DHONDT, HYBRID, KAPPA, MU, POWER, RANGE
-from yeelab.voting import CYCLE, descending_coalitions, irv_rounds, irv_schedules
+from yeelab.voting import CYCLE, descending_coalitions, irv_rounds
 
 Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) or (chosen, margin) at every point
 HOW = ("min", "mean", "all")  # what Eliminate drops each round
@@ -238,11 +229,6 @@ class Ballot(Block):
         None to tally the remaining candidates again in every round."""
         return None
 
-    def schedules(self, voters: Voters) -> Result | None:
-        """Schedules(Tally(self)).select() by a formula of the ballot's own, or None to
-        tally the remaining candidates again in every round of every schedule."""
-        return None
-
     @property
     def needs_graded(self) -> frozenset[Share]:
         """The shares grades() reads, for the median (Tally(self, statistic="median")):
@@ -290,11 +276,6 @@ class Plurality(Ballot):
         """Instant runoff (how="min") by the compiled rounds of voting.irv_rounds, which
         move only the ballots of the eliminated candidate."""
         return irv_rounds(voters.rankings, voters.probs, voters.bullet) if how == "min" else None
-
-    def schedules(self, voters: Voters) -> Result | None:
-        """Every elimination schedule by the compiled voting.irv_schedules, which tallies
-        each set of remaining candidates that a schedule reaches once."""
-        return irv_schedules(voters.rankings, voters.probs, voters.bullet)
 
 
 @dataclass(frozen=True)
@@ -1112,59 +1093,6 @@ class Highest(Eliminate):
         n = f", n={self.n!r}" if self.n != 1 else ""
         among = f", among={self.among!r}" if self.among is not None else ""
         return f"Highest({self.totals!r}{n}{among})"
-
-
-@dataclass(frozen=True, eq=False)
-class Schedules(Winner):
-    """The winners of every elimination schedule: each round drops some number of the
-    lowest totals of the remaining candidates, tallied again among them, in every way to
-    split the C - 1 eliminations into rounds (2^(C - 2) schedules). One at a time is
-    Eliminate(totals, how="min"), all at once Highest(totals), C - 2 and then one the two
-    highest head to head. Chooses all their winners: the highest total of every set of
-    remaining candidates that some schedule reaches, since each can keep one next.
-
-    The margin is the smallest gap of any round of any schedule, the k-th highest total
-    minus the next where a round keeps k: the winners change only where some round's
-    decision flips, and there its gap is 0.
-    """
-
-    totals: Tally
-    seats = None  # one winner or more; not a field
-
-    def __post_init__(self):
-        _expect(self, self.totals, Tally, "a Tally (it tallies the remaining candidates again)")
-
-    @property
-    def needs(self) -> frozenset[Share]:
-        return self.totals.needs_remaining
-
-    def select(self, voters: Voters) -> Result:
-        result = self.totals.ballot.schedules(voters) if self.totals.statistic == "mean" else None
-        return self.rounds(voters) if result is None else result
-
-    def rounds(self, voters: Voters) -> Result:
-        """select() with one tally per round of every schedule, whatever formula the
-        ballot has of its own (Ballot.schedules)."""
-        n = voters.n_candidates
-        chosen = np.zeros((*voters.shape, n), dtype=bool)
-        margin = np.full(voters.shape, np.inf)
-
-        def schedules(alive, left):
-            """Every schedule from alive (..., C), `left` candidates at every point."""
-            if left == 1:
-                chosen[...] |= alive
-                return
-            totals = np.where(alive, self.totals.evaluate(voters, alive), -np.inf)
-            for keep in range(1, left):  # drop the left - keep lowest at once
-                kept, lead = _highest(totals, keep)
-                np.minimum(margin, lead, out=margin)
-                schedules(kept, keep)
-
-        schedules(np.ones((*voters.shape, n), dtype=bool), n)
-        return chosen, margin
-
-    def __repr__(self):
-        return f"Schedules({self.totals!r})"
 
 
 @dataclass(frozen=True, eq=False)

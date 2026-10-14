@@ -12,9 +12,6 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
                                       remaining set)
     dac                               the whole profile (the first k candidates of
                                       every ranking, for every k)
-    irv_set_koth_score                the whole profile for every elimination schedule,
-                                      the shares of koth, and the score shares below for
-                                      the final
     score                             the part of the top score a candidate does not
                                       get, and score comparisons: these voters have
                                       curved borders, so the shares come from a grid of
