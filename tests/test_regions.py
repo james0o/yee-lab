@@ -224,6 +224,23 @@ def test_boundary_distance_uses_perpendicular_projection_onto_segments():
     assert distance[0] == pytest.approx(0.2)
 
 
+def test_point_to_segments_goes_to_the_nearer_end_beyond_a_segment():
+    """Beyond its ends the nearest point of a segment is the nearer end, segments of no
+    length are left out, and the distance is the smallest over all segments."""
+    from yeelab.margin.metrics import _point_to_segments
+
+    segments = np.array([[[0.0, 0.0], [1.0, 0.0]], [[2.0, 2.0], [2.0, 2.0]]])
+    points = np.array([[0.5, 0.3], [-0.3, 0.4], [1.6, -0.8], [2.0, 2.1]])
+    assert _point_to_segments(points, segments) == pytest.approx([0.3, 0.5, 1.0, 5.41 ** 0.5])
+
+    rng = np.random.default_rng(0)
+    points, segments = rng.random((50, 2)), rng.random((40, 2, 2))
+    starts, directions = segments[:, 0], segments[:, 1] - segments[:, 0]
+    t = np.clip(((points[:, None] - starts) * directions).sum(-1) / (directions ** 2).sum(-1), 0, 1)
+    nearest = np.linalg.norm(points[:, None] - (starts + t[..., None] * directions), axis=-1).min(axis=1)
+    assert _point_to_segments(points, segments) == pytest.approx(nearest, abs=1e-15)
+
+
 def test_grid_reaches_the_walls():
     coords, medians = grid(10, 300)
     assert coords[0] == 0 and coords[-1] == 1 and len(coords) == 12

@@ -2875,7 +2875,10 @@ remain are therefore compiled with numba:
   of remaining candidates tallied once (@sec-irv-set);
 - the rounds of DAC, on the scores of all sets of candidates as bit masks (@sec-dac);
 - which candidates a round of Baldwin or Nanson drops (`build/rounds.py`); their Borda
-  scores (@eq-borda-pairwise) are one `einsum` of numpy per round.
+  scores (@eq-borda-pairwise) are one `einsum` of numpy per round;
+- the distance of every sample of one boundary to the nearest segment of the other
+  (@ch-metrics): both directions, about 700 samples against 1200 segments each at
+  $G = 320$, take 3 to 9 ms instead of 55 to 130 ms in numpy.
 
 The kernels release the interpreter lock but are not parallel themselves; `threads.py`
 runs chunks of their work (edges, pixels) in a pool of threads. A kernel with numba's

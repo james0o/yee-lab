@@ -352,6 +352,9 @@ def _warm_up():
     regions(DIAGRAMS[0], CANDIDATES, Model("beta", DEVIATION, SPREAD), 32, "geometric")
     # the kernels of the score shares of strategic voters: STAR reads them all
     regions(Burial(Compromise(MARGINS["star"], 0.5), 0.5), CANDIDATES, Model("beta", DEVIATION, SPREAD), 32)
+    # the kernel of the comparison with the Voronoi diagram
+    shapes, points, winner, _ = diagram(DIAGRAMS[0], CANDIDATES, Model("beta", DEVIATION, SPREAD), 32)
+    voronoi_agreement(CANDIDATES, points, winner, shapes, regions("voronoi", CANDIDATES, None, 32))
 
 
 threading.Thread(target=_warm_up, daemon=True).start()
