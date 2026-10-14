@@ -30,12 +30,14 @@ part of the way, from where the usual diagram draws a point towards g(m) (`shift
 web UI steps through these to move the diagram between the two.
 """
 
+from itertools import combinations
+
 import contourpy
 import numpy as np
 
 from yeelab.build import (FIRST, METHODS, PAIRWISE, PROFILE, Ballots, Graded, Scored, ScoredPairwise, Share, Voters,
                           Winner)
-from yeelab.margin.geometric import PIXEL_MEDIAN, PixelMedian, geometric_medians
+from yeelab.margin.geometric import PIXEL_MEDIAN, PixelMedian, geometric_medians, rim
 from yeelab.margin.shares import (
     Model,
     ScoreGrid,
@@ -224,6 +226,74 @@ def regions(method: str | Winner, candidates, model: Model | None, size: int,
         kept = np.ix_(keep, keep)
         return contour_regions(coords[keep], winner[kept], margin[kept], points)
     return contour_regions(coords, winner, margin)
+
+
+def voronoi_edges(candidates):
+    """The exact borders between the Voronoi cells of the candidates within the unit
+    square: ([(start, end), ...], [(c, e), ...]), for each pair the part of its bisector
+    that is no farther from c and e than from any other candidate."""
+    candidates = np.asarray(candidates, dtype=np.float64)
+    squares = (candidates ** 2).sum(axis=1)
+    segments, pairs = [], []
+    for c, e in combinations(range(len(candidates)), 2):
+        normal = candidates[e] - candidates[c]
+        if not normal.any():
+            continue
+        middle, along = (candidates[c] + candidates[e]) / 2, np.array([-normal[1], normal[0]])
+        # the points middle + t along with n . p <= o: within the square, and for every
+        # other candidate f, 2 (f - c) . p <= |f|^2 - |c|^2
+        others = [f for f in range(len(candidates)) if f not in (c, e)]
+        normals = np.vstack([-np.eye(2), np.eye(2), 2 * (candidates[others] - candidates[c])])
+        offsets = np.concatenate([[0, 0, 1, 1], squares[others] - squares[c]])
+        slope, room = normals @ along, offsets - normals @ middle
+        with np.errstate(divide="ignore", invalid="ignore"):
+            bounds = room / slope
+        low, high = bounds[slope < 0].max(initial=-np.inf), bounds[slope > 0].min(initial=np.inf)
+        if low < high and (room[slope == 0] >= 0).all():
+            segments.append((middle + low * along, middle + high * along))
+            pairs.append((c, e))
+    return segments, pairs
+
+
+def _inside(ring, points):
+    """Whether each of the points (P, 2) is inside the ring (K, 2): a ray to the right
+    crosses it an odd number of times."""
+    x, y = points[:, :1], points[:, 1:]
+    ax, ay = ring[:, 0], ring[:, 1]
+    bx, by = np.roll(ax, -1), np.roll(ay, -1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        crossed = ((ay > y) != (by > y)) & (x < ax + (y - ay) * (bx - ax) / (by - ay))
+    return crossed.sum(axis=1) % 2 == 1
+
+
+def _within(segment, ring):
+    """The parts [(start, end), ...] of the segment (start, end) inside the ring (K, 2)."""
+    start, end = segment
+    step, edges, to = end - start, np.roll(ring, -1, axis=0) - ring, ring - start
+    cross = step[0] * edges[:, 1] - step[1] * edges[:, 0]
+    with np.errstate(divide="ignore", invalid="ignore"):  # start + t step = ring + u edges
+        t = (to[:, 0] * edges[:, 1] - to[:, 1] * edges[:, 0]) / cross
+        u = (to[:, 0] * step[1] - to[:, 1] * step[0]) / cross
+    cuts = np.unique(np.concatenate([[0.0, 1.0], t[(cross != 0) & (u >= 0) & (u < 1) & (t > 0) & (t < 1)]]))
+    inside = _inside(ring, start + (cuts[:-1] + cuts[1:])[:, None] / 2 * step)
+    return [(start + a * step, start + b * step) for a, b, kept in zip(cuts[:-1], cuts[1:], inside) if kept]
+
+
+def voronoi_borders(candidates, model: Model | None, size: int, pixel_median: PixelMedian = PIXEL_MEDIAN,
+                    shift: float = 1.0):
+    """The borders of regions("voronoi", ...) as metrics.borders gives them, but exact:
+    voronoi_edges, and with pixels at their geometric median only their parts within the
+    moved grid (geometric_grid), where the methods are drawn. The grid edges a border
+    crosses are straight, so regions() traces it through the same points, and far slower,
+    except within a grid cell of a point where three Voronoi cells meet: there it stops
+    short, and leaves the bisector where a grid point's margin is to a third candidate."""
+    segments, pairs = voronoi_edges(candidates)
+    moved = pixel_median == "geometric" and model is not None and model.distribution == "beta"
+    if not moved:
+        return segments, pairs
+    ring = rim(geometric_grid(model, size, shift)[1])
+    parts = [(part, pair) for segment, pair in zip(segments, pairs) for part in _within(segment, ring)]
+    return [part for part, _ in parts], [pair for _, pair in parts]
 
 
 def diagram(method: str | Winner, candidates, model: Model | None, size: int,

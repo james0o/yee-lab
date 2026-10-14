@@ -3533,7 +3533,9 @@ so only one of them is kept. The moved grid ends short of the walls, and so do t
 regions. The Voronoi diagram is traced on the moved grid as well, with the nearest
 candidate as the winner and the difference of the two smallest squared distances as the
 margin. That difference is linear along a straight edge, so its borders still lie
-exactly on the bisectors.
+exactly on the bisectors, except next to a point where three cells meet: there the
+second nearest candidate of a grid point can be the third one, and the crossing moves
+off the bisector by up to a grid cell.
 
 *Moving between the two diagrams.* When the choice of what a pixel is changes, the UI
 moves the diagram instead of jumping. For $0.7$ s it asks for the regions with every grid
@@ -3572,8 +3574,7 @@ boundary distance is a mean in units of the unit square's width.
 
 The UI computes the errors only for the diagram on the fine grid ($G = 320$, @sec-tracing),
 once a candidate is dropped or a slider let go. While a candidate is dragged it shows
-none: tracing the Voronoi diagram and comparing the two take longer than most methods
-themselves.
+none: the comparison takes longer than most methods themselves.
 
 The errors have a true zero, so two methods are compared by their ratio: an error of
 2 % against 6 % is three times smaller. For small regrets the assignment loss below is
@@ -3623,10 +3624,17 @@ $100 - S_H$.
 
 == Symmetric mean distance between boundaries
 
-Let $B_a$ be the shared borders between the method's win regions and $B_v$ the shared
-Voronoi borders. The outer edge of the square is not included: it is not a boundary
-between two winners. Distances are measured in both directions, so extra borders in one
-diagram and missing borders in the other are both represented.
+Let $B_a$ be the shared borders between the method's win regions and $B_v$ the Voronoi
+borders. The outer edge of the square is not included: it is not a boundary between two
+winners. Distances are measured in both directions, so extra borders in one diagram and
+missing borders in the other are both represented.
+
+$B_v$ is exact, not traced: for each pair of candidates the part of their bisector that
+is no farther from them than from any other candidate, and with pixels at geometric
+medians only its parts within the moved grid, where the methods are drawn
+(@ch-geometric). The traced Voronoi diagram differs from it only next to a point where
+three cells meet. The Voronoi diagram itself is compared with its own traced borders, so
+that its errors are 0 (to rounding). The overlay of the UI draws $B_v$ as well.
 
 For a sampled point $x$ on one boundary and a line segment of the other boundary with
 endpoints $a$ and $b$, the nearest point on that segment is the perpendicular projection

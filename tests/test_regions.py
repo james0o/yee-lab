@@ -14,8 +14,8 @@ from matplotlib.path import Path as MplPath
 
 from yeelab.build import (AntiPlurality, Conditional, Highest, Mix, Plurality, Schedules, Score, ScoreAvg, ScoreCluster,
                           ScoreComparisons, ScoreDH, ScoreHybrid, Tally, Unbeaten)
-from yeelab.margin.metrics import voronoi_agreement
-from yeelab.margin.regions import MARGINS, grid, nearest, regions, winners
+from yeelab.margin.metrics import borders, voronoi_agreement
+from yeelab.margin.regions import MARGINS, grid, nearest, regions, voronoi_borders, winners
 from yeelab.margin.shares import Model, first_choice_shares, ranking_shares, score_comparison_shares, unscored_shares
 from yeelab.voting import irv_rounds
 from yeelab.web.app import DIAGRAMS, app
@@ -161,7 +161,7 @@ def test_voronoi_agreement_is_perfect_for_the_reference_diagram():
     winner, _ = nearest(CANDIDATES, points)
     shapes = regions("voronoi", CANDIDATES, None, 100)
 
-    result = voronoi_agreement(CANDIDATES, points, winner, shapes, shapes)
+    result = voronoi_agreement(CANDIDATES, points, winner, borders(shapes), borders(shapes))
 
     assert result["assignment"] == pytest.approx(100)
     assert result["inside_hull"] == pytest.approx(100)
@@ -175,7 +175,7 @@ def test_voronoi_agreement_has_no_inside_score_for_collinear_candidates():
     winner, _ = nearest(candidates, points)
     shapes = regions("voronoi", candidates, None, 20)
 
-    assert voronoi_agreement(candidates, points, winner, shapes, shapes)["inside_hull"] is None
+    assert voronoi_agreement(candidates, points, winner, borders(shapes), borders(shapes))["inside_hull"] is None
 
 
 def test_wrong_assignments_reduce_regret_and_boundary_agreement():
@@ -186,7 +186,7 @@ def test_wrong_assignments_reduce_regret_and_boundary_agreement():
     incorrect[:40] = (incorrect[:40] + 1) % len(CANDIDATES)
     shapes = regions("voronoi", CANDIDATES, None, 80)
 
-    result = voronoi_agreement(CANDIDATES, points, incorrect, shapes, shapes)
+    result = voronoi_agreement(CANDIDATES, points, incorrect, borders(shapes), borders(shapes))
 
     assert result["assignment"] < 100
     assert result["inside_hull"] < 100
@@ -207,10 +207,10 @@ def test_boundary_distance_is_relative_to_half_the_candidate_gap():
 
     # the boundaries are 0.1 apart everywhere: half of the gap of 0.2 between the candidates
     candidates = np.array([[0.3, 0.5], [0.7, 0.5]])
-    assert boundary_distance(cells(0.45), cells(0.55), candidates, 0.4) == pytest.approx(0.5, abs=1e-6)
+    assert boundary_distance(borders(cells(0.45)), borders(cells(0.55)), candidates, 0.4) == pytest.approx(0.5, abs=1e-6)
     # beyond a candidate a boundary cannot be any worse
     candidates = np.array([[0.45, 0.5], [0.55, 0.5]])
-    assert boundary_distance(cells(0.45), cells(0.55), candidates, 0.1) == pytest.approx(1)
+    assert boundary_distance(borders(cells(0.45)), borders(cells(0.55)), candidates, 0.1) == pytest.approx(1)
 
 
 def test_boundary_distance_uses_perpendicular_projection_onto_segments():
@@ -239,6 +239,25 @@ def test_point_to_segments_goes_to_the_nearer_end_beyond_a_segment():
     t = np.clip(((points[:, None] - starts) * directions).sum(-1) / (directions ** 2).sum(-1), 0, 1)
     nearest = np.linalg.norm(points[:, None] - (starts + t[..., None] * directions), axis=-1).min(axis=1)
     assert _point_to_segments(points, segments) == pytest.approx(nearest, abs=1e-15)
+
+
+@pytest.mark.parametrize("pixel_median, shift", [("marginal", 1.0), ("geometric", 1.0), ("geometric", 0.5)])
+def test_exact_voronoi_borders_are_where_the_traced_ones_are(pixel_median, shift):
+    """voronoi_borders are the borders regions() traces for the Voronoi diagram, with pixels
+    at geometric medians only within the moved grid too. They differ only next to a point
+    where three Voronoi cells meet, by less than a grid cell: there the traced ones stop
+    short, and leave the bisector where a grid point's margin is to a third candidate."""
+    from yeelab.margin.metrics import _point_to_segments, _sample_segments
+
+    size = 160
+    exact = voronoi_borders(CANDIDATES, MODELS[0], size, pixel_median, shift)
+    traced = borders(regions("voronoi", CANDIDATES, MODELS[0], size, pixel_median, shift))
+    assert {tuple(sorted(pair)) for pair in exact[1]} == {tuple(sorted(pair)) for pair in traced[1]}
+    on_traced, on_exact = _sample_segments(traced[0])[0], _sample_segments(exact[0])[0]
+    off = _point_to_segments(on_traced, exact[0])
+    assert np.mean(off < 1e-6) > 0.95  # on the bisectors, to the six decimals of the traced vertices
+    assert off.max() < 2 ** 0.5 / size
+    assert _point_to_segments(on_exact, traced[0]).max() < 2 ** 0.5 / size
 
 
 def test_grid_reaches_the_walls():

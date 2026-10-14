@@ -66,25 +66,10 @@ def _assignment_score(candidates, points, assigned, mask, scale, area_weights):
     return float(100 * (1 - np.average(loss[mask], weights=weight[mask])))
 
 
-def _shared_boundary_segments(cells):
-    edges = {}
-    for cell in cells:
-        for polygon in cell["polygons"]:
-            for ring in polygon:
-                points = np.asarray(ring).reshape(-1, 2)
-                for start, end in zip(points, np.roll(points, -1, axis=0)):
-                    first, second = tuple(start), tuple(end)
-                    key = tuple(sorted((first, second)))
-                    edge = edges.get(key)
-                    if edge:
-                        edge["count"] += 1
-                    else:
-                        edges[key] = {"start": start, "end": end, "count": 1}
-    return [(edge["start"], edge["end"]) for edge in edges.values() if edge["count"] == 2]
-
-
-def _labelled_boundary_segments(cells):
-    """Shared boundary segments and the winners of the two cells on either side of each."""
+def borders(cells):
+    """The borders between the win regions `cells` (regions.regions), without the outer
+    edge: ([(start, end), ...], [(winner, winner), ...]), the segments that two regions
+    share and the winners on either side of each."""
     edges = {}
     for cell in cells:
         for polygon in cell["polygons"]:
@@ -175,15 +160,15 @@ def _point_to_segments(points, segments):
                                 np.ascontiguousarray(directions), squared_lengths)
 
 
-def boundary_distance(actual_cells, reference_cells, candidates, scale):
-    """Symmetric mean distance between the boundaries, each sample's distance divided by
-    half the distance between the two candidates its boundary separates and capped at 1
-    (the boundary has moved all the way to a candidate). Samples are weighted by length and
-    by nearness to a candidate like the assignment regret. None without any boundary."""
+def boundary_distance(actual, reference, candidates, scale):
+    """Symmetric mean distance between the borders `actual` and `reference` (borders()),
+    each sample's distance divided by half the distance between the two candidates its
+    border separates and capped at 1 (the border has moved all the way to a candidate).
+    Samples are weighted by length and by nearness to a candidate like the assignment
+    regret. None without any border."""
     candidates = np.asarray(candidates, dtype=np.float64)
     sides = []
-    for cells in (actual_cells, reference_cells):
-        segments, pairs = _labelled_boundary_segments(cells)
+    for segments, pairs in (actual, reference):
         points, lengths, indices = _sample_segments(segments, with_indices=True)
         if not len(points):
             return None
@@ -199,22 +184,10 @@ def boundary_distance(actual_cells, reference_cells, candidates, scale):
     return float(np.mean(means))
 
 
-def voronoi_boundary_segments(cells):
-    """Return shared Voronoi boundary segments, without the outer square perimeter."""
-    segments = []
-    for start, end in _shared_boundary_segments(cells):
-        length = np.linalg.norm(end - start)
-        count = max(1, int(np.ceil(length / 0.005)))
-        points = start + np.linspace(0, 1, count + 1)[:, None] * (end - start)
-        segments.extend([
-            [*first.tolist(), *last.tolist()]
-            for first, last in zip(points[:-1], points[1:])
-        ])
-    return segments
-
-
-def voronoi_agreement(candidates, points, winner, actual_cells, reference_cells):
-    """Compute whole-square regret, convex-hull regret, and the weighted boundary distance."""
+def voronoi_agreement(candidates, points, winner, actual, reference):
+    """Compute whole-square regret, convex-hull regret, and the weighted boundary distance
+    between the borders `actual` of the diagram and `reference` of the Voronoi diagram
+    (borders(), regions.voronoi_borders)."""
     candidates = np.asarray(candidates, dtype=np.float64)
     pairwise = np.linalg.norm(candidates[:, None] - candidates[None, :], axis=-1)
     pairwise[pairwise == 0] = np.nan
@@ -234,5 +207,5 @@ def voronoi_agreement(candidates, points, winner, actual_cells, reference_cells)
     return {
         "assignment": _assignment_score(candidates, points, winner, full, scale, area_weights),
         "inside_hull": inside_score,
-        "boundary_mean": boundary_distance(actual_cells, reference_cells, candidates, scale),
+        "boundary_mean": boundary_distance(actual, reference, candidates, scale),
     }

@@ -218,12 +218,17 @@ def geometric_medians(model: Model, medians) -> np.ndarray:
 # ---------------------------------------------------------------- The inverse of g
 
 
+def rim(points) -> np.ndarray:
+    """The outermost points of a grid of points (M, M, 2), [i, j] at (x_i, y_j), once
+    around counter-clockwise from the bottom left, shape (4 M - 4, 2)."""
+    return np.concatenate([points[:, 0], points[-1, 1:], points[-2::-1, -1], points[0, -2:0:-1]])
+
+
 def outline(model: Model) -> np.ndarray:
     """The border of the part of the square that g covers, shape (K, 2), counter-clockwise
     from the bottom left: the curve g follows as the median runs along the outermost
     pixels of each side. The regions drawn at geometric medians end there."""
-    g = geometric_medians(model, pixel_medians(model.pixels))
-    return np.concatenate([g[:, 0], g[-1, 1:], g[-2::-1, -1], g[0, -2:0:-1]])
+    return rim(geometric_medians(model, pixel_medians(model.pixels)))
 
 
 def pixels_at(model: Model) -> np.ndarray:

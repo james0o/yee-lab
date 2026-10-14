@@ -22,8 +22,8 @@ from yeelab.build import (Bullet, Burial, Compromise, Score, ScoreComparisons, W
 from yeelab.build.methods import SCORE_POWER
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
-from yeelab.margin.metrics import voronoi_agreement, voronoi_boundary_segments
-from yeelab.margin.regions import MARGINS, diagram, regions
+from yeelab.margin.metrics import borders, voronoi_agreement
+from yeelab.margin.regions import MARGINS, diagram, regions, voronoi_borders
 from yeelab.margin.shares import PIXELS, Model
 from yeelab.normal import sigma_from_deviation
 from yeelab.ranking_cells import SPREAD, beta_params
@@ -354,7 +354,7 @@ def _warm_up():
     regions(Burial(Compromise(MARGINS["star"], 0.5), 0.5), CANDIDATES, Model("beta", DEVIATION, SPREAD), 32)
     # the kernel of the comparison with the Voronoi diagram
     shapes, points, winner, _ = diagram(DIAGRAMS[0], CANDIDATES, Model("beta", DEVIATION, SPREAD), 32)
-    voronoi_agreement(CANDIDATES, points, winner, shapes, regions("voronoi", CANDIDATES, None, 32))
+    voronoi_agreement(CANDIDATES, points, winner, borders(shapes), voronoi_borders(CANDIDATES, None, 32))
 
 
 threading.Thread(target=_warm_up, daemon=True).start()
@@ -456,15 +456,16 @@ def diagram_regions(request: DiagramRequest):
     )
     payload = {"regions": shapes, "metrics": None, "overlays": {}}
     if request.metrics or request.overlay:
-        reference_shapes = regions(
-            "voronoi", request.candidates, model, request.grid, request.pixel_median, request.shift
+        actual = borders(shapes)
+        # the Voronoi diagram is compared with its own borders (errors 0); the others with the
+        # exact ones, which its traced borders only miss next to a point where three meet
+        reference = actual if request.method == "voronoi" else voronoi_borders(
+            request.candidates, model, request.grid, request.pixel_median, request.shift
         )
         if request.metrics:
-            payload["metrics"] = voronoi_agreement(
-                request.candidates, points, winner, shapes, reference_shapes
-            )
-        if request.overlay:
-            payload["overlays"]["voronoi_boundaries"] = voronoi_boundary_segments(reference_shapes)
+            payload["metrics"] = voronoi_agreement(request.candidates, points, winner, actual, reference)
+        if request.overlay:  # [x0, y0, x1, y1] per segment
+            payload["overlays"]["voronoi_boundaries"] = np.round(np.reshape(reference[0], (-1, 4)), 6).tolist()
     payload["ms"] = round(1000 * (time.perf_counter() - start), 1)
     # json.dumps directly: FastAPI's encoder is slow on thousands of vertices
     return Response(json.dumps(payload, separators=(",", ":")), media_type="application/json")
