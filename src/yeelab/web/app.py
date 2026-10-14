@@ -316,6 +316,11 @@ class DiagramRequest(BaseModel):
     burial: float = Field(0.0, ge=0, le=1)
     compromise: float = Field(0.0, ge=0, le=1)
     grid: int = Field(FINAL_GRID, ge=32, le=512)
+    # The comparison with the Voronoi diagram: the metrics, and its borders to draw over the
+    # diagram (overlay). The UI asks for neither while a candidate is dragged (the borders only
+    # while they are shown): they take longer than most methods themselves.
+    metrics: bool = True
+    overlay: bool = True
 
     @field_validator("deviation")
     @classmethod
@@ -426,10 +431,12 @@ def config():
 @app.post("/api/regions")
 def diagram_regions(request: DiagramRequest):
     """Win region of every winner as polygons in the unit square (y up):
-    {"regions": [{"winner": c, "polygons": [[outer, hole, ...], ...]}], "ms": ...},
-    rings flat [x0, y0, x1, y1, ...], outer rings counter-clockwise and holes
-    clockwise. winner is -1 (voting.CYCLE) for a Condorcet cycle. `bullet` of the voters
-    bullet vote, and of the others `burial` bury and `compromise` compromise (strategic)."""
+    {"regions": [{"winner": c, "polygons": [[outer, hole, ...], ...]}], "metrics": ...,
+    "overlays": {"voronoi_boundaries": ...}, "ms": ...}, rings flat [x0, y0, x1, y1, ...],
+    outer rings counter-clockwise and holes clockwise. winner is -1 (voting.CYCLE) for a
+    Condorcet cycle. `bullet` of the voters bullet vote, and of the others `burial` bury and
+    `compromise` compromise (strategic). metrics is null unless `metrics`, and the
+    overlays have no voronoi_boundaries unless `overlay`."""
     start = time.perf_counter()
     spread = SPREAD if request.distribution == "beta" else None
     model = Model(request.distribution, request.deviation, spread)
@@ -444,19 +451,18 @@ def diagram_regions(request: DiagramRequest):
     shapes, points, winner, _ = diagram(
         method, request.candidates, model, request.grid, request.pixel_median, request.shift
     )
-    reference_shapes = regions(
-        "voronoi", request.candidates, model, request.grid, request.pixel_median, request.shift
-    )
-    payload = {
-        "regions": shapes,
-        "metrics": voronoi_agreement(
-            request.candidates, points, winner, shapes, reference_shapes
-        ),
-        "overlays": {
-            "voronoi_boundaries": voronoi_boundary_segments(reference_shapes),
-        },
-        "ms": round(1000 * (time.perf_counter() - start), 1),
-    }
+    payload = {"regions": shapes, "metrics": None, "overlays": {}}
+    if request.metrics or request.overlay:
+        reference_shapes = regions(
+            "voronoi", request.candidates, model, request.grid, request.pixel_median, request.shift
+        )
+        if request.metrics:
+            payload["metrics"] = voronoi_agreement(
+                request.candidates, points, winner, shapes, reference_shapes
+            )
+        if request.overlay:
+            payload["overlays"]["voronoi_boundaries"] = voronoi_boundary_segments(reference_shapes)
+    payload["ms"] = round(1000 * (time.perf_counter() - start), 1)
     # json.dumps directly: FastAPI's encoder is slow on thousands of vertices
     return Response(json.dumps(payload, separators=(",", ":")), media_type="application/json")
 

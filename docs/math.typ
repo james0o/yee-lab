@@ -3567,6 +3567,11 @@ $100 - S$ for the scores $S$ below; the hull-restricted one is the same metric e
 only within the convex hull, so the two values are related rather than independent. The
 boundary distance is a mean in units of the unit square's width.
 
+The UI computes the errors only for the diagram on the fine grid ($G = 320$, @sec-tracing),
+once a candidate is dropped or a slider let go. While a candidate is dragged it shows
+none: tracing the Voronoi diagram and comparing the two take longer than most methods
+themselves.
+
 The errors have a true zero, so two methods are compared by their ratio: an error of
 2 % against 6 % is three times smaller. For small regrets the assignment loss below is
 nearly linear ($ell approx r \/ L$), so this holds approximately for the assignment errors

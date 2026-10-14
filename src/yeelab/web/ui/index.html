@@ -61,6 +61,7 @@
         <p>Let d<sub>min</sub>(x) be the nearest candidate distance, d<sub>a</sub>(x) the distance to the assigned candidate, r(x) = d<sub>a</sub>(x) − d<sub>min</sub>(x), and L the median distance between candidate pairs. The regret loss is ℓ(x) = r(x)/(r(x)+L), weighted by area and w<sub>a</sub>(x) = 1/(1+(d<sub>min</sub>(x)/L)²).</p>
         <p>Assignment error = 100 × Σw<sub>a</sub>ℓ/Σw<sub>a</sub>. Inside hull uses the same formula, summing only over grid points inside the candidates’ convex hull.</p>
         <p>For boundaries, each sample is projected to the nearest point on every segment of the other boundary. For segment endpoints a and b, the closest point is a + t(b−a), where t = clamp(((x−a)·(b−a))/‖b−a‖², 0, 1); distance is the minimum Euclidean distance over segments. This is measured in both directions.</p>
+        <p>The errors are computed once a candidate is dropped or a slider let go, not while dragging (—).</p>
         <p>After switching to another method, the last column shows how many times smaller (green, ↓) or larger (red, ↑) each error is than with the method shown before, for the same candidates and voters.</p>
         <p>Center-weighted boundary distance uses weight w<sub>b</sub>(x) = exp(−4‖x−(0.5,0.5)‖²), multiplied by represented segment length. It is the weighted mean Σwd/Σw. Distances are shown as percentages of the square’s width; lower is better.</p>
       </details>
@@ -648,6 +649,10 @@
       inFlight = true;
       if (moving && performance.now() - moving.start >= MOVE) moving = null;  // it has arrived
       if (moving) grid = dragGrid;  // on its way: the coarser grid, like a drag
+      // The comparison with the Voronoi diagram only on the fine grid: during a drag it would take
+      // longer than most methods. Its borders also while they are shown, and always on the fine
+      // grid, so that showing them later draws them at once.
+      const measured = grid === finalGrid;
       const part = shift();
       const asked = settings(), sliders = [deviation, levels, power, tieWeight, applied()];
       const key = JSON.stringify([candidates, distribution, deviation, levels, power, tieWeight, shares, part]);
@@ -660,6 +665,7 @@
           body: JSON.stringify({
             candidates, method, distribution, deviation, levels, power, tie_weight: tieWeight, ...sliders[4], grid,
             pixel_median: part > 0 ? "geometric" : "marginal", shift: part,
+            metrics: measured, overlay: measured || showBoundaries.checked,
           }),
         });
         if (!response.ok) throw new Error(await response.text());
@@ -668,23 +674,25 @@
           regions = answer.regions.map(({ winner, polygons }) => ({
             winner, polygons, path: toPath(polygons),
           }));
-          voronoiBoundaries = answer.overlays.voronoi_boundaries;
+          voronoiBoundaries = answer.overlays.voronoi_boundaries ?? [];
           boundaryPath = null;
           draw();
           describe(...sliders, Math.round(performance.now() - start), Math.round(answer.ms));
-          const { assignment, inside_hull, boundary_mean } = answer.metrics;
-          const errors = [100 - assignment, inside_hull === null ? null : 100 - inside_hull,
-            boundary_mean === null ? null : 100 * boundary_mean];
-          if (grid === finalGrid) {
+          let errors = null;  // a coarse drag has none, and is not compared
+          if (measured) {
+            const { assignment, inside_hull, boundary_mean } = answer.metrics;
+            errors = [100 - assignment, inside_hull === null ? null : 100 - inside_hull,
+              boundary_mean === null ? null : 100 * boundary_mean];
             if (shown?.key !== key) previous = null;
             else if (shown.method !== method) previous = shown;
             shown = { key, method, errors };
           }
-          const against = grid === finalGrid ? previous : null;  // a coarse drag is not compared
+          const against = measured ? previous : null;
           compared.textContent = against ? `vs ${labels[against.method]}` : "";
           [assignmentMetric, insideMetric, boundariesMetric].forEach((cell, i) => {
-            cell.textContent = errors[i] === null ? "n/a" : `${errors[i].toFixed(i < 2 ? 1 : 2)}%`;
-            showRatio(cell.nextElementSibling, errors[i], against?.errors[i] ?? null);
+            if (!errors) cell.textContent = "—";
+            else cell.textContent = errors[i] === null ? "n/a" : `${errors[i].toFixed(i < 2 ? 1 : 2)}%`;
+            showRatio(cell.nextElementSibling, errors?.[i] ?? null, against?.errors[i] ?? null);
           });
         }
 

@@ -379,6 +379,22 @@ def test_api_reports_perfect_metrics_for_voronoi():
     assert metrics["boundary_mean"] == pytest.approx(0)
 
 
+@pytest.mark.parametrize("pixel_median", ["marginal", "geometric"])
+def test_api_compares_with_voronoi_only_when_asked(pixel_median):
+    """The UI drags without the metrics and the Voronoi borders: the regions stay the same."""
+    client = TestClient(app)
+    request = {"candidates": CANDIDATES.tolist(), "method": "irv", "grid": 64, "pixel_median": pixel_median}
+    full = client.post("/api/regions", json=request).json()
+    bare = client.post("/api/regions", json={**request, "metrics": False, "overlay": False}).json()
+    overlay = client.post("/api/regions", json={**request, "metrics": False}).json()
+
+    assert bare["regions"] == overlay["regions"] == full["regions"]
+    assert bare["metrics"] is None and bare["overlays"] == {}
+    assert overlay["metrics"] is None
+    assert overlay["overlays"]["voronoi_boundaries"] == full["overlays"]["voronoi_boundaries"]
+    assert client.post("/api/regions", json={**request, "overlay": False}).json()["metrics"] == full["metrics"]
+
+
 def _mix(share):
     """Approval by both kinds of voters: `share` of them approve the candidates closer
     than their mean distance, the others those above their largest gap."""
