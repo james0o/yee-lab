@@ -44,6 +44,9 @@ koth = Unbeaten(M, against=fptp, order=Tally(Plurality()))
 SCORE_POWER = 1.5  # the web UI's default; the one power that fits real ballots best (docs/math.pdf)
 score_ballot = Score(6, power=SCORE_POWER)
 score = Highest(Tally(score_ballot))
+# majority judgment on the same ballot: the highest median score, a tie of medians by
+# Balinski and Laraki's tie-break for the voters of a point as a distribution
+mj = Highest(Tally(score_ballot, statistic="median"))
 # STAR: the two highest mean scores, head to head on the scores of each ballot (equal
 # scores abstain by default); a tie is a draw
 star = Unbeaten(ScoreComparisons(score_ballot), among=Highest(Tally(score_ballot), n=2))
@@ -85,4 +88,5 @@ METHODS: dict[str, Winner] = {
     "score_two_runoff": score_two_runoff,
     "system321": system321,
     "sun_two_round": sun_two_round,
+    "mj": mj,
 }

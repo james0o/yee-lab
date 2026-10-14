@@ -111,12 +111,13 @@ half a score. A CLUSTER score changes where two choices of scores cost the same.
 the bisectors these are curves, so the mean score is not a sum
 over polygons. `ballot_table` gives, for a grid of rectangles, the distinct ballots in
 each rectangle and the part of its voters with each, and `tabulate` every mean over them:
-the points below the top score of each candidate (`unscored`), the strict comparisons of
-each pair (`comparisons`), the points each candidate gets from the voters who rank
-another candidate above it (`given`, what burying it takes away) and the points below
-the top score from the voters who rank it above another but neither first (`raised`,
-what compromising on it adds). margin/shares.py weighs them with the voters of each
-rectangle.
+the points below the top score of each candidate (`unscored`), the share of the voters
+who give each candidate each score (`graded`, what its median reads), the strict
+comparisons of each pair (`comparisons`), the points each candidate gets from the voters
+who rank another candidate above it (`given`, what burying it takes away) and the points
+below the top score from the voters who rank it above another but neither first
+(`raised`, what compromising on it adds). margin/shares.py weighs them with the voters of
+each rectangle.
 """
 
 import math
@@ -565,15 +566,17 @@ def ballot_table(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
 
 
 # what tabulate() sums: the points below the top score of each candidate (C, X, Y), the
-# strict comparisons of each pair (C, C, X, Y), and what burying takes back and what
-# compromising adds (both C, C, X, Y; given() and raised())
-UNSCORED, COMPARISONS, GIVEN, RAISED = range(4)
+# strict comparisons of each pair (C, C, X, Y), what burying takes back and what
+# compromising adds (both C, C, X, Y; given() and raised()), and the share of the voters
+# who give each candidate each score (C, levels, X, Y; graded())
+UNSCORED, COMPARISONS, GIVEN, RAISED, GRADES = range(5)
 CELLS = 4096  # rectangles per task of the compiled sums (threads.py)
 
 
 @njit(cache=True, nogil=True, error_model="numpy")
 def _tabulate(start, codes, orders, weights, n, top, kind, tie_weight, first, stop, out):
-    """tabulate() of the rectangles first <= k < stop into out (C or C * C, X * Y)."""
+    """tabulate() of the rectangles first <= k < stop into out (C, C * C or C * levels,
+    X * Y)."""
     for k in range(first, stop):
         for row in range(out.shape[0]):
             out[row, k] = 0.0
@@ -582,6 +585,9 @@ def _tabulate(start, codes, orders, weights, n, top, kind, tie_weight, first, st
             if kind == UNSCORED:
                 for c in range(n):
                     out[c, k] += weight * ((code >> (BITS * c)) & MASK)
+            elif kind == GRADES:  # row c * levels + score
+                for c in range(n):
+                    out[c * (top + 1) + top - ((code >> (BITS * c)) & MASK), k] += weight
             elif kind == COMPARISONS:
                 for c in range(n):
                     below_c = (code >> (BITS * c)) & MASK
@@ -615,7 +621,8 @@ def _tabulate(start, codes, orders, weights, n, top, kind, tie_weight, first, st
 
 def tabulate(table: BallotTable, kind: int, tie_weight: float = 0.0) -> np.ndarray:
     """The mean over the voters of every rectangle of the table (float32): for UNSCORED
-    the points below the top score of each candidate (C, X, Y), for COMPARISONS the share
+    the points below the top score of each candidate (C, X, Y), for GRADES the share of
+    them who give each candidate each score (C, levels, X, Y), for COMPARISONS the share
     strictly scoring c above e minus e above c (C, C, X, Y), for GIVEN given() and for
     RAISED raised(), which need a table by_order. Chunks of the rectangles run in
     parallel threads."""
@@ -623,10 +630,11 @@ def tabulate(table: BallotTable, kind: int, tie_weight: float = 0.0) -> np.ndarr
         raise ValueError("ordinal score comparisons need a ballot table by order")
     n = table.candidates
     cells = table.shape[0] * table.shape[1]
-    out = np.empty((n if kind == UNSCORED else n * n, cells), dtype=np.float32)
+    rows = (n,) if kind == UNSCORED else (n, table.top + 1) if kind == GRADES else (n, n)
+    out = np.empty((math.prod(rows), cells), dtype=np.float32)
     threads.in_chunks(lambda a, b: _tabulate(table.start, table.codes, table.orders, table.weights, n, table.top,
                                              kind, tie_weight, a, b, out), cells, CELLS)
-    return out.reshape((n,) * (1 if kind == UNSCORED else 2) + table.shape)
+    return out.reshape(rows + table.shape)
 
 
 @njit(cache=True, nogil=True, error_model="numpy")
@@ -708,6 +716,51 @@ def moved_comparisons(table: BallotTable, a: int, b: int, bury: float, compromis
     return out.reshape((n, n) + table.shape)
 
 
+@njit(cache=True, nogil=True, error_model="numpy")
+def _moved_grades(start, codes, orders, weights, n, top, a, b, first, stop, out):
+    """moved_grades() of the rectangles first <= k < stop into out (2 * 2 * levels, X * Y)."""
+    levels = top + 1
+    for k in range(first, stop):
+        for row in range(out.shape[0]):
+            out[row, k] = 0.0
+        for t in range(start[k], start[k + 1]):
+            code, ranked, weight = codes[t], orders[t], weights[t]
+            position_a = position_b = 0
+            for position in range(n):
+                c = (ranked >> (BITS * position)) & MASK
+                if c == a:
+                    position_a = position
+                elif c == b:
+                    position_b = position
+            # the frontrunner ranked lower is buried, the one ranked higher compromised on
+            # if neither is first; side 0 is a, 1 is b
+            lower, upper = (b, a) if position_a < position_b else (a, b)
+            side = 1 if lower == b else 0
+            out[side * levels + top - ((code >> (BITS * lower)) & MASK), k] += weight
+            if min(position_a, position_b) > 0:
+                out[(3 - side) * levels + top - ((code >> (BITS * upper)) & MASK), k] += weight
+
+
+def moved_grades(table: BallotTable, a: int, b: int) -> np.ndarray:
+    """The share of the voters of every rectangle of a table by order at each score of
+    the frontrunners a and b, of those that a strategy against them moves, (2, 2,
+    levels, X, Y) float32: [0, 0] the voters who rank b above a, at each score of a,
+    which burying (blocks.Burial) turns to 0, and [0, 1] those who rank a above b, at
+    each score of b; [1, 0] the voters who rank a above b, neither first, at each score
+    of a, which compromising (blocks.Compromise) turns to the top score, and [1, 1]
+    likewise for b. A voter's scores of the two are moved by one strategy each, so the
+    shares of every score of burying and compromising voters add up (graded())."""
+    if not table.by_order:
+        raise ValueError("the shares of every score of strategic voters need a ballot table by order")
+    levels = table.top + 1
+    cells = table.shape[0] * table.shape[1]
+    out = np.empty((4 * levels, cells), dtype=np.float32)
+    threads.in_chunks(lambda first, stop: _moved_grades(table.start, table.codes, table.orders, table.weights,
+                                                        table.candidates, table.top, a, b, first, stop, out),
+                      cells, CELLS)
+    return out.reshape((2, 2, levels) + table.shape)
+
+
 def unscored(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
              delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
              power: float = POWER) -> np.ndarray:
@@ -719,6 +772,17 @@ def unscored(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
     averaged (ballot_table, tabulate)."""
     table = ballot_table(xs, ys, candidates, levels, sub, rule, delta, mu=mu, kappa=kappa, power=power)
     return tabulate(table, UNSCORED)
+
+
+def graded(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
+           delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
+           power: float = POWER) -> np.ndarray:
+    """short[c, k, i, j] = share of the voters of the rectangle [xs[i], xs[i + 1]] x
+    [ys[j], ys[j + 1]] who give candidate c the score k, from 0 to levels - 1, shape
+    (C, levels, X, Y); the shares of a candidate add up to 1 in every rectangle.
+    Rectangles as in unscored(), whose mean is sum_k (levels - 1 - k) short[c, k]."""
+    table = ballot_table(xs, ys, candidates, levels, sub, rule, delta, mu=mu, kappa=kappa, power=power)
+    return tabulate(table, GRADES)
 
 
 def comparisons(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,

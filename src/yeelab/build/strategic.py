@@ -26,6 +26,10 @@ shares come from the ballots of the voter grid, for each pair at its points only
 (margin.shares.ScoreGrid). Runoff comparisons do not add up over the strategies like the
 scores, so the strategies only note them, and Voters.compared counts all of them together
 when the method reads them.
+
+The shares of every score that the median of a score ballot reads (Voters.graded,
+Tally(ballot, statistic="median")) add up over the voters like the scores: a strategy
+moves the voters it changes from their score of a candidate to 0 or the top score.
 """
 
 from dataclasses import dataclass, field, replace
@@ -33,9 +37,10 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 from yeelab.build.blocks import Highest, Plurality, Result, Tally, Winner, _expect
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Ballots, Scored, ScoredPairwise, Share, Voters
+from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Ballots, Graded, Scored, ScoredPairwise, Share, Voters
 
 POLL = Highest(Tally(Plurality()), n=2)  # the default frontrunners: the two with the most first choices
+
 
 # ---------------------------------------------------------------- Voters
 
@@ -55,6 +60,8 @@ def bulleted(voters: Voters, share: float) -> Voters:
                          gives c none of the top score unless c is their first
         scored_pairwise  (1 - s) x[c, e] + s (f[c] - f[e]): bullet voters also rank
                          every candidate below their first choice equal
+        graded           (1 - s) g[c] + s (f[c] at the top score, the sum of f over the
+                         others at 0)
 
     The pairwise and score shares need `first`; the profile has its own. The bullet
     voters neither bury nor compromise: `kept`, the part of the voters who may, shrinks."""
@@ -66,7 +73,7 @@ def bulleted(voters: Voters, share: float) -> Voters:
         firsts = voters.probs @ np.eye(n, dtype=voters.probs.dtype)[voters.rankings[:, 0]]
         changed["probs"] = (1 - share) * voters.probs
         changed["bullet"] = share * firsts + (0.0 if voters.bullet is None else voters.bullet)
-    if voters.pairwise is not None or voters.unscored or voters.scored_pairwise:
+    if voters.pairwise is not None or voters.unscored or voters.scored_pairwise or voters.graded:
         f = voters.first
         if f is None:
             raise ValueError("bullet voting on pairwise or score shares needs the first-choice shares")
@@ -75,9 +82,16 @@ def bulleted(voters: Voters, share: float) -> Voters:
             d = (1 - share) * voters.pairwise + share * (1 + f[..., :, None] - f[..., None, :]) / 2
             d[..., range(n), range(n)] = 0.0
             changed["pairwise"] = d
-        if voters.unscored:  # a sum of the others, not 1 - f: exact where f is nearly 1
-            others = np.stack([np.delete(f, c, axis=-1).sum(axis=-1) for c in range(n)], axis=-1)
+        # a sum of the others, not 1 - f: exact where f is nearly 1
+        others = np.stack([np.delete(f, c, axis=-1).sum(axis=-1) for c in range(n)], axis=-1)
+        if voters.unscored:
             changed["unscored"] = {key: (1 - share) * u + share * others for key, u in voters.unscored.items()}
+        if voters.graded:
+            changed["graded"] = {}
+            for key, g in voters.graded.items():
+                bullet = np.zeros_like(g)
+                bullet[..., 0], bullet[..., -1] = others, f
+                changed["graded"][key] = (1 - share) * g + share * bullet
         if voters.scored_pairwise:
             lead = f[..., :, None] - f[..., None, :]
             changed["scored_pairwise"] = {key: (1 - share) * x + share * lead
@@ -100,6 +114,8 @@ def burying(voters: Voters, share: float, a: int, b: int) -> Voters:
                   change
         unscored  u[a] + s taken[a] and u[b] + s taken[b] (Voters.ballots): a burying
                   voter takes back what they gave the frontrunner they rank lower
+        graded    of a, s of the voters who rank b above it go from their score to 0,
+                  and likewise of b (Voters.ballots)
 
     The pairwise shares need the profile and the score shares the ballots. The score
     comparisons are only noted to move (Voters.compared)."""
@@ -117,6 +133,8 @@ def burying(voters: Voters, share: float, a: int, b: int) -> Voters:
         raise ValueError("burial on pairwise shares needs the profile")
     if voters.unscored:
         changed["unscored"] = _moved_scores(voters, a, b, share, "taken")
+    if voters.graded:
+        changed["graded"] = _moved_grades(voters, a, b, share, bury=True)
     return replace(voters, **changed)
 
 
@@ -137,6 +155,8 @@ def compromising(voters: Voters, share: float, a: int, b: int) -> Voters:
         unscored  u[a] - s added[a] and u[b] - s added[b] (Voters.ballots): a
                   compromising voter gives the frontrunner they rank higher what they
                   did not
+        graded    of a, s of the voters who rank it above b, neither first, go from
+                  their score to the top score, and likewise of b (Voters.ballots)
 
     The first-choice and pairwise shares need the profile: without it the first choices
     are left out, the pairwise shares cannot be. The score shares need the ballots; the
@@ -162,7 +182,27 @@ def compromising(voters: Voters, share: float, a: int, b: int) -> Voters:
         changed["first"] = None  # the profile tells who moves their first choice
     if voters.unscored:
         changed["unscored"] = _moved_scores(voters, a, b, share, "added")
+    if voters.graded:
+        changed["graded"] = _moved_grades(voters, a, b, share, bury=False)
     return replace(voters, **changed)
+
+
+def _moved_grades(voters: Voters, a: int, b: int, share: float, bury: bool) -> dict:
+    """The shares of every score of every score ballot, where `share` of the voters who
+    do not bullet vote, of those that burying (bury) or compromising moves, go from
+    their score of a and of b to 0, or to the top score (ScoreGrid.moved_grades).
+    Burying and compromising move a candidate's score for different voters, so each
+    takes those it moves out of what the other left; a share is never below 0."""
+    graded = {}
+    for key, g in voters.graded.items():
+        moved = voters.grid(key.scored).moved_grades(a, b, voters.cells.reshape(-1, 2))[0 if bury else 1]
+        moved = moved.reshape(*g.shape[:-2], 2, g.shape[-1]) * (share * voters.kept)
+        g = np.array(g)
+        for side, c in enumerate((a, b)):
+            g[..., c, :] = np.maximum(g[..., c, :] - moved[..., side, :], 0.0)
+            g[..., c, 0 if bury else -1] += moved[..., side, :].sum(axis=-1)
+        graded[key] = g
+    return graded
 
 
 def _moved_profile(voters: Voters, share: float, rankings: np.ndarray, moved: np.ndarray) -> dict:
@@ -238,7 +278,7 @@ class Bullet(Winner):
         """The method's, and the first-choice shares the bullet voters' pairwise and score
         shares come from; the profile has its own."""
         needs = self.method.needs
-        if self.share > 0 and any(share == PAIRWISE or isinstance(share, Scored | ScoredPairwise)
+        if self.share > 0 and any(share == PAIRWISE or isinstance(share, Scored | ScoredPairwise | Graded)
                                   for share in needs):
             needs |= {FIRST}
         return needs
@@ -254,10 +294,11 @@ class Bullet(Winner):
 
 
 def _ballots(needs: frozenset[Share]) -> frozenset[Share]:
-    """The ballots of every score ballot in `needs`, of its totals or comparisons: what the
-    score shares of burying and compromising voters come from (Voters.ballots)."""
+    """The ballots of every score ballot in `needs`, of its totals, comparisons or shares
+    of every score: what the score shares of burying and compromising voters come from
+    (Voters.ballots)."""
     return frozenset(Ballots(share) for share in needs if isinstance(share, Scored)) | frozenset(
-        Ballots(share.scored) for share in needs if isinstance(share, ScoredPairwise))
+        Ballots(share.scored) for share in needs if isinstance(share, ScoredPairwise | Graded))
 
 
 @dataclass(frozen=True)

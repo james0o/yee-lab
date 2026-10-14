@@ -18,6 +18,11 @@ only those at the points of its grid.
                 not kept itself: where nearly all voters give two candidates the top
                 score, both mean scores are the top score to rounding, and only the
                 parts not given tell them apart
+    graded      {Graded(scored): g[..., c, k] = share of the voters who give c the score
+                k, (..., C, levels)}: what the median of a score ballot reads
+                (Tally(ballot, statistic="median"), judgment.py). The shares of every
+                score are kept, not their sums, so that the few voters of a tail stay
+                exact as in unscored
     ballots     {Ballots(scored): the score ballot on the voter grid, at the medians
                 (margin.shares.ScoreGrid)}, and cells (..., 2), the indices of each point's
                 medians: what the score shares of burying and compromising voters come
@@ -81,7 +86,15 @@ class Ballots:
     scored: Scored
 
 
-Share = Literal["first", "pairwise", "profile"] | Scored | ScoredPairwise | Ballots
+@dataclass(frozen=True)
+class Graded:
+    """The share of the voters who give each candidate each score of the score ballot
+    `scored`: what its median reads (Tally(ballot, statistic="median"))."""
+
+    scored: Scored
+
+
+Share = Literal["first", "pairwise", "profile"] | Scored | ScoredPairwise | Ballots | Graded
 FIRST: Share = "first"
 PAIRWISE: Share = "pairwise"
 PROFILE: Share = "profile"
@@ -97,6 +110,7 @@ class Voters:
     probs: np.ndarray | None = None
     unscored: dict[Scored, np.ndarray] | None = None
     scored_pairwise: dict[ScoredPairwise, np.ndarray] | None = None
+    graded: dict[Graded, np.ndarray] | None = None
     bullet: np.ndarray | None = None
     ballots: dict[Ballots, object] | None = None
     cells: np.ndarray | None = None
@@ -119,8 +133,8 @@ class Voters:
             return shares[points]
 
         return replace(self, **{name: pick(getattr(self, name))
-                                for name in ("first", "pairwise", "probs", "unscored", "scored_pairwise", "bullet",
-                                             "cells")})
+                                for name in ("first", "pairwise", "probs", "unscored", "scored_pairwise", "graded",
+                                             "bullet", "cells")})
 
     def compared(self, key: ScoredPairwise) -> np.ndarray:
         """The pairwise preferences of `key`, moved by burying and compromising voters
@@ -147,8 +161,11 @@ class Voters:
 
     @property
     def _marked(self) -> np.ndarray:
-        """The shares of one of the score ballots, (..., C)."""
-        return next(iter(self.unscored.values()))
+        """The shares of one of the score ballots, (..., C): the part not given, or the
+        share of the top score."""
+        if self.unscored:
+            return next(iter(self.unscored.values()))
+        return next(iter(self.graded.values()))[..., -1]
 
     @property
     def shape(self) -> tuple[int, ...]:

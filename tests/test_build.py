@@ -32,6 +32,7 @@ from yeelab.build import (
     Conditional,
     DescendingCoalitions,
     Eliminate,
+    Graded,
     Highest,
     Margins,
     Mix,
@@ -53,6 +54,7 @@ from yeelab.build import (
     Voters,
     Weakest,
 )
+from yeelab.build.judgment import majority_totals
 from yeelab.voting import CYCLE
 
 from references import TOLERANCE, ranking_weights, voters_of
@@ -513,6 +515,73 @@ def test_score_comparisons_can_weight_ordinal_preferences_on_ties():
             ScoreComparisons(ballot, tie_weight=weight)
 
 
+def test_tally_takes_the_mean_unless_told_otherwise():
+    """Tally(ballot) is Tally(ballot, statistic="mean"): the same block, hash and shares,
+    the same totals bit for bit, and it prints as before. statistic="median" is another
+    block, of the shares of every score, and prints with it."""
+    voters = _scoring_voters()
+    for ballot in (Score(6), ScoreAvg(2), ScoreCluster(6), Mix(BY_GAP, BY_MEAN, share=0.25)):
+        mean = Tally(ballot, statistic="mean")
+        assert mean == Tally(ballot) and hash(mean) == hash(Tally(ballot)) and repr(mean) == f"Tally({ballot!r})"
+        assert mean.needs == ballot.needs and mean.needs_remaining == ballot.needs_remaining
+        alive = np.random.default_rng(1).random((*voters.shape, voters.n_candidates)) < 0.5
+        for remaining in (None, alive):
+            np.testing.assert_array_equal(mean.evaluate(voters, remaining), ballot.tally(voters, remaining))
+        median = Tally(ballot, statistic="median")
+        assert median != mean and repr(median) == f'Tally({ballot!r}, statistic="median")'
+        assert eval(repr(median)) == median and hash(median) == hash(eval(repr(median)))
+        assert median.needs == median.needs_remaining == ballot.needs_graded != mean.needs
+    for ballot in BALLOTS:
+        assert Tally(ballot) == Tally(ballot, statistic="mean") and repr(Tally(ballot, statistic="mean")) == f"Tally({ballot!r})"
+    assert METHODS["score"] == Highest(Tally(Score(6, power=1.5)), n=1)
+    assert repr(METHODS["score"]) == "Highest(Tally(Score(6, power=1.5)))"
+    with pytest.raises(FrozenInstanceError):
+        Tally(Score(6)).statistic = "median"
+
+
+def test_the_median_is_a_tally_like_any_other():
+    """Majority judgment (METHODS["mj"]) is Highest of the median of Score's ballot. Every
+    block that takes totals takes it and reads the shares of every score: Highest with n
+    and among, Eliminate of the lowest, Schedules (every schedule elects the candidate
+    ahead) and the order of a king's challengers; not the mean of the totals, which are
+    only an order. The median of a Mix is that of the mix of its voters, of one ballot
+    where all voters mark it."""
+    median = Tally(Score(6, power=1.5), statistic="median")
+    graded = Graded(Scored(6, power=1.5))
+    assert METHODS["mj"] == Highest(median) and METHODS["mj"].seats == 1
+    assert repr(METHODS["mj"]) == 'Highest(Tally(Score(6, power=1.5), statistic="median"))'
+    assert eval(repr(METHODS["mj"])) == METHODS["mj"]
+    assert METHODS["mj"].needs == Highest(median, n=2).needs == Eliminate(median, how="min").needs == {graded}
+    assert Schedules(median).needs == {graded}
+    assert Highest(median, among=METHODS["fptp"]).needs == {graded, FIRST}
+    assert Unbeaten(MARGINS, against=METHODS["fptp"], order=median).needs == {PAIRWISE, FIRST, graded}
+    mixed = Mix(Score(6), ScoreAvg(6), share=0.25)
+    assert Tally(mixed, statistic="median").needs == {Graded(Scored(6)), Graded(Scored(6, "avg"))}
+    assert Tally(Mix(Score(6), Plurality(), share=0), statistic="median").needs == {Graded(Scored(6))}
+
+    rng = np.random.default_rng(5)
+    shares = {key: rng.dirichlet(np.full(6, 0.7), size=(4, 6, 5)) for key in (graded, Graded(Scored(6)),
+                                                                              Graded(Scored(6, "avg")))}
+    voters = Voters(graded=shares)
+    assert voters.shape == (4, 6) and voters.n_candidates == 5
+    assert voters.at(np.eye(4, 6, dtype=bool)).graded[graded].shape == (4, 5, 6)
+    totals = majority_totals(shares[graded])
+    np.testing.assert_array_equal(median.evaluate(voters), totals)
+    winner, margin = METHODS["mj"].evaluate(voters)
+    np.testing.assert_array_equal(winner, totals.argmax(axis=-1))
+    np.testing.assert_array_equal(margin, -np.sort(totals, axis=-1)[..., -2])
+    chosen, gap = Highest(median, n=2).select(voters)
+    np.testing.assert_array_equal(chosen, totals >= np.sort(totals, axis=-1)[..., -2:-1])
+    np.testing.assert_array_equal(gap, np.diff(np.sort(totals, axis=-1)[..., -3:-1], axis=-1)[..., 0])
+    for chosen_, margin_ in (Schedules(median).select(voters), Schedules(median).rounds(voters)):
+        np.testing.assert_array_equal(chosen_, winner[..., None] == np.arange(5))
+        assert (margin_ <= margin).all()
+    expected = majority_totals(0.75 * shares[Graded(Scored(6))] + 0.25 * shares[Graded(Scored(6, "avg"))])
+    np.testing.assert_allclose(Tally(mixed, statistic="median").evaluate(voters), expected, rtol=0, atol=1e-15)
+    np.testing.assert_array_equal(Tally(Mix(Score(6), ScoreAvg(6), share=0), statistic="median").evaluate(voters),
+                                  majority_totals(shares[Graded(Scored(6))]))
+
+
 MARGINS = Margins(Pairwise())
 
 
@@ -571,6 +640,26 @@ MARGINS = Margins(Pairwise())
      "Highest n must be a whole number of at least 1, got True"),
     (lambda: Mix(BY_GAP, BY_MEAN, share=-0.1), ValueError, "Mix share must be between 0 and 1, got -0.1"),
     (lambda: Mix(BY_GAP, BY_MEAN, share=float("nan")), ValueError, "Mix share must be between 0 and 1, got nan"),
+    # the statistic of a Tally: the mean or a score ballot's median, by keyword
+    (lambda: Tally(Score(6), statistic="mode"), ValueError, 'Tally statistic must be "mean" or "median", got \'mode\''),
+    (lambda: Tally(Score(6), statistic="Median"), ValueError, "Tally statistic must be \"mean\" or \"median\", got 'Median'"),
+    (lambda: Tally(Score(6), statistic=None), ValueError, 'Tally statistic must be "mean" or "median", got None'),
+    (lambda: Tally(Score(6), statistic=0.5), ValueError, 'Tally statistic must be "mean" or "median", got 0.5'),
+    (lambda: Tally(Score(6), statistic=("median",)), ValueError, "got ('median',)"),
+    (lambda: Tally(Score(6), "median"), TypeError, "positional argument"),
+    (lambda: Tally(Plurality(), statistic="median"), TypeError,
+     'Tally with statistic="median" expects a score ballot, got a Ballot: Plurality()'),
+    (lambda: Tally(BordaCount(), statistic="median"), TypeError,
+     'Tally with statistic="median" expects a score ballot, got a Ballot: BordaCount()'),
+    (lambda: Tally(Mix(Score(6), Plurality(), share=0.5), statistic="median"), TypeError,
+     'Tally with statistic="median" expects a score ballot, got a Ballot: Plurality()'),
+    (lambda: Tally(Mix(Score(6), ScoreAvg(4), share=0.5), statistic="median"), ValueError,
+     "the median of Mix(Score(6), ScoreAvg(4), share=0.5) needs ballots with the same number of levels"),
+    (lambda: Tally(BordaCount, statistic="median"), TypeError,
+     "Tally expects a Ballot, got the class BordaCount; call it: BordaCount()"),
+    (lambda: Eliminate(Tally(Score(6), statistic="median"), how="mean"), ValueError,
+     'Eliminate how="mean" takes the mean of the totals, and those of a median are only an order: '
+     'Tally(Score(6), statistic="median")'),
 ])
 def test_wrong_blocks_and_arguments_fail_when_built(build, error, message):
     with pytest.raises(error, match=re.escape(message)):

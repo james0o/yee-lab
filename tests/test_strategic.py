@@ -35,6 +35,7 @@ from yeelab.build import (
     Burial,
     Compromise,
     Eliminate,
+    Graded,
     Highest,
     Plurality,
     Schedules,
@@ -108,17 +109,21 @@ def _every_share(rankings, probs, seed=0):
     for ballot in scored:
         above = rng.random((*voters.shape, n, n))
         comparisons[ScoredPairwise(ballot)] = above - np.swapaxes(above, -1, -2)
-    return replace(voters, unscored=unscored, scored_pairwise=comparisons)
+    graded = {Graded(SCORE_BALLOT.scored): rng.dirichlet(np.ones(SCORE_BALLOT.levels), size=(*voters.shape, n))}
+    return replace(voters, unscored=unscored, scored_pairwise=comparisons, graded=graded)
 
 
 class _Grid:
     """A stand-in for margin.shares.ScoreGrid on random shares at every point (..., C, C):
     what burying takes back from c where e is ranked above it, what compromising adds to c
     over e, and how much the score comparisons of each kind of strategic voter (burying,
-    compromising, both) move, mixed by their shares. It notes the frontrunners and shares
-    every comparison is moved by."""
+    compromising, both) move, mixed by their shares; with the shares of every score
+    `graded` (..., C, L), the part of them that burying and compromising move, of the
+    voters who rank e above c and of those who rank c above e, neither first (..., C, C,
+    L), which add up to at most `graded`. It notes the frontrunners and shares every
+    comparison is moved by."""
 
-    def __init__(self, unscored, seed):
+    def __init__(self, unscored, seed, graded=None):
         rng = np.random.default_rng(seed)
         n = unscored.shape[-1]
         self.taken_all, self.added_all = rng.random((2, *unscored.shape, n)) * (1 - np.eye(n))
@@ -126,6 +131,15 @@ class _Grid:
         kinds = rng.normal(size=(3, *unscored.shape, n)) / 10
         self.kinds = kinds - np.swapaxes(kinds, -1, -2)
         self.calls = []
+        if graded is not None:
+            buried = rng.random((*graded.shape[:-1], n, graded.shape[-1]))
+            raised = (1 - buried) * rng.random(buried.shape)
+            self.buried_all, self.raised_all = (part * graded[..., :, None, :] for part in (buried, raised))
+
+    def moved_grades(self, a, b, cells):
+        """(2, P, 2, L): those of a and b against each other, buried and raised."""
+        return np.stack([np.stack([part[cells[:, 0], cells[:, 1], a, b], part[cells[:, 0], cells[:, 1], b, a]], 1)
+                         for part in (self.buried_all, self.raised_all)])
 
     def moved_all(self, a, b, bury, compromise):
         """moved() at every point, (..., C, C)."""
@@ -154,7 +168,8 @@ def _strategy_shares(rankings, probs, seed=0):
     voters = _every_share(rankings, probs, seed)
     shape = voters.shape
     cells = np.stack(np.meshgrid(np.arange(shape[0]), np.arange(shape[1]), indexing="ij"), axis=-1)
-    grids = {Ballots(scored): _Grid(values, seed + i + 1)
+    graded = {key.scored: values for key, values in voters.graded.items()}
+    grids = {Ballots(scored): _Grid(values, seed + i + 1, graded.get(scored))
              for i, (scored, values) in enumerate(voters.unscored.items())}
     return replace(voters, ballots=grids, cells=cells)
 
@@ -238,6 +253,40 @@ def test_strategies_are_blocks():
         assert Bullet(METHODS[name], 0.5).needs == bullet, name
         assert Burial(METHODS[name], 0.5).needs == polled - ({PROFILE} if name == "fptp" else set()), name
         assert Compromise(METHODS[name], 0.5).needs == polled | ({PROFILE} if name == "fptp" else set()), name
+
+
+def test_strategic_voters_move_the_shares_of_every_score():
+    """A median reads the shares of every score, which strategic voters move as the
+    mean scores: bullet voters give their first choice the top score and the others 0;
+    of the voters a strategy changes, as many as its share go from their score of a
+    frontrunner to 0 (burying the one they rank lower) or the top score (compromising on
+    the one they rank higher, neither first), the bullet voters left out. The shares
+    still add up to the same, and the other candidates keep theirs."""
+    rankings, probs = random_profiles(3, 6)
+    voters = _strategy_shares(rankings, probs.reshape(2, 3, -1))
+    key, a, b = Graded(SCORE_BALLOT.scored), 2, 0
+    g, f = voters.graded[key], voters.first
+    others = f.sum(axis=-1, keepdims=True) - f
+    bullet = (1 - BULLET) * g
+    bullet[..., 0] += BULLET * others
+    bullet[..., -1] += BULLET * f
+    bulleted_ = bulleted(voters, BULLET)
+    np.testing.assert_allclose(bulleted_.graded[key], bullet, rtol=0, atol=1e-15)
+    grid = _grid_of(voters)
+    for vote, share, part, target in ((burying, BURIAL, grid.buried_all, 0), (compromising, COMPROMISE, grid.raised_all, -1)):
+        moved = vote(bulleted_, share, a, b).graded[key]
+        expected = bullet.copy()
+        for c, e in ((a, b), (b, a)):
+            change = share * (1 - BULLET) * part[..., c, e, :]
+            expected[..., c, :] -= change
+            expected[..., c, target] += change.sum(axis=-1)
+        np.testing.assert_allclose(moved, expected, rtol=0, atol=1e-15)
+        np.testing.assert_allclose(moved.sum(axis=-1), g.sum(axis=-1), rtol=0, atol=1e-12)
+        assert (moved >= 0).all()
+    assert bulleted(voters, 0) is voters and burying(voters, 0, a, b) is voters
+    for strategy in STRATEGIES:
+        assert strategy(METHODS["mj"], 0.3).needs >= METHODS["mj"].needs | {FIRST}
+    assert Burial(METHODS["mj"], 0.3).needs == {key, Ballots(SCORE_BALLOT.scored), FIRST}
 
 
 def test_the_poll_names_two_frontrunners():
@@ -380,8 +429,15 @@ def test_burial_and_compromise_are_the_method_on_moved_rankings(profile, strateg
             unscored[:, b] += sign * share * points[at][:, b, a]
             bury, compromise = (share, 0) if strategy is Burial else (0, share)
             compared = voters.scored_pairwise[comparisons][at] + grid.moved_all(a, b, bury, compromise)[at]
+            # the moved voters' scores of a and b to 0 or the top, of the ballot of the median
+            graded = voters.graded[Graded(SCORE_BALLOT.scored)][at].copy()
+            part, target = (_grid_of(voters).buried_all, 0) if strategy is Burial else (_grid_of(voters).raised_all, -1)
+            for c, e in ((a, b), (b, a)):
+                change = share * part[at][:, c, e]
+                graded[:, c] -= change
+                graded[:, c, target] += change.sum(axis=-1)
             moved = replace(voters_of(*moved_profile(rankings, probs[at], share, a, b)), unscored={key: unscored},
-                            scored_pairwise={comparisons: compared})
+                            scored_pairwise={comparisons: compared}, graded={Graded(SCORE_BALLOT.scored): graded})
             expected[at], expected_margin[at] = method.evaluate(moved)
         expected_margin = np.minimum(expected_margin, gap)
         clear = expected_margin > TOLERANCE

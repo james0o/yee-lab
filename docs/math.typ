@@ -1060,8 +1060,9 @@ that step.
 *Winner.* The candidate with the largest $q_i$ wins, that is the smallest $u_i$, and the
 margin (@sec-zero-sets) is its lead over the second: the second smallest $u_i$ minus the
 smallest. The tally of a score ballot in `yeelab.build` is $-u_i = q_i - 1$, the mean
-score counted down from $1$. With two levels the $q_i$ do not sum to $1$: their sum is
-the mean number of approved candidates.
+score counted down from $1$, that of `Tally(ballot)`; `Tally(ballot, statistic="median")`
+takes the median of the same scores instead (@sec-mj). With two levels the $q_i$ do not
+sum to $1$: their sum is the mean number of approved candidates.
 
 #figure(
   image("figures/approval.png", width: 100%),
@@ -1376,6 +1377,121 @@ falls elsewhere in the plane. The power was chosen on these data; the Voter Autr
 rounds of 2017 and 2022 and the Italian survey agree on it, but they are not independent
 of the choice.
 
+== Majority judgment (`mj`) <sec-mj>
+
+Majority judgment (Balinski and Laraki) is only in the web UI as well, built from blocks
+as `Highest(Tally(Score(6, power=1.5), statistic="median"))`: the ballot of Score
+(@sec-score), with the same two sliders, and another statistic of it. `Tally(ballot)`
+takes the mean, `statistic="mean"` by default; `statistic="median"` takes a score
+ballot's majority judgment, whose grades are the scores $0, dots, L - 1$
+(`build/judgment.py`).
+
+*The majority grade.* Let $w_i (k)$ be the share of the voters who give $c_i$ the score
+$k$, $F_i (k) = w_i (0) + dots + w_i (k)$ the share at most $k$ and
+$S_i (k) = 1 - F_i (k)$ the share above $k$. The majority grade of $c_i$ is its lower
+median,
+
+$ alpha_i = min {k : F_i (k) >= 1 slash 2}, $ <eq-majority-grade>
+
+the number of thresholds $k$ above which a majority grades it, $S_i (k) > 1 slash 2$.
+Where the voters split evenly, $F_i (k) = 1 slash 2$, it is the lower of the two middle
+scores, and scores no voter gives are passed over. The highest majority grade wins.
+
+*Ties on ballots.* On $n$ ballots, Balinski and Laraki break a tie of majority grades by
+taking one majority grade out of each tied candidate's grades and the median of the rest,
+again and again, until the medians differ: the candidate whose median comes out higher
+is ahead. On a candidate's grades in order this takes them from the middle out, the
+lower of the two middle ones first, and the candidates are compared on these sequences,
+their majority values, at the first place where they differ.
+
+*Without ballots.* The voters of a pixel are a distribution: there is no $n$, and one
+grade is no share of them. Taking out a share $t$ of the voters is. The grades taken out
+first are the middle ones, so once a share $t$ is out, the middle $t$ of the voters, in
+the order of their grades, are gone, and the next grades to go are those at
+$(1 - t) slash 2$ and $(1 + t) slash 2$ of the way, the lower one first. That is decided
+at the thresholds between the scores. Where a majority grades $c_i$ above $k$,
+$S_i (k) > 1 slash 2$, its lower grade drops to $k$ at $t = S_i (k) - F_i (k)$;
+elsewhere its upper grade rises above $k$ at $t = F_i (k) - S_i (k)$. Two candidates
+$c_i$ and $c_j$ with different $S(k)$ have different grades at that end from
+
+$ t_k = cases(0 & "if their majorities are on different sides of" k, min(|S_i (k) - F_i (k)|, |S_j (k) - F_j (k)|) & "otherwise") $ <eq-mj-t>
+
+on, and the one with the larger $S(k)$ has the higher grade there. So the threshold where
+they differ with the smallest $t_k$ decides, the lower end first at the same $t_k$: the
+candidate with the larger $S(k)$ is ahead. A threshold with $t_k = 0$ is a difference of
+the majority grades, and the next ones by $t_k$ are the tie-break, as deep as it goes.
+Two thresholds that disagree at the same $t_k$ are only on borders, where the margin
+below is 0. Candidates with the same $S(k)$ at every threshold have the same distribution
+and tie; Highest takes the lowest index, as for any totals.
+
+*$n$ ballots again.* Where the shares are multiples of $1 slash n$, the procedure on $n$
+ballots takes the grade of the lower end at $t$ as its step $n t$, and that of the upper
+end as its step $n t + 1$. So the order above is that of the procedure on $n$ ballots,
+for every such $n$, and for other shares the limit of it as $n$ grows: it assumes no
+number of voters, and an electorate replicated has the same order. `tests/test_judgment.py`
+checks it against the procedure on random ballots, $n$ from 1 to 30, with every kind of
+tie, also where only grades after the shares above and below the median tell two
+candidates apart. With two levels the one threshold is approval, and majority judgment
+is approval voting: the most approvals win, by the margin of Score with two levels.
+
+*Totals and margin.* A lexicographic order is no number per candidate, so the totals of
+`Tally(..., statistic="median")` rank the candidates of each pixel instead: the first
+$0$, each next one lower by the gap of its place, the smallest gap of a candidate above
+it and one below. Highest elects the first, with its smallest gap to another candidate
+as the margin; among finalists and in an elimination the totals are counted among the
+remaining candidates, whose scores do not change. (Eliminating the totals at most their
+mean, `how="mean"`, is refused: they are only an order.) The gap of $c_i$ and $c_j$ is
+
+$ gamma_(i j) = min_k max(delta_k [k "agrees"], max_(m "before" k, m "agrees") min(delta_m, (t_k - t_m) slash 2)), quad delta_k = |S_i (k) - S_j (k)|, $ <eq-mj-gap>
+
+where a threshold agrees if it puts the two in their order, $[dot]$ is 1 if it does and 0
+otherwise, and $m$ comes before $k$ at a smaller $t$, or at the same one at the lower
+end. $gamma_(i j)$ is $0$ where the order of the two changes: where the $delta$ of the
+deciding threshold vanishes, or another one reaches its $t$. The terms of the thresholds
+before $k$ keep it continuous where the deciding threshold changes. If no candidate's
+shares change by as much as $gamma_(i j)$ in all, $sum_k |Delta w (k)| < gamma_(i j)$
+with the shares still adding up to 1, every $S$ and $F$ moves by less than half of it,
+and every $delta$ and every $(t_k - t_m) slash 2$ by less than all of it, so the two keep
+their order. The winner therefore stays while the shares change by less than the margin,
+and the margin is 0 where the winner changes, as @sec-zero-sets needs. Where only the
+rule of the lower end puts a candidate behind, its gap is 0 and its total one step of
+rounding lower, so that Highest elects the candidate ahead, not the lower index.
+
+#figure(
+  image("figures/majority_judgment.png", width: 100%),
+  caption: [Majority judgment on the ballot of Score with $p = 1.5$, the default, at 3, 6
+    and 11 levels, next to Score with 6 (candidates A–E, Beta voters, `rms`, $D = 0.2$).],
+) <fig-mj>
+
+*The diagram.* The borders are curves in pieces, with a corner where another threshold
+decides, and more pieces with more levels (@fig-mj). With six levels the two candidates
+ahead have the same majority grade, so that the tie-break decides, at 15% of the square,
+at 33% with three levels and at 8% with eleven. D wins 19% of the square against 24%
+under Score, A 30% against 26%; 8% of the square has another winner than under Score, and
+the part not won by the nearest candidate is 5%, as under Score.
+
+*Shares.* $w_i (k)$ comes from the ballot table of @sec-score: `tabulate` with `GRADES`
+gives the share of the voters of every rectangle at each score of each candidate, which
+is weighed with the voters of each pixel as in @eq-grid-share, at the points where the
+borders are traced (`graded_shares` in `margin/shares.py`): $L$ pairs of matrix products
+per candidate instead of one, from the same table. The part not given is
+$sum_k (L - 1 - k) w_i (k) slash (L - 1)$. Every share is a sum of terms of one sign, and
+$F$ and $S$ are each summed from their own end, so the few voters of a tail stay exact in
+relative terms: where nearly all voters give two candidates the top score, both have it
+as their majority grade, and the one that fewer voters give less is ahead, as under the
+mean. With $G = 320$ the shares and the order take about 0.2 s for 5 candidates and 0.3 s
+for 8, against 0.03 to 0.04 s for Score, the ballot table aside, which both need.
+
+*Strategic voters.* The shares of every score add up over the voters like the mean
+scores, so strategic voters (@ch-strategy) move them as they move the mean: a voter who
+changes a score of a frontrunner moves from that score to 0 (burying) or to the top
+score (compromising), and only the median of the result is not a sum. A burying and a
+compromising voter move a candidate's score for different voters, so the two add up.
+`moved_grades` in `score.py` sums, for a pair of frontrunners, the share of the voters
+of every rectangle at each score of the two that each strategy moves, from the ballot
+table by order. With burial and compromise the update takes about 0.4 to 0.9 s at
+$G = 160$ for 5 candidates, against 0.07 to 0.2 s for Score.
+
 == IRV set + KOTH + Score (`irv_set_koth_score`) <sec-irv-set>
 
 This method is only in the web UI as well, built from blocks as
@@ -1446,7 +1562,10 @@ shares of Score, and an update costs about as much as IRV and Score together.
 Exact ties are broken by the order of the candidates: `argmax` and `argmin` take the
 first candidate. With exact shares a tie only happens on sets of zero area, e.g. for
 pixel centres exactly on a bisector under normal voters, where $pi_(i j) = 1/2$ and
-neither candidate beats the other (the dotted black lines in @fig-compare).
+neither candidate beats the other (the dotted black lines in @fig-compare). Majority
+judgment breaks a tie of majority grades by its own tie-break, and where the voters split
+evenly by its lower median (@sec-mj); only candidates with the same distribution of
+scores tie, and go to the first.
 
 #pagebreak()
 
@@ -1497,7 +1616,9 @@ points $C - 2, dots, 0$ of the positions they share. Baldwin and Nanson take the
 over the remaining candidates. On a score ballot the part of the top score that a bullet
 voter does not give $c_i$ is 1 unless $c_i$ is their first choice, so the part not given
 of Score (@sec-score) becomes $(1 - b) u_i + b sum_(j != i) s_j$, and the strict score
-comparisons of STAR $(1 - b) x_(i j) + b (s_i - s_j)$. These need the first-choice shares
+comparisons of STAR $(1 - b) x_(i j) + b (s_i - s_j)$. The shares of every score of
+majority judgment (@sec-mj) become $(1 - b) w_i (k)$, with $b s_i$ more at the top score
+and $b sum_(j != i) s_j$ more at 0. These need the first-choice shares
 next to the pairwise or score shares; `Bullet` adds them to what the method needs
 (@sec-needs).
 
@@ -1606,7 +1727,10 @@ frontrunners of the pixel:
   rank the candidates in the same order, so that no bisector crosses it. Only $t_(a b)$
   and $t_(b a)$ of the frontrunners of a pixel are needed there, so they are computed for
   each pair of frontrunners, at its pixels only. STAR's runoff reads the score
-  comparisons, which take more (@sec-star-strategy).
+  comparisons, which take more (@sec-star-strategy). Of the shares of every score of
+  majority judgment (@sec-mj), $q$ of those of the voters who rank $c_b$ above $c_a$ go
+  from their score of $c_a$ to 0, and likewise for $c_b$: the share of those voters at
+  each score of the frontrunners is summed over the voter grid like $t$.
 
 *Poll lines.* Where the second and the third most first choices tie, the frontrunners
 change, and with them whom the voters bury, so the winner can jump although every share
@@ -1679,7 +1803,9 @@ voters who compromise:
   above $c_j$, but neither first, do not give $c_i$, the part not given becomes
   $u_a - y g_(a b)$ for $a$ and $u_b - y g_(b a)$ for $b$. $g$ is summed over the voter
   grid like $t$, for each pair of frontrunners (@sec-burial); STAR's comparisons in
-  @sec-star-strategy.
+  @sec-star-strategy. Of the shares of every score of majority judgment, $y$ of those of
+  the voters who rank $c_a$ above $c_b$, neither first, go from their score of $c_a$ to
+  the top score, and likewise for $c_b$.
 
 *Order.* A poll reads the first choices of the voters it is given, and compromise
 changes them, so it runs inside the other strategies: in
@@ -2657,8 +2783,9 @@ score shares also the first-choice shares; the profile has its own. *Burying vot
 (@sec-burial) need the first-choice shares of the poll and the profile for pairwise
 shares, and *compromising voters* (@sec-compromise) the profile for first-choice and
 pairwise shares. Next to score shares both need the ballots of the voter grid, from which
-what burying takes back, $t_(i j)$, what compromising adds, $g_(i j)$, and how STAR's
-comparisons move (@sec-star-strategy) are computed for each pair of frontrunners, at its
+what burying takes back, $t_(i j)$, what compromising adds, $g_(i j)$, the shares of
+every score of the frontrunners that they move (@sec-mj) and how STAR's comparisons move
+(@sec-star-strategy) are computed for each pair of frontrunners, at its
 pixels only, multiplying only the rows and columns of the voters' shares of the
 rectangles that those pixels have. These read who ranks whom above whom, so their ballot
 table also keeps one order of distance per rectangle: its rectangles with one ballot must
@@ -2676,7 +2803,8 @@ ballot table is computed again at every step of a drag: for five to eight candid
 takes about 60 to 150 ms with six levels and 30 to 90 ms with two; with more levels more
 rectangles have a border inside and hold the ballots of $8 times 8$ points. The fine grid
 after the drag reuses it, and then the matrix products are most of the work. STAR takes
-one table for its totals and its comparisons.
+one table for its totals and its comparisons, and majority judgment the share of every
+score of every candidate from it, $L$ products per candidate (@sec-mj).
 
 == Dragging: an edge cache <sec-edge-cache>
 
@@ -2804,6 +2932,7 @@ $psi_c$ below changes only with the winner:
   [Baldwin], [smallest gap between the two lowest Borda scores over all rounds],
   [Nanson], [smallest distance of a Borda score from the mean over all rounds],
   [Score], [lead of the top mean score over the second],
+  [Majority judgment], [smallest gap $gamma$ of @eq-mj-gap between the winner and another candidate],
   [IRV set + KOTH + Score], [the smallest of $mu_W$ of @sec-irv-set, the margin of KOTH and the lead of the top mean score in $F$],
   table.hline(),
 ))

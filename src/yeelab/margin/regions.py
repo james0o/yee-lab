@@ -33,12 +33,14 @@ web UI steps through these to move the diagram between the two.
 import contourpy
 import numpy as np
 
-from yeelab.build import FIRST, METHODS, PAIRWISE, PROFILE, Ballots, Scored, ScoredPairwise, Share, Voters, Winner
+from yeelab.build import (FIRST, METHODS, PAIRWISE, PROFILE, Ballots, Graded, Scored, ScoredPairwise, Share, Voters,
+                          Winner)
 from yeelab.margin.geometric import PIXEL_MEDIAN, PixelMedian, geometric_medians
 from yeelab.margin.shares import (
     Model,
     ScoreGrid,
     first_choice_shares,
+    graded_shares,
     pairwise_shares,
     ranking_shares,
     score_comparison_shares,
@@ -97,6 +99,12 @@ def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Vote
                                                      share.delta, mu=share.mu, kappa=share.kappa,
                                                      power=share.power, by_order=share in ordered)
                               for share in scores}
+    graded = [share for share in needs if isinstance(share, Graded)]
+    if graded:  # the median: from the same ballot table as the mean
+        shares["graded"] = {share: graded_shares(candidates, model, share.scored.levels, medians, share.scored.rule,
+                                                 share.scored.delta, mu=share.scored.mu, kappa=share.scored.kappa,
+                                                 power=share.scored.power, by_order=share.scored in ordered)
+                            for share in graded}
     score_pairs = [share for share in needs if isinstance(share, ScoredPairwise)]
     if score_pairs:
         shares["scored_pairwise"] = {

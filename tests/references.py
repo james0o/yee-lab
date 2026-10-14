@@ -1,7 +1,8 @@
 """Plain Python references of the methods, straight from their definitions, point by
 point, and random profiles: what the built methods are checked against
-(test_build.py, test_strategic.py)."""
+(test_build.py, test_strategic.py, test_judgment.py)."""
 
+from functools import cmp_to_key
 from itertools import permutations
 
 import numpy as np
@@ -163,3 +164,80 @@ def random_profiles(n, count, seed=0):
     rankings = np.array(list(permutations(range(n))))
     rng = np.random.default_rng(seed + n)
     return rankings, rng.dirichlet(np.full(len(rankings), 0.3), size=count)
+
+
+def majority_value(counts):
+    """Balinski and Laraki's majority value of a candidate graded by explicit ballots,
+    counts[k] of them with the grade k: the lower of the middle grades (the majority
+    grade), taken out, and again on the rest, until none is left."""
+    grades = sorted(grade for grade, count in enumerate(counts) for _ in range(int(count)))
+    value = []
+    while grades:
+        value.append(grades.pop((len(grades) - 1) // 2))  # the lower middlemost
+    return value
+
+
+def judgment_order(counts):
+    """The candidates of counts (C, L), every one graded by the same n ballots, in the
+    order of majority judgment: by their majority values, the higher first at the first
+    grade where they differ; equal values by the lower index."""
+    values = [majority_value(row) for row in counts]
+    return sorted(range(len(counts)), key=lambda c: values[c], reverse=True)  # stable: ties keep the index
+
+
+def majority_totals_reference(grades, alive=None):
+    """Tally(ballot, statistic="median") at one point straight from the definitions of
+    build/judgment.py, with every cost of every threshold: grades (C, L) the shares (or
+    counts) of each score, alive (C,). The order of the remaining candidates, and the
+    totals: the first 0, each next one lower by the smallest gap of a candidate above it
+    and one below, by one step of rounding where that is 0 and only the rule of the lower
+    end puts it behind; -C for the others."""
+    grades = np.asarray(grades, dtype=np.float64)
+    n, levels = grades.shape
+    alive = np.ones(n, dtype=bool) if alive is None else np.asarray(alive, dtype=bool)
+    total = np.cumsum(grades, axis=-1)[:, -1:]  # one by one, as the kernel (sum adds pairwise)
+    at_most = np.cumsum(grades[:, :-1], axis=-1)  # from the bottom
+    above = np.cumsum(grades[:, :0:-1], axis=-1)[:, ::-1]  # from the top
+    lower = above > at_most
+    minority = np.where(lower, at_most, above) / total
+    half = (above - at_most) / (2 * total)
+
+    def duel(a, b):
+        """(verdict, gap): who is ahead (1 a, -1 b, 0 a tie) and the smallest cost."""
+        rows = []  # per threshold: (close, end, strength, side)
+        for k in range(levels - 1):
+            if lower[a, k] != lower[b, k]:
+                rows.append((0.5, 1, abs(half[a, k] - half[b, k]), 1 if lower[a, k] else -1))
+            else:
+                ma, mb = minority[a, k], minority[b, k]
+                ahead = mb - ma if lower[a, k] else ma - mb
+                rows.append((max(ma, mb), int(lower[a, k]), abs(ma - mb), int(np.sign(ahead))))
+        differing = [row for row in rows if row[3] != 0]
+        if not differing:
+            return 0, 0.0
+        verdict = max(differing, key=lambda row: row[:2])[3]
+        costs = []
+        for k in rows:
+            terms = [k[2] if k[3] == verdict else 0.0]
+            terms += [min(j[2], j[0] - k[0]) for j in rows if j is not k and j[3] == verdict and j[:2] > k[:2]]
+            costs.append(max(terms))
+        return verdict, min(costs)
+
+    verdict, gap = np.zeros((n, n), dtype=np.int64), np.zeros((n, n))
+    for a in range(n):
+        for b in range(a + 1, n):
+            if alive[a] and alive[b]:
+                v, g = duel(a, b)
+                verdict[a, b], verdict[b, a], gap[a, b], gap[b, a] = v, -v, g, g
+    order = sorted(np.flatnonzero(alive), key=cmp_to_key(lambda a, b: -verdict[a, b]))
+    totals = np.full(n, -float(n))
+    value = 0.0
+    for place, c in enumerate(order):
+        if place:
+            step = min(gap[i, j] for i in order[:place] for j in order[place:])
+            below = value - step
+            if below == value and verdict[order[place - 1], c] > 0:
+                below = np.nextafter(value, -np.inf)
+            value = below
+        totals[c] = value
+    return order, totals

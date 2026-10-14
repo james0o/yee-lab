@@ -27,6 +27,8 @@
     # closest and the farthest candidate, that part of the way to the power 1.5
     ballot = Score(6, power=1.5)
     score = Highest(Tally(ballot))
+    # majority judgment: the highest median score, ties by Balinski and Laraki's tie-break
+    mj    = Highest(Tally(ballot, statistic="median"))
     star  = Unbeaten(ScoreComparisons(ballot), among=Highest(Tally(ballot), n=2))
     # the highest mean score among the winners of every elimination schedule (IRV, FPTP,
     # the top two and all between) and the king of the hill
@@ -48,6 +50,8 @@
 
     blocks      the blocks, their types (Ballot, CandidateTotals, PairDiffs, PairShares,
                 Winner) and how each computes
+    judgment    the majority judgment of a score ballot, compiled: the order and the
+                totals of Tally(ballot, statistic="median")
     strategic   the methods where some of the voters vote strategically: Bullet, Burial,
                 Compromise
     rounds      one round of Eliminate, compiled: who goes at every point
@@ -86,7 +90,7 @@ from yeelab.build.blocks import (
 )
 from yeelab.build.methods import METHODS
 from yeelab.build.strategic import Bullet, Burial, Compromise
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Ballots, Scored, ScoredPairwise, Share, Voters
+from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Ballots, Graded, Scored, ScoredPairwise, Share, Voters
 
 __all__ = [
     "AntiPlurality", "Ballot", "Ballots", "BordaCount", "Bullet", "Burial", "CandidateTotals", "Compromise",
@@ -94,5 +98,5 @@ __all__ = [
     "Conditional", "Eliminate", "Highest", "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise",
     "Plurality", "Schedules", "Score", "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH",
     "ScoreHybrid", "StrongestPaths", "Tally", "Unbeaten", "Union", "Weakest", "Winner", "METHODS",
-    "FIRST", "PAIRWISE", "PROFILE", "Scored", "ScoredPairwise", "Share", "Voters",
+    "FIRST", "PAIRWISE", "PROFILE", "Graded", "Scored", "ScoredPairwise", "Share", "Voters",
 ]

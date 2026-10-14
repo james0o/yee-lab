@@ -519,6 +519,36 @@ def test_api_builds_score_from_levels_and_power():
         assert client.post("/api/regions", json=request).status_code == 422, gone
 
 
+def test_api_builds_majority_judgment_from_levels_and_power():
+    """Majority judgment takes the score sliders like Score, on the same ballot, and
+    differs from it; with two levels it is approval voting, Score's winners. Strategic
+    voters vote in it, and change it."""
+    client = TestClient(app)
+
+    def shapes(method="mj", **settings):
+        request = {"candidates": CANDIDATES.tolist(), "method": method, "grid": 64, **settings}
+        response = client.post("/api/regions", json=request)
+        assert response.status_code == 200
+        return response.json()["regions"]
+
+    assert shapes() == shapes(levels=6, power=1.5) != shapes("score")
+    expected = Highest(Tally(Score(4, power=2), statistic="median"))
+    assert shapes(levels=4, power=2) == json.loads(json.dumps(regions(expected, CANDIDATES.tolist(), MODELS[0], 64)))
+    assert shapes(levels=4, power=2) != shapes(levels=6, power=2)
+    for power in (1, 2):
+        _, median, margin = winners(Highest(Tally(Score(2, power=power), statistic="median")), CANDIDATES, MODELS[0], 64)
+        _, mean, _ = winners(Highest(Tally(Score(2, power=power))), CANDIDATES, MODELS[0], 64)
+        np.testing.assert_array_equal(median[margin > 1e-9], mean[margin > 1e-9])
+    config = client.get("/api/config").json()
+    assert "mj" in config["scores"] and "mj" in config["score_levels"] and "mj" not in config["score_comparisons"]
+    assert not any("mj" in config["unsupported"][name] for name in ("bullet", "burial", "compromise"))
+    method = next(option for option in config["methods"] if option["name"] == "mj")
+    assert method["label"] == "Majority judgment"
+    assert method["description"].endswith('\nHighest(Tally(Score(6, power=1.5), statistic="median"))')
+    for strategy in ("bullet", "burial", "compromise"):
+        assert shapes(**{strategy: 0.5}) != shapes(), strategy
+
+
 def test_the_king_of_the_hill_adds_a_finalist_to_the_irv_set():
     """With wide voters the king of the hill is a finalist the IRV set does not have, and
     wherever that changes the winner, the king wins."""

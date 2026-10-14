@@ -22,16 +22,18 @@ from scipy.special import betainc, ndtr, ndtri
 from scipy.stats import beta as beta_dist
 
 from yeelab import normal, ranking_cells
-from yeelab.build import (Bullet, Burial, Compromise, Highest, Score, ScoreAvg, ScoreCluster, ScoreDH, ScoreHybrid,
-                          Tally, Voters, Winner)
+from yeelab.build import (Bullet, Burial, Compromise, Graded, Highest, Score, ScoreAvg, ScoreCluster, ScoreDH,
+                          Scored, ScoreHybrid, Tally, Voters, Winner)
+from yeelab.build.judgment import majority_grades, majority_totals
 from yeelab.build.methods import METHODS as BUILD_METHODS
 from yeelab.margin.geometric import geometric_median_at, geometric_medians
 from yeelab.margin.regions import MARGINS, grid, nearest, regions, winners
+from yeelab.margin.regions import voters as voters_at
 from yeelab.margin.shares import Model, pairwise_shares, ranking_shares
 from yeelab.margin.shares import first_choice_shares as first_choice_shares_at
 from yeelab.score import RANGE, unscored
 from yeelab.voting import CYCLE
-from yeelab.web.app import DEVIATION as UI_DEVIATION, DRAG_GRID, FINAL_GRID
+from yeelab.web.app import DEVIATION as UI_DEVIATION, DRAG_GRID, FINAL_GRID, UNSUPPORTED
 
 # candidates A-E of the document
 CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
@@ -987,6 +989,37 @@ def score_against_voronoi(layouts=60, size=64):
 
 
 # the shares of bullet voters in the figure, and those the text quotes for every method
+def _judgment(levels, power):
+    return Highest(Tally(Score(levels, power=power), statistic="median"))
+
+
+def majority_judgment():
+    """Majority judgment on the ballot of Score at the default power, with 3, 6 and 11
+    levels, next to Score with 6: the share of the square each candidate wins, the part
+    not won by the nearest candidate or by Score's winner, and the part where the two
+    candidates ahead have the same majority grade, so that the tie-break decides."""
+    power = POWERS[1]
+    fig, axes = plt.subplots(1, 4, figsize=(13, 3.6), layout="constrained")
+    ideal = _voronoi_at_medians(CANDIDATES, FINAL_GRID)[1:-1, 1:-1]
+    score = winners(_score(6, power), CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+    show(axes[0], _score(6, power), UI_MODEL, f"Score, 6 levels, p = {power:g}")
+    for ax, levels in zip(axes[1:], (3, 6, 11)):
+        method = _judgment(levels, power)
+        winner = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+        shares = voters_at(method.needs, CANDIDATES, UI_MODEL, FINAL_GRID).graded[Graded(Scored(levels, power=power))]
+        shares = shares[1:-1, 1:-1]
+        ahead = np.argsort(-majority_totals(shares), axis=-1, kind="stable")[..., :2]
+        grade = np.take_along_axis(majority_grades(shares), ahead, axis=-1)
+        print(f"majority judgment, {levels} levels, p = {power:g}: share of the square won " + "  ".join(
+            f"{name} {(winner == c).mean():.3f}" for c, name in enumerate(NAMES))
+            + f"; not won by the nearest {(winner != ideal).mean():.3f}, by Score's winner (6 levels) "
+            f"{(winner != score).mean():.3f}; the two ahead with one majority grade "
+            f"{(grade[..., 0] == grade[..., 1]).mean():.3f}")
+        show(ax, method, UI_MODEL, f"Majority judgment, {levels} levels")
+    _save_figure(fig, "majority_judgment")
+    plt.close(fig)
+
+
 BULLET_SHARES = (0, 0.5, 1)
 BULLET_QUOTED = (0.25, 0.5)
 
@@ -1005,6 +1038,8 @@ def bullet():
     plt.close(fig)
     fptp = winners("fptp", CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
     for name, method in BUILD_METHODS.items():
+        if name in UNSUPPORTED["bullet"]:  # bullet voters do not apply to it
+            continue
         sincere = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
         changed = [(winners(Bullet(method, share), CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1] != sincere).mean()
                    for share in BULLET_QUOTED]
@@ -1032,7 +1067,7 @@ def burial():
         first_choice_shares_at(CANDIDATES, UI_MODEL), UI_MODEL.medians, medians, UI_MODEL.transform)[1:-1, 1:-1]
     frontrunners = np.argsort(-first, axis=-1, kind="stable")[..., :2]
     for name, method in BUILD_METHODS.items():
-        if name == "star":
+        if name == "star" or name in UNSUPPORTED["burial"]:
             continue
         sincere = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
         parts = []
@@ -1057,7 +1092,7 @@ def compromise():
     _save_figure(fig, "compromise")
     plt.close(fig)
     for name, method in BUILD_METHODS.items():
-        if name == "star":
+        if name == "star" or name in UNSUPPORTED["compromise"]:
             continue
         sincere = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
         parts = []
@@ -1093,6 +1128,7 @@ if __name__ == "__main__":
     approval()
     score_voting()
     score_against_voronoi()
+    majority_judgment()
     bullet()
     burial()
     compromise()

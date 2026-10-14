@@ -226,6 +226,13 @@ METHOD_INFO = {
              "The runoff tie-weight slider lets those voters use their ordinal preference, from "
              "0 (STAR) to 1 (ordinary pairwise runoff). The score categories and power use the "
              "same sliders as Score."},
+    "mj": {"label": "Majority judgment", "description": "Majority judgment: a voter grades every "
+           "candidate on the Score ballot, the closest the top grade and the farthest 0. The "
+           "highest median grade wins (where the voters split evenly, the lower one). Candidates "
+           "with the same median go by Balinski and Laraki's tie-break: the median grades are "
+           "taken out and the medians of the rest compared, here a share of the voters at a "
+           "time, since the voters of a pixel are a distribution. With two categories it is "
+           "approval voting. The score categories and power use the same sliders as Score."},
     "irv_set_koth_score": {"label": "IRV set + KOTH + Score", "description": "IRV set + KOTH + "
                            "Score: the candidates with the fewest first choices among the "
                            "remaining ones are eliminated, any number of them in a round, in every "

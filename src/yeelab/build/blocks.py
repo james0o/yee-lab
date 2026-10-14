@@ -11,7 +11,8 @@ Every block has one type of output:
                      Score(levels, power=...), ScoreAvg(levels), ScoreDH(levels, delta=...),
                      ScoreHybrid(levels, delta=...), ScoreCluster(levels, mu=..., kappa=...),
                      Mix(first, second, share=...)
-    CandidateTotals  Tally(ballot), Weakest(diffs)      a total of each candidate at a point
+    CandidateTotals  Tally(ballot), Weakest(diffs),     a total of each candidate at a point
+                     Tally(ballot, statistic="median")
     PairShares       Pairwise()                         share of the voters ranking c above e
     PairDiffs        Margins(shares),                   how strongly c beats e (antisymmetric)
                      StrongestPaths(diffs), ScoreComparisons(Score(...))
@@ -44,6 +45,11 @@ Mix(first, second, share=s) is two kinds of voters: s of them mark `second`, the
 `first`.
 Each ballot also knows the cheapest formula for its mean over the voters (Ballot.tally),
 from the shares in voters.Voters. Tally averages them over the voters of a point.
+Tally(ballot, statistic="median") takes a score ballot's majority judgment instead
+(judgment.py): the highest median score is ahead, and a tie goes by Balinski and
+Laraki's tie-break, for the voters of a point as a distribution, not n ballots. Its
+totals are the candidates in that order, the first 0 and each next one lower by the gap
+of its place, so that Highest(Tally(ballot, statistic="median")) is majority judgment.
 
 A diff s[c, e] = -s[e, c] says that c beats e where it is positive. PairDiffs are
 transitive (PairDiffs.transitive) if the candidates that beat each other cannot form a
@@ -106,13 +112,15 @@ from typing import Literal
 
 import numpy as np
 
+from yeelab.build.judgment import majority_totals
 from yeelab.build.rounds import drop_below_mean, drop_lowest
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Scored, ScoredPairwise, Share, Voters
+from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Graded, Scored, ScoredPairwise, Share, Voters
 from yeelab.score import AVG, CLUSTER, DELTA, DHONDT, HYBRID, KAPPA, MU, POWER, RANGE
 from yeelab.voting import CYCLE, descending_coalitions, irv_rounds, irv_schedules
 
 Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) or (chosen, margin) at every point
 HOW = ("min", "mean", "all")  # what Eliminate drops each round
+STATISTICS = ("mean", "median")  # what Tally takes of the points the voters give
 
 
 class Block:
@@ -234,6 +242,18 @@ class Ballot(Block):
         """Schedules(Tally(self)).select() by a formula of the ballot's own, or None to
         tally the remaining candidates again in every round of every schedule."""
         return None
+
+    @property
+    def needs_graded(self) -> frozenset[Share]:
+        """The shares grades() reads, for the median (Tally(self, statistic="median")):
+        only a score ballot has scores to take the median of."""
+        raise TypeError(f'Tally with statistic="median" expects a score ballot, got {self.kind}: {self!r}')
+
+    def grades(self, voters: Voters) -> np.ndarray:
+        """g[..., c, k] = share of the voters of every point who give c the score k,
+        (..., C, levels): the majority grade and its tie-break come from them
+        (judgment.py). A voter marks the ballot once, among all candidates."""
+        raise NotImplementedError
 
 
 @dataclass(frozen=True)
@@ -381,6 +401,14 @@ class Score(Ballot):
         their totals; the others get -1, as if no one gave them a point."""
         totals = -voters.unscored[self.scored]
         return totals if alive is None else np.where(alive, totals, -1.0)
+
+    @property
+    def needs_graded(self) -> frozenset[Share]:
+        return frozenset({Graded(self.scored)})
+
+    def grades(self, voters: Voters) -> np.ndarray:
+        """The share of the voters who give each candidate each score (Voters.graded)."""
+        return voters.graded[Graded(self.scored)]
 
     def __repr__(self):
         power = f", power={self.power!r}" if self.power != POWER else ""
@@ -533,6 +561,21 @@ class Mix(Ballot):
             return tallies[0]
         return (1 - self.share) * tallies[0] + self.share * tallies[1]
 
+    @property
+    def needs_graded(self) -> frozenset[Share]:
+        """Those of both ballots, which must have the same scores: the voters of a point
+        are the mix of their two kinds, with one scale of grades."""
+        needs = frozenset().union(*(ballot.needs_graded for ballot in self.marked))
+        if len({share.scored.levels for share in needs}) > 1:
+            raise ValueError(f"the median of {self!r} needs ballots with the same number of levels")
+        return needs
+
+    def grades(self, voters: Voters) -> np.ndarray:
+        grades = [ballot.grades(voters) for ballot in self.marked]
+        if len(grades) == 1:
+            return grades[0]
+        return (1 - self.share) * grades[0] + self.share * grades[1]
+
     def __repr__(self):
         return f"Mix({self.first!r}, {self.second!r}, share={self.share!r})"
 
@@ -683,27 +726,43 @@ class CandidateTotals(Block):
 
 @dataclass(frozen=True)
 class Tally(CandidateTotals):
-    """Mean points of the ballot over the voters of every point."""
+    """The points of the ballot over the voters of every point: by default their mean
+    (Ballot.tally). With statistic="median" a score ballot's majority judgment
+    (judgment.py): the highest median score is ahead, and a tie of medians goes by
+    Balinski and Laraki's tie-break, taking the median scores out again and again, here
+    a share of the voters at a time. The totals are then the order of the candidates,
+    the first 0 and each next one lower by the gap of its place, so that Highest elects
+    the candidate ahead with its gap as the margin; the candidates not remaining get -C.
+    A voter marks the ballot once, among all candidates, so the remaining ones of an
+    elimination keep their scores; only their order is among them."""
 
     ballot: Ballot
+    statistic: Literal["mean", "median"] = field(default="mean", kw_only=True)
 
     def __post_init__(self):
         _expect(self, self.ballot, Ballot, "a Ballot")
+        if not isinstance(self.statistic, str) or self.statistic not in STATISTICS:
+            raise ValueError(f'Tally statistic must be "mean" or "median", got {self.statistic!r}')
+        if self.statistic == "median":
+            _ = self.ballot.needs_graded  # a ballot without scores, or with two scales, fails here
 
     @property
     def needs(self) -> frozenset[Share]:
-        return self.ballot.needs
+        return self.ballot.needs if self.statistic == "mean" else self.ballot.needs_graded
 
     @property
     def needs_remaining(self) -> frozenset[Share]:
-        return self.ballot.needs_remaining
+        return self.ballot.needs_remaining if self.statistic == "mean" else self.ballot.needs_graded
 
     def evaluate(self, voters: Voters, alive: np.ndarray | None = None) -> np.ndarray:
         """CandidateTotals (..., C) among the candidates marked in alive (..., C), all for None."""
-        return self.ballot.tally(voters, alive)
+        if self.statistic == "mean":
+            return self.ballot.tally(voters, alive)
+        return majority_totals(self.ballot.grades(voters), alive)
 
     def __repr__(self):
-        return f"Tally({self.ballot!r})"
+        statistic = f', statistic="{self.statistic}"' if self.statistic != "mean" else ""
+        return f"Tally({self.ballot!r}{statistic})"
 
 
 @dataclass(frozen=True)
@@ -902,7 +961,9 @@ class Eliminate(Winner):
                     all of them, all totals are equal and the lowest index stays. The
                     round's gap is the smallest distance of a total from the mean. A
                     round that would leave fewer than `until` keeps the `until` highest
-                    instead, and the until-th highest minus the next is a gap too
+                    instead, and the until-th highest minus the next is a gap too. Not
+                    of a median (Tally(..., statistic="median")): its totals are only
+                    an order
         how="all"   all but the `until` highest go in one round (ties: the lowest index
                     stays); the gap is the until-th highest total minus the next, inf
                     if no more are left
@@ -934,6 +995,9 @@ class Eliminate(Winner):
             _expect(self, self.totals, CandidateTotals, "CandidateTotals")
         else:
             _expect(self, self.totals, Tally, "a Tally (it tallies the remaining candidates again)")
+            if self.how == "mean" and self.totals.statistic == "median":
+                raise ValueError(f'{name} how="mean" takes the mean of the totals, and those of a median are '
+                                 f'only an order: {self.totals!r}')
         until = self.until
         if isinstance(until, bool) or not isinstance(until, int) or until < 1:
             raise ValueError(f"{name} {self._until} must be a whole number of at least 1, got {until!r}")
@@ -959,7 +1023,8 @@ class Eliminate(Winner):
             return self._among(voters)
         if self.how == "all":
             return _top_two(self.totals.evaluate(voters))
-        result = self.totals.ballot.eliminate(voters, self.how)
+        # the ballot's own formula is of its mean
+        result = self.totals.ballot.eliminate(voters, self.how) if self.totals.statistic == "mean" else None
         return self.rounds(voters) if result is None else result
 
     def select(self, voters: Voters) -> Result:
@@ -1074,7 +1139,7 @@ class Schedules(Winner):
         return self.totals.needs_remaining
 
     def select(self, voters: Voters) -> Result:
-        result = self.totals.ballot.schedules(voters)
+        result = self.totals.ballot.schedules(voters) if self.totals.statistic == "mean" else None
         return self.rounds(voters) if result is None else result
 
     def rounds(self, voters: Voters) -> Result:

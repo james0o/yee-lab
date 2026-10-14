@@ -19,6 +19,8 @@ O(C^4) edges for C candidates (468 slanted edges for 8). Most methods need far l
                                       get, and score comparisons: these voters have
                                       curved borders, so the shares come from a grid of
                                       voters, not polygons
+    mj                                the share of the voters who give a candidate each
+                                      score, from the same grid
 
 (Borda needs only pairwise shares: a ballot gives c one point per candidate ranked
 below c, so c's expected score is sum_e d[c, e].)
@@ -33,7 +35,7 @@ their pairwise shares need no edges at all.
 
 All of these are at the interpolation nodes, shape (N, N, ...); regions.py
 interpolates them to the points where the methods are evaluated. The score shares are
-computed at those points themselves (unscored_shares).
+computed at those points themselves (unscored_shares, graded_shares).
 """
 
 import os
@@ -397,6 +399,27 @@ def unscored_shares(candidates, model: Model, levels: int, medians,
     return np.moveaxis(mass @ short @ mass.T, 0, -1) / (levels - 1)
 
 
+def graded_shares(candidates, model: Model, levels: int, medians,
+                  rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
+                  mu: float = score.MU, kappa: float = score.KAPPA,
+                  power: float = score.POWER, by_order: bool = False) -> np.ndarray:
+    """graded[i, j, c, k] = share of the voters with median (medians[i], medians[j]) who
+    give c the score k on a score ballot with `levels` scores by `rule`, `delta`, `mu`,
+    `kappa` and `power` (yeelab.score), shape (M, M, C, levels): what the median of the
+    ballot reads (build.judgment). Each share is summed over the voter grid like
+    unscored_shares, which is sum_k (levels - 1 - k) graded[..., k] / (levels - 1), from
+    the same kept ballots: one pair of matrix products per score and candidate instead of
+    one per candidate. Every share is a sum of terms of one sign, so it is exact in
+    relative terms where it is tiny, as the part not given is."""
+    mass = _voter_grid(model, medians)[1]
+    short = score.tabulate(ballots(candidates, model, levels, rule, delta, mu, kappa, power, by_order), score.GRADES)
+    n, m = len(candidates), len(medians)
+    graded = np.empty((m, m, n, levels))
+    for c in range(n):  # (levels, M, M) for each candidate: a few MB at a time
+        graded[:, :, c] = np.moveaxis(mass @ short[c].astype(np.float64) @ mass.T, 0, -1)
+    return graded
+
+
 def score_comparison_shares(candidates, model: Model, medians, levels: int,
                             rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
                             mu: float = score.MU, kappa: float = score.KAPPA,
@@ -507,6 +530,24 @@ class ScoreGrid:
         b, but neither first, do not give a, and likewise for b (raised_shares): what
         compromising adds."""
         return self._at(self._pair_points[score.RAISED], ((a, b), (b, a)), cells) / (self.levels - 1)
+
+    @cached_property
+    def _moved_grades(self) -> dict:
+        """score.moved_grades of the ballots, by frontrunners: burial and compromise
+        against them read one table each."""
+        return {}
+
+    def moved_grades(self, a: int, b: int, cells: np.ndarray) -> np.ndarray:
+        """(2, P, 2, levels): the share of the voters of each point at each score of a and
+        b of those a strategy against them moves (score.moved_grades): [0] who rank the
+        other frontrunner above it, whom burying gives it 0, and [1] who rank it above the
+        other, neither first, whom compromising gives it the top score."""
+        if (a, b) not in self._moved_grades:
+            self._moved_grades.clear()  # the frontrunners of other points do not come back
+            self._moved_grades[a, b] = score.moved_grades(self.table, a, b)
+        short = self._moved_grades[a, b].reshape(1, -1, *self.table.shape)
+        values = self._at(short, [(0, row) for row in range(short.shape[1])], cells)
+        return np.moveaxis(values.reshape(len(cells), 2, 2, self.levels), 1, 0)
 
     def moved(self, a: int, b: int, bury: float, compromise: float, cells: np.ndarray,
               tie_weight: float = 0.0) -> np.ndarray:

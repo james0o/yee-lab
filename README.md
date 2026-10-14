@@ -57,8 +57,8 @@ uv run fastapi dev
 Then open http://127.0.0.1:8000. [yeelab/web/app.py](src/yeelab/web/app.py) serves the page in [yeelab/web/ui/index.html](src/yeelab/web/ui/index.html) and computes the diagrams. The diagram is drawn as curves, not pixels: the backend returns the region of every winner as polygons (`POST /api/regions`). It computes only the shares the method needs, caches everything a drag does not change, runs the hot loops as compiled [numba](https://numba.pydata.org/) kernels, and traces each border as the zero set of the winner's margin. The details are in the last chapter of [docs/math.pdf](docs/math.pdf). The very first start compiles the kernels, which takes a few seconds; numba caches them afterwards.
 
 - **Candidates:** drag one to move it, click empty space to add one (up to 8), right-click to remove one. The diagram follows the drag, typically within 5–40 ms; IRV with 8 candidates, which needs every ranking cell, within about 0.1–0.2 s.
-- **Method:** Voronoi (no voters, the reference), FPTP, Two-round, IRV, DAC (descending acquiescing coalitions), Borda, Baldwin, Nanson, Schulze, Condorcet, Minimax, Black, King of the hill, Score, STAR or IRV set + KOTH + Score. The tooltip of a method says what it does and which blocks it is built from.
-- **Score categories** and **Score power p** (Score and STAR): the number of scores on a ballot, 2 (approval) to 11, and how sparingly the top scores are given, $p$ from 1 (in proportion to the distance) to 2, by default 1.5.
+- **Method:** Voronoi (no voters, the reference), FPTP, Two-round, IRV, DAC (descending acquiescing coalitions), Borda, Baldwin, Nanson, Schulze, Condorcet, Minimax, Black, King of the hill, Score, Majority judgment, STAR or IRV set + KOTH + Score. The tooltip of a method says what it does and which blocks it is built from.
+- **Score categories** and **Score power p** (Score, Majority judgment and STAR): the number of scores on a ballot, 2 (approval) to 11, and how sparingly the top scores are given, $p$ from 1 (in proportion to the distance) to 2, by default 1.5.
 - **Runoff tie weight** (STAR and other methods using score comparisons): how much a voter who gave two runoff candidates the same score counts by their ordinal preference, from 0 (STAR abstention, the default) to 1 (ordinary pairwise runoff).
 - **Bullet voters**, **Burying voters** and **Compromising voters:** the share of the voters who vote strategically, all 0 (every voter sincere) at first ([docs/math.pdf](docs/math.pdf), chapter "Strategic voting"). The frontrunners are the two candidates with the most first choices.
   - **Bullet voters** rank their first choice first and all other candidates equal below it.
@@ -113,6 +113,7 @@ from yeelab.build import Score, ScoreComparisons
 
 ballot  = Score(6, power=1.5)                   # scores 0 to 5 by the part of the way to the power 1.5
 score   = Highest(Tally(ballot))
+mj      = Highest(Tally(ballot, statistic="median"))  # majority judgment: the highest median score
 star    = Unbeaten(ScoreComparisons(ballot), among=Highest(Tally(ballot), n=2))
 
 # Conditions compare method results for each election; combine them with & or |
@@ -132,7 +133,7 @@ Bullet(Burial(Compromise(borda, share=0.4), share=0.2), share=0.3)
 # 30% bullet vote; of the others 20% bury, 40% compromise
 ```
 
-A **ballot** gives each candidate points, [`Tally`](src/yeelab/build/blocks.py#L639) averages them over the voters of a pixel, and a **winner** block ([`Highest`](src/yeelab/build/blocks.py#L866), [`Eliminate`](src/yeelab/build/blocks.py#L739), [`Unbeaten`](src/yeelab/build/blocks.py#L967), [`Conditional`](src/yeelab/build/blocks.py)) picks the winner. **Condorcet methods** start from [`Pairwise()`](src/yeelab/build/blocks.py#L513). [`Score`](src/yeelab/build/blocks.py#L298) ballots give scores from 0 to `levels - 1` by distance; `power` sets how sparingly the top scores are given. A block checks its input when it is built, and `repr` gives back the expression.
+A **ballot** gives each candidate points, [`Tally`](src/yeelab/build/blocks.py#L639) averages them over the voters of a pixel (with `statistic="median"`, it takes a score ballot's majority judgment instead), and a **winner** block ([`Highest`](src/yeelab/build/blocks.py#L866), [`Eliminate`](src/yeelab/build/blocks.py#L739), [`Unbeaten`](src/yeelab/build/blocks.py#L967), [`Conditional`](src/yeelab/build/blocks.py)) picks the winner. **Condorcet methods** start from [`Pairwise()`](src/yeelab/build/blocks.py#L513). [`Score`](src/yeelab/build/blocks.py#L298) ballots give scores from 0 to `levels - 1` by distance; `power` sets how sparingly the top scores are given. A block checks its input when it is built, and `repr` gives back the expression.
 
 `method.evaluate(voters)` returns the **winner** and the **margin**. Each method computes only the shares it needs; the details are in [docs/math.pdf](docs/math.pdf).
 
