@@ -80,6 +80,7 @@ from yeelab.build.blocks import (
     StrongestPaths,
     Tally,
     Unbeaten,
+    Undecided,
     Union,
     Weakest,
     Winner,
@@ -93,6 +94,6 @@ __all__ = [
     "DescendingCoalitions",
     "Conditional", "Eliminate", "Highest", "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise",
     "Plurality", "Score", "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH",
-    "ScoreHybrid", "StrongestPaths", "Tally", "Unbeaten", "Union", "Weakest", "Winner", "METHODS",
+    "ScoreHybrid", "StrongestPaths", "Tally", "Unbeaten", "Undecided", "Union", "Weakest", "Winner", "METHODS",
     "FIRST", "PAIRWISE", "PROFILE", "Graded", "Scored", "ScoredPairwise", "Share", "Voters",
 ]

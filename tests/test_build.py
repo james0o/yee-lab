@@ -49,6 +49,7 @@ from yeelab.build import (
     StrongestPaths,
     Tally,
     Unbeaten,
+    Undecided,
     Union,
     Voters,
     Weakest,
@@ -407,13 +408,38 @@ def test_ties_go_to_the_lowest_index():
         np.testing.assert_array_equal(margin, 0.0, err_msg=name)
 
 
-def test_methods_are_the_fifteen_expressions_they_print_as():
-    """The fifteen built-in methods are these blocks, and each prints as its expression."""
+def test_undecided_can_be_compared_and_used_as_a_conditional_branch():
+    """Undecided selects nobody, so a method compared with it tests whether it elected."""
+    n = 3
+    cycle_diffs = np.full((1, n, n), 0.5)
+    cycle_diffs[:, np.arange(n), np.arange(n)] = 0
+    decided_diffs = cycle_diffs.copy()
+    decided_diffs[0, 0, 1:] = 1
+    decided_diffs[0, 1:, 0] = 0
+    voters = Voters(pairwise=np.concatenate((cycle_diffs, decided_diffs)))
+    undecided = Undecided()
+    condorcet = Unbeaten(Margins(Pairwise()))
+
+    winner, margin = undecided.evaluate(voters)
+    np.testing.assert_array_equal(winner, CYCLE)
+    np.testing.assert_array_equal(margin, np.inf)
+
+    condition, _ = (condorcet != undecided).evaluate(voters)
+    np.testing.assert_array_equal(condition, [False, True])
+    result = Conditional(condorcet != undecided, condorcet, Undecided())
+    result_winner, _ = result.evaluate(voters)
+    np.testing.assert_array_equal(result_winner, [CYCLE, 0])
+
+
+def test_methods_are_the_expressions_they_print_as():
+    """The built-in methods are these blocks, and each prints as its expression."""
     margins = Margins(Pairwise())
     koth = Unbeaten(margins, against=Highest(Tally(Plurality())), order=Tally(Plurality()))
     expected = {
         "fptp": Highest(Tally(Plurality())),
         "two_round": Unbeaten(margins, among=Highest(Tally(Plurality()), n=2)),
+        "three_round": Eliminate(Tally(Plurality()), how="min",
+                                 among=Highest(Tally(Plurality()), n=3)),
         "irv": Eliminate(Tally(Plurality()), how="min"),
         "dac": DescendingCoalitions(),
         "borda": Highest(Tally(BordaCount())),
@@ -422,7 +448,8 @@ def test_methods_are_the_fifteen_expressions_they_print_as():
         "schulze": Unbeaten(StrongestPaths(margins)),
         "condorcet": Unbeaten(margins),
         "minimax": Highest(Weakest(margins)),
-        "black": Conditional(Unbeaten(margins), Unbeaten(margins), Highest(Tally(BordaCount()))),
+        "black": Conditional(Unbeaten(margins) != Undecided(), Unbeaten(margins),
+                             Highest(Tally(BordaCount()))),
         "koth": koth,
         "score": Highest(Tally(Score(6, power=1.5))),
         "star": Unbeaten(ScoreComparisons(Score(6, power=1.5)), among=Highest(Tally(Score(6, power=1.5)), n=2)),
@@ -436,6 +463,7 @@ def test_methods_are_the_fifteen_expressions_they_print_as():
     blocks = [*expected.values(), *BALLOTS, *PAIR_BLOCKS, fptp | irv | borda, fptp | (irv | borda),
               Unbeaten(StrongestPaths(margins), against=METHODS["black"], order=Weakest(margins)),
               Unbeaten(margins, among=fptp | borda),
+              Undecided(),
               Conditional(Highest(Tally(BY_MEAN), n=3), fptp, irv),
               Eliminate(Tally(BordaCount()), how="min", until=2), Highest(Tally(Plurality()), n=2),
               Highest(Weakest(margins), among=fptp | irv),
@@ -487,6 +515,8 @@ def test_needs():
     assert Conditional(METHODS["irv"], METHODS["irv"], METHODS["fptp"]).needs == {PROFILE, FIRST}
     assert Conditional(METHODS["condorcet"], METHODS["condorcet"], Highest(Tally(BY_MEAN))).needs \
         == {PAIRWISE, Scored(2, "avg")}
+    assert Conditional(METHODS["fptp"] == METHODS["score"], METHODS["score"], Undecided()).needs \
+        == {FIRST, Scored(6, power=1.5)}
     assert Unbeaten(margins, against=METHODS["irv"], order=Tally(Plurality())).needs == {PAIRWISE, PROFILE, FIRST}
     assert Unbeaten(margins, against=METHODS["borda"], order=Weakest(margins)).needs == {PAIRWISE}
 
@@ -609,8 +639,8 @@ MARGINS = Margins(Pairwise())
      ValueError, "Unbeaten takes among or against, not both"),
     (lambda: Unbeaten(MARGINS, against=Highest(Tally(Plurality()), n=2), order=Tally(Plurality())), ValueError,
      "Unbeaten against must choose one candidate, the king"),
-    (lambda: Eliminate(Tally(Plurality()), how="min", among=METHODS["irv"]), ValueError,
-     'Eliminate takes among only with how="all": Highest(totals, among=...)'),
+    (lambda: Eliminate(Tally(Plurality()), how="mean", among=METHODS["irv"]), ValueError,
+     'Eliminate takes among only with how="min" or "all"'),
     (lambda: Eliminate(Tally(BordaCount()), how="max"), ValueError,
      'Eliminate how must be "min", "mean" or "all", got \'max\''),
     (lambda: Eliminate(Tally(BordaCount()), how="min", until=0), ValueError,

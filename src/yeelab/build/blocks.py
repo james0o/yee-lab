@@ -22,7 +22,7 @@ Every block has one type of output:
                      DescendingCoalitions(),
                      Unbeaten(diffs, among=...),
                      Unbeaten(diffs, against=winner, order=totals),
-                     Conditional(condition, when_true, when_false), first | second
+                     Conditional(condition, when_true, when_false), Undecided(), first | second
 
 A ranked ballot gives weight(k, C) points to the candidate at position k (0 = closest)
 of C; both count only the remaining candidates, and a higher total is better. A score
@@ -840,6 +840,20 @@ def _same_value(first, second) -> bool:
     return first == second
 
 
+@dataclass(frozen=True, eq=False)
+class Undecided(Winner):
+    """A method that elects no candidate, with no additional margin constraint."""
+
+    needs = frozenset()
+
+    def select(self, voters: Voters) -> Result:
+        chosen = np.zeros((*voters.shape, voters.n_candidates), dtype=bool)
+        return chosen, np.full(voters.shape, np.inf)
+
+    def __repr__(self):
+        return "Undecided()"
+
+
 class Condition(Block):
     """A deferred boolean expression composed from voting-method results."""
 
@@ -955,11 +969,11 @@ class Eliminate(Winner):
     elimination flips, and there the gap is 0. Highest(totals, n) is Eliminate(totals,
     how="all", until=n).
 
-    With `among` (how="all": Highest(totals, among=finalists)) only the candidates
-    `among` chooses run: the `until` highest totals among them stay, a Tally counted
-    among them as in a round. Where `among` chooses fewer than `until`, they all stay;
-    where no one, no one does. The margin is the smaller of among's and the gap between
-    the `until`-th total and the next among them, inf if all of them stay.
+    With `among`, only the candidates `among` chooses run. For how="all", the `until`
+    highest totals among them stay in one round, a Tally counted among them as in a round.
+    For how="min", those candidates are the initial set for the elimination rounds. Where
+    `among` chooses fewer than `until`, they all stay; where no one, no one does. The
+    margin includes among's and the elimination gaps.
     """
 
     totals: CandidateTotals
@@ -983,8 +997,8 @@ class Eliminate(Winner):
         if isinstance(until, bool) or not isinstance(until, int) or until < 1:
             raise ValueError(f"{name} {self._until} must be a whole number of at least 1, got {until!r}")
         if self.among is not None:
-            if self.how != "all":
-                raise ValueError(f'{name} takes among only with how="all": Highest(totals, among=...)')
+            if self.how == "mean":
+                raise ValueError(f'{name} takes among only with how="min" or "all"')
             _expect(self, self.among, Winner, "a Winner as among")
 
     @property
@@ -1001,7 +1015,11 @@ class Eliminate(Winner):
     def evaluate(self, voters: Voters) -> Result:
         self._one_seat()
         if self.among is not None:
-            return self._among(voters)
+            if self.how == "all":
+                return self._among(voters)
+            running, margin = self.among.select(voters)
+            alive, margin = self.remaining(voters, running, margin)
+            return np.where(alive.any(axis=-1), alive.argmax(axis=-1), CYCLE), margin
         if self.how == "all":
             return _top_two(self.totals.evaluate(voters))
         # the ballot's own formula is of its mean
@@ -1023,6 +1041,9 @@ class Eliminate(Winner):
             lead = np.where(too_few, np.inf, lead)
             none = ~running.any(axis=-1)
             return chosen, np.where(none, margin, np.minimum(margin, lead))
+        if self.among is not None:
+            running, margin = self.among.select(voters)
+            return self.remaining(voters, running, margin)
         return self.remaining(voters)
 
     def _among(self, voters: Voters) -> Result:
@@ -1039,14 +1060,20 @@ class Eliminate(Winner):
     def rounds(self, voters: Voters) -> Result:
         """evaluate() with one tally per round, whatever formula the ballot has of its
         own (Ballot.eliminate)."""
-        alive, margin = self.remaining(voters)
-        return alive.argmax(axis=-1), margin
+        if self.among is None:
+            alive, margin = self.remaining(voters)
+        else:
+            running, margin = self.among.select(voters)
+            alive, margin = self.remaining(voters, running, margin)
+        return np.where(alive.any(axis=-1), alive.argmax(axis=-1), CYCLE), margin
 
-    def remaining(self, voters: Voters) -> Result:
-        """select() of "min" and "mean", with one tally per round."""
+    def remaining(self, voters: Voters, alive: np.ndarray | None = None,
+                  margin: np.ndarray | None = None) -> Result:
+        """select() of "min" and "mean", with one tally per round, optionally starting
+        from a set of finalists and its margin."""
         n = voters.n_candidates
-        alive = np.ones((*voters.shape, n), dtype=bool)
-        margin = np.full(voters.shape, np.inf)
+        alive = np.ones((*voters.shape, n), dtype=bool) if alive is None else np.ascontiguousarray(alive).copy()
+        margin = np.full(voters.shape, np.inf) if margin is None else np.array(margin, copy=True)
         drop = drop_lowest if self.how == "min" else drop_below_mean
         for _ in range(n - self.until):  # every round drops at least one candidate
             totals = self.totals.evaluate(voters, alive)
@@ -1238,8 +1265,7 @@ class Conditional(Winner):
 
     @property
     def needs(self) -> frozenset[Share]:
-        condition_needs = self.condition.needs if isinstance(self.condition, Winner) else frozenset()
-        return condition_needs | self.when_true.needs | self.when_false.needs
+        return self.condition.needs | self.when_true.needs | self.when_false.needs
 
     def _condition(self, voters: Voters) -> tuple[np.ndarray, np.ndarray]:
         if isinstance(self.condition, Winner):

@@ -16,6 +16,7 @@ from yeelab.build.blocks import (
     StrongestPaths,
     Tally,
     Unbeaten,
+    Undecided,
     Weakest,
     Winner,
 )
@@ -34,7 +35,7 @@ two_round = Unbeaten(M, among=Highest(Tally(Plurality()), n=2))
 schulze = Unbeaten(StrongestPaths(M))                # no one beats them along the strongest paths
 condorcet = Unbeaten(M)                              # the Condorcet winner; CYCLE where there is none
 minimax = Highest(Weakest(M))                        # the smallest worst defeat
-black = Conditional(condorcet, condorcet, borda)     # the Condorcet winner, else Borda
+black = Conditional(condorcet != Undecided(), condorcet, borda)  # the Condorcet winner, else Borda
 # king of the hill: the fptp winner, or the most first choices among those who beat it
 koth = Unbeaten(M, against=fptp, order=Tally(Plurality()))
 
@@ -73,10 +74,27 @@ smj_fin = Conditional(
 smj_two = Unbeaten(ScoreComparisons(score_ballot), among= smj_fin | two_round)
 smj_end = Conditional(((smj_two == two_round) & (smj_two == fptp)), when_true=star, when_false=smj_two)
 
+three_round = Eliminate(Tally(Plurality()), how="min", among=top3)
+
+adhoc = Conditional(
+    fptp == score, 
+    when_true=score, 
+    when_false=Conditional(
+        two_round == score,
+        when_true=score,
+        when_false= Conditional(
+            score == koth,
+            when_true=koth,
+            when_false=Undecided()
+        )
+    )
+)
+
 
 METHODS: dict[str, Winner] = {
     "fptp": fptp,
     "two_round": two_round,
+    'three_round': three_round,
     "irv": irv,
     "dac": dac,
     "borda": borda,
@@ -94,4 +112,5 @@ METHODS: dict[str, Winner] = {
     "mj": mj,
     "smj_two": smj_two,
     "smj_end": smj_end,
+    "adhoc": adhoc,
 }

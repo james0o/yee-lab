@@ -12,8 +12,8 @@ likewise; Unbeaten among everyone is Unbeaten itself.
 The methods of the whole profile are checked on the ranking shares of the profiles
 (conftest.py): every elimination, down to one and to two candidates (Highest is
 Eliminate(totals, how="all")); Highest(totals, among=finalists), the highest total among
-the finalists; and DAC, whose margin also bounds how much the shares must change to
-change the winner. The references are those of references.py and those below.
+the finalists; IRV among finalists; and DAC, whose margin also bounds how much the shares
+must change to change the winner. The references are those of references.py and those below.
 """
 
 import numpy as np
@@ -34,12 +34,21 @@ from yeelab.build import (
     StrongestPaths,
     Tally,
     Unbeaten,
+    Undecided,
     Voters,
     Weakest,
 )
 from yeelab.voting import CYCLE
 
-from references import TOLERANCE, dac_reference, elimination_reference, levels_of, random_profiles, voters_of
+from references import (
+    TOLERANCE,
+    dac_reference,
+    elimination_reference,
+    levels_of,
+    random_profiles,
+    ranking_weights,
+    voters_of,
+)
 
 BALLOTS = [Plurality(), BordaCount()]
 # every elimination: the four methods and the one other combination of these blocks
@@ -448,6 +457,38 @@ def test_highest_among_the_finalists(profile):
     assert clear.mean() > 0.5  # not vacuous
     np.testing.assert_array_equal(winner[clear], expected[clear])
     np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-5)
+
+
+def test_irv_among_top_three_matches_reference(profile):
+    """Top-three plurality finalists seed the IRV rounds and contribute their gap."""
+    rankings, probs = profile
+    voters = voters_of(rankings, probs)
+    top3 = Highest(Tally(Plurality()), n=3)
+    method = Eliminate(Tally(Plurality()), how="min", among=top3)
+    finalists, finalist_margin = top3.select(voters)
+    expected = np.zeros_like(finalists)
+    expected_margin = finalist_margin.copy()
+
+    for point in np.ndindex(*probs.shape[:-1]):
+        alive = finalists[point].copy()
+        gaps = []
+        while alive.sum() > 1:
+            weights = ranking_weights(Plurality(), rankings, alive)
+            totals = probs[point] @ weights
+            remaining = np.flatnonzero(alive)
+            order = np.argsort(totals[remaining], kind="stable")
+            gaps.append(totals[remaining[order[1]]] - totals[remaining[order[0]]])
+            alive[remaining[order[0]]] = False
+        expected[point] = alive
+        expected_margin[point] = min([finalist_margin[point], *gaps])
+
+    winner, margin = method.evaluate(voters)
+    clear = expected_margin > TOLERANCE
+    np.testing.assert_array_equal(winner[clear], expected.argmax(axis=-1)[clear])
+    np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-5)
+    round_winner, round_margin = method.rounds(voters)
+    np.testing.assert_array_equal(round_winner, winner)
+    np.testing.assert_array_equal(round_margin, margin)
 
 
 @pytest.mark.parametrize("d", TOURNAMENTS, ids=lambda d: f"{d.shape[-1]}-candidates")
