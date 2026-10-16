@@ -99,13 +99,15 @@ def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Vote
     if scores:
         shares["unscored"] = {share: unscored_shares(candidates, model, share.levels, medians, share.rule,
                                                      share.delta, mu=share.mu, kappa=share.kappa,
-                                                     power=share.power, by_order=share in ordered)
+                                                     power=share.power, votes=share.votes,
+                                                     by_order=share in ordered)
                               for share in scores}
     graded = [share for share in needs if isinstance(share, Graded)]
     if graded:  # the median: from the same ballot table as the mean
         shares["graded"] = {share: graded_shares(candidates, model, share.scored.levels, medians, share.scored.rule,
                                                  share.scored.delta, mu=share.scored.mu, kappa=share.scored.kappa,
-                                                 power=share.scored.power, by_order=share.scored in ordered)
+                                                 power=share.scored.power, votes=share.scored.votes,
+                                                 by_order=share.scored in ordered)
                             for share in graded}
     score_pairs = [share for share in needs if isinstance(share, ScoredPairwise)]
     if score_pairs:
@@ -113,14 +115,16 @@ def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Vote
             share: score_comparison_shares(candidates, model, medians, share.scored.levels,
                                            share.scored.rule, share.scored.delta, mu=share.scored.mu,
                                            kappa=share.scored.kappa, power=share.scored.power,
-                                           by_order=share.scored in ordered, tie_weight=share.tie_weight)
+                                           votes=share.scored.votes, by_order=share.scored in ordered,
+                                           tie_weight=share.tie_weight)
             for share in score_pairs
         }
     grids = [share for share in needs if isinstance(share, Ballots)]
     if grids:  # the score shares of strategic voters, computed when asked
         shares["ballots"] = {share: ScoreGrid(np.asarray(candidates, dtype=np.float64), model, medians,
                                               share.scored.levels, share.scored.rule, share.scored.delta,
-                                              share.scored.mu, share.scored.kappa, share.scored.power)
+                                              share.scored.mu, share.scored.kappa, share.scored.power,
+                                              share.scored.votes)
                              for share in grids}
         shares["cells"] = np.stack(np.meshgrid(np.arange(len(medians)), np.arange(len(medians)), indexing="ij"),
                                    axis=-1)

@@ -12,8 +12,9 @@ only those at the points of its grid.
     unscored    {Scored(levels, rule, delta): mean part of the top score that the voters
                 do not give each candidate (..., C)}, from 0 to 1, one entry per score
                 ballot: its number of levels, its rule (score.RANGE, score.AVG,
-                score.DHONDT, score.HYBRID, score.CLUSTER), the divisor of DHONDT and
-                HYBRID, the mu and kappa of CLUSTER and the power of RANGE. The
+                score.DHONDT, score.HYBRID, score.CLUSTER, score.D21), the divisor of
+                DHONDT and HYBRID, the mu and kappa of CLUSTER, the power of RANGE and
+                D21 and the numbers of votes of D21. The
                 mean score is the top score, levels - 1, times 1 minus this. It is
                 not kept itself: where nearly all voters give two candidates the top
                 score, both mean scores are the top score to rounding, and only the
@@ -43,15 +44,16 @@ from typing import Literal
 
 import numpy as np
 
-from yeelab.score import DELTA, KAPPA, MU, POWER, RANGE, Rule
+from yeelab.score import DELTA, KAPPA, MU, POWER, RANGE, VOTES, Rule
 
 
 @dataclass(frozen=True)
 class Scored:
     """The scores on a ballot with `levels` scores, given by `rule` (score.RANGE,
-    score.AVG, score.DHONDT, score.HYBRID or score.CLUSTER), for DHONDT and HYBRID the
-    divisor `delta`, for CLUSTER the cost of a split `mu` and the cohesion `kappa`, and
-    for RANGE the `power` of the part of the way; the others do not use them."""
+    score.AVG, score.DHONDT, score.HYBRID, score.CLUSTER or score.D21), for DHONDT and
+    HYBRID the divisor `delta`, for CLUSTER the cost of a split `mu` and the cohesion
+    `kappa`, for RANGE and D21 the `power` of the part of the way, and for D21 its
+    numbers of votes `votes`; the others do not use them."""
 
     levels: int
     rule: Rule = RANGE
@@ -59,6 +61,7 @@ class Scored:
     mu: float = MU
     kappa: float = KAPPA
     power: float = POWER
+    votes: tuple[int, int, int] = VOTES
 
 
 @dataclass(frozen=True)

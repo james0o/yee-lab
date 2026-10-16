@@ -10,6 +10,7 @@ Every block has one type of output:
                      BordaCount(),
                      Score(levels, power=...), ScoreAvg(levels), ScoreDH(levels, delta=...),
                      ScoreHybrid(levels, delta=...), ScoreCluster(levels, mu=..., kappa=...),
+                     D21(max_positive=..., max_negative=..., negative_after=..., power=...),
                      Mix(first, second, share=...)
     CandidateTotals  Tally(ballot), Weakest(diffs),     a total of each candidate at a point
                      Tally(ballot, statistic="median")
@@ -38,7 +39,11 @@ does that for the candidates closer than halfway, on the upper half of the scale
 Score's for the others, on the lower half; ScoreCluster(levels, mu=..., kappa=...)
 gives Score's scores unless that splits a cluster of candidates at nearly the same
 distance, at a cost of mu, kappa setting how far a cluster must stand apart. With two levels
-each is an approval ballot. Its total is the mean score as a part of the top score, counted down
+each is an approval ballot. D21(max_positive=..., max_negative=..., negative_after=...,
+power=...) is Janeček's D21, plus votes, minus votes and none, from Score's ballots of
+three and two levels: at most max_positive plus votes to the closest candidates, at most
+max_negative minus votes to the farthest, and a minus vote only after negative_after plus
+votes. Its total is the mean score as a part of the top score, counted down
 from 1: a voter who does not give a candidate the top score takes off what is missing.
 Mix(first, second, share=s) is two kinds of voters: s of them mark `second`, the others
 `first`.
@@ -106,7 +111,8 @@ import numpy as np
 from yeelab.build.judgment import majority_totals
 from yeelab.build.rounds import drop_below_mean, drop_lowest
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Graded, Scored, ScoredPairwise, Share, Voters
-from yeelab.score import AVG, CLUSTER, DELTA, DHONDT, HYBRID, KAPPA, MU, POWER, RANGE
+from yeelab.score import AVG, CLUSTER, DELTA, DHONDT, HYBRID, KAPPA, MU, POWER, RANGE, VOTES
+from yeelab.score import D21 as D21_RULE
 from yeelab.voting import CYCLE, descending_coalitions, irv_rounds
 
 Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) or (chosen, margin) at every point
@@ -359,8 +365,8 @@ class Score(Ballot):
             raise ValueError(f"{type(self).__name__} power must be a number above 0, got {power!r}")
         if not isinstance(self.fixed, bool):
             raise TypeError(f"{type(self).__name__} fixed must be a bool, got {self.fixed!r}")
-        if self.rule != RANGE and power != POWER:  # as for any keyword the block does not take
-            raise TypeError(f"{type(self).__name__} has no power; only Score has")
+        if self.rule not in (RANGE, D21_RULE) and power != POWER:  # as for any keyword the block does not take
+            raise TypeError(f"{type(self).__name__} has no power; only Score and D21 have")
 
     @property
     def scored(self) -> Scored:
@@ -494,6 +500,57 @@ class ScoreCluster(Score):
 
     def __repr__(self):
         return f"{type(self).__name__}({self.levels}, mu={self.mu!r}, kappa={self.kappa!r})"
+
+
+@dataclass(frozen=True, repr=False)
+class D21(Score):
+    """Janeček's D21 (yeelab.score): at most max_positive plus votes and max_negative
+    minus votes, and a minus vote only after negative_after plus votes or more. The voter
+    marks Score(3)'s ballot at the power `power`: a plus vote to the candidates it gives
+    the top score, the closest first, and a minus vote to those it gives 0, the farthest
+    first. If that gives no minus vote, and Score(2) approves more candidates, at most
+    max_positive, the voter marks that instead, with a minus vote, on the same terms, to
+    the candidates it does not approve. Without minus votes the ballot is Score(2) of at
+    most max_positive candidates: D21(max_positive=1, max_negative=0) is FPTP. The
+    defaults are score.VOTES: 2 plus votes and 1 minus vote, after 2 plus votes.
+
+    A plus vote is the score 2, none 1 and a minus vote 0, of 3 levels, or without minus
+    votes a plus vote 1 and none 0, of 2: levels follows from max_negative, and the UI's
+    categories slider does not change it (fixed). The total is that of Score, so the
+    candidate with the most plus votes less minus votes is ahead."""
+
+    levels: int = field(default=3, init=False)
+    fixed: bool = field(default=True, init=False)
+    max_positive: int = field(default=VOTES[0], kw_only=True)
+    max_negative: int = field(default=VOTES[1], kw_only=True)
+    negative_after: int = field(default=VOTES[2], kw_only=True)
+    rule = D21_RULE
+
+    def __post_init__(self):
+        for name, least in (("max_positive", 1), ("max_negative", 0)):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < least:
+                raise ValueError(f"D21 {name} must be a whole number of at least {least}, got {value!r}")
+        after = self.negative_after
+        if isinstance(after, bool) or not isinstance(after, int) or not 0 <= after <= self.max_positive:
+            raise ValueError(f"D21 negative_after must be a whole number from 0 to max_positive "
+                             f"({self.max_positive}), got {after!r}")
+        object.__setattr__(self, "levels", 3 if self.max_negative else 2)
+        super().__post_init__()
+
+    @property
+    def votes(self) -> tuple[int, int, int]:
+        """(max_positive, max_negative, negative_after), as score.VOTES."""
+        return self.max_positive, self.max_negative, self.negative_after
+
+    @property
+    def scored(self) -> Scored:
+        return Scored(self.levels, self.rule, power=self.power, votes=self.votes)
+
+    def __repr__(self):
+        power = f", power={self.power!r}" if self.power != POWER else ""
+        return (f"{type(self).__name__}(max_positive={self.max_positive!r}, max_negative={self.max_negative!r}, "
+                f"negative_after={self.negative_after!r}{power})")
 
 
 @dataclass(frozen=True)

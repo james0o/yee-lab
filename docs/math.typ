@@ -1492,6 +1492,62 @@ of every rectangle at each score of the two that each strategy moves, from the b
 table by order. With burial and compromise the update takes about 0.4 to 0.9 s at
 $G = 160$ for 5 candidates, against 0.07 to 0.2 s for Score.
 
+== D21 (`d21`) <sec-d21>
+
+D21 (Janeček) gives every voter a few plus votes and fewer minus votes, at most one of
+each per candidate; the most plus votes less minus votes win. Here it is
+`Highest(Tally(D21(max_positive=2, max_negative=1, negative_after=2, power=1.5)))`:
+at most $P = 2$ plus votes, at most $N = 1$ minus vote, and a minus vote only from a voter
+who gives at least $A = 2$ plus votes. It is a score ballot of $3$ levels, a plus vote
+$2$, none $1$ and a minus vote $0$, or of $2$ levels without minus votes, built from the
+ballot of Score (@eq-range) at the power $p$ of its slider (`score.D21`). The number of
+levels follows from $N$, so the categories slider does not apply.
+
+*The ballot.* The voter starts from Score's ballot of three levels: a plus vote to the
+candidates with the top score, $t_i^p >= 3 slash 4$, the closest first and at most $P$
+of them, and a minus vote to those with $0$, $t_i^p <= 1 slash 4$, the farthest first and
+at most $N$, if they gave $A$ plus votes or more. If that gives no minus vote, and Score's
+approval ballot (two levels, $t_i^p > 1 slash 2$) approves more candidates, at most $P$,
+the voter takes that ballot instead: a plus vote to the candidates it approves and a
+minus vote, on the same terms, to those it does not, $t_i^p <= 1 slash 2$. A voter who
+would be left without a minus vote approves more generously to get one; one who gets it
+anyway keeps the caution of three levels. The closest candidate always gets a plus vote;
+the farthest, at $t = 0$, a minus vote whenever the voter gives one.
+
+With the defaults this is one cut at halfway, $t_i^p > 1 slash 2$, whatever $p$: two plus
+votes under three levels are the two closest, as under two; one plus vote under three
+levels and two under two is the switch; and one under both gives no minus vote either
+way. Every voter gives the plus votes to Score's approval of at most the two closest, and
+a minus vote to the farthest after two plus votes (`tests/test_score.py`). The cuts of
+three levels count only where a voter can keep them and still give a minus vote: with
+$A < 2$, $P >= 3$ or $N >= 2$. Without minus votes the ballot is always Score's approval of at most $P$
+candidates: `D21(max_positive=1, max_negative=0)` is FPTP, and with $P >= C$ it is
+approval voting.
+
+*Total.* With $s_i^+$ and $s_i^-$ the shares of the voters who give $c_i$ a plus and a
+minus vote, the tally of the score ballot (@sec-score) is
+$-u_i = (s_i^+ - s_i^-) slash 2 - 1 slash 2$, in the order of $s_i^+ - s_i^-$, and the
+margin is half the lead in plus votes less minus votes. A vote changes where a score of
+@eq-range-borders does, at $t_i^p = 1 slash 4$, $1 slash 2$ or $3 slash 4$, and, where
+$P$ or $N$ cuts between two candidates with the same score, on their bisector. The
+shares come from the ballot table of @sec-score, as for Score.
+
+*In the plane.* On the default candidates A–E (Beta voters, `rms`, $D = 0.2$,
+$p = 1.5$) a voter of the square gives $1.73$ plus votes and $0.73$ minus votes on
+average: 31% get two plus votes from three levels, 42% switch to approval to get the
+minus vote, and 27% approve only their closest candidate and give no minus vote. The
+minus votes go to the candidates at the edge of the layout, E 34% of the voters, B 15%,
+A 13% and C 11%, and never to D in the middle, which is never the farthest. D wins 30% of
+the square against 21% of its Voronoi cell, 23% under approval with the same $p$ and 24%
+under Score; without minus votes ($N = 0$) it wins 23%, and with a minus vote at once
+($A = 0$) 25%. The part of the square not won by the nearest candidate is 12%, as under
+FPTP (12%), against 9% under approval and 5% under Score: the plus votes spread the
+regions as approval does, and the minus votes push the edge candidates further back.
+
+*Strategic voters.* The strategies of @ch-strategy treat the ballot as any score ballot:
+a burying voter gives the frontrunner they rank lower $0$, a minus vote, and a
+compromising one the other the top score, a plus vote, whatever $P$, $N$ and $A$ allow.
+
 == Ties <sec-ties>
 
 Exact ties are broken by the order of the candidates: `argmax` and `argmin` take the

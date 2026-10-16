@@ -8,7 +8,7 @@ import json
 import threading
 import time
 from copy import copy
-from dataclasses import fields, is_dataclass
+from dataclasses import fields, is_dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
@@ -18,7 +18,7 @@ from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
-from yeelab.build import (Bullet, Burial, Compromise, Score, ScoreComparisons, Winner)
+from yeelab.build import (D21, Bullet, Burial, Compromise, Score, ScoreComparisons, Winner)
 from yeelab.build.methods import SCORE_POWER
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
@@ -54,8 +54,8 @@ TIE_WEIGHT_STEP = 0.05
 
 
 def _score_ballots(block) -> list[Score]:
-    """Find Score ballots nested in a built method."""
-    if type(block) is Score:
+    """Find Score and D21 ballots nested in a built method: the ballots with a power."""
+    if type(block) in (Score, D21):
         return [block]
     if not is_dataclass(block):
         return []
@@ -67,6 +67,8 @@ def _score_ballot_settings(block, levels: int, power: float):
     """Replace adjustable Score settings while preserving fixed levels and block structure."""
     if type(block) is Score:
         return Score(block.levels if block.fixed else levels, power=power, fixed=block.fixed)
+    if type(block) is D21:  # its levels follow from its votes
+        return replace(block, power=power)
     if not is_dataclass(block):
         return block
     updated_block = copy(block)
@@ -226,6 +228,13 @@ METHOD_INFO = {
              "The runoff tie-weight slider lets those voters use their ordinal preference, from "
              "0 (STAR) to 1 (ordinary pairwise runoff). The score categories and power use the "
              "same sliders as Score."},
+    "d21": {"label": "D21", "description": "D21 (Janeček): a voter gives at most 2 plus votes, to the "
+            "closest candidates, and at most 1 minus vote, to the farthest, but a minus vote only "
+            "after 2 plus votes. The voter starts from the Score ballot of 3 categories: a plus vote "
+            "for the top score, a minus vote for 0. If that leaves them without a minus vote and the "
+            "approval ballot of 2 categories approves more candidates, they vote that instead: plus "
+            "votes for the candidates it approves, a minus vote for the farthest. The most plus votes "
+            "less minus votes win. The power uses the same slider as Score; the categories are fixed."},
     "mj": {"label": "Majority judgment", "description": "Majority judgment: a voter grades every "
            "candidate on the Score ballot, the closest the top grade and the farthest 0. The "
            "highest median grade wins (where the voters split evenly, the lower one). Candidates "

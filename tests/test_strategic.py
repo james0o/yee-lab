@@ -31,6 +31,7 @@ from yeelab.build import (
     PROFILE,
     Ballots,
     BordaCount,
+    D21,
     Bullet,
     Burial,
     Compromise,
@@ -49,7 +50,8 @@ from yeelab.build import (
 from yeelab.build.strategic import POLL, bulleted, burying, compromising
 from yeelab.voting import irv_rounds
 
-from references import TOLERANCE, dac_reference, elimination_reference, levels_of, random_profiles, voters_of
+from references import (TESTED_METHODS, TOLERANCE, dac_reference, elimination_reference, levels_of,
+                        random_profiles, voters_of)
 
 # the shares of the voters who bullet vote, bury and compromise, where any shares will do
 BULLET, BURIAL, COMPROMISE = 0.3, 0.4, 0.6
@@ -101,7 +103,7 @@ def _every_share(rankings, probs, seed=0):
     voters = voters_of(rankings, probs)
     rng = np.random.default_rng(seed)
     n = rankings.shape[1]
-    scored = (SCORE_BALLOT.scored, Score(3, power=1.5, fixed=True).scored)
+    scored = (SCORE_BALLOT.scored, Score(3, power=1.5, fixed=True).scored, D21(power=1.5).scored)
     unscored = {ballot: rng.random((*voters.shape, n)) for ballot in scored}
     comparisons = {}
     for ballot in scored:
@@ -211,7 +213,7 @@ def _pairs(voters):
 def test_no_strategic_voters_is_the_method_itself(profile, strategy):
     """Bit for bit, from the same shares, and with the same needs."""
     voters = _strategy_shares(*profile)
-    for name, method in METHODS.items():
+    for name, method in TESTED_METHODS.items():
         assert strategy(method, 0).needs == method.needs, name
         for result, expected in zip(strategy(method, 0).evaluate(voters), method.evaluate(voters)):
             np.testing.assert_array_equal(result, expected, err_msg=name)
@@ -370,7 +372,7 @@ def test_where_all_voters_bullet_vote_the_most_first_choices_win(profile):
     fptp, lead = METHODS["fptp"].evaluate(voters)
     clear = lead > TOLERANCE
     assert clear.mean() > 0.9  # not vacuous
-    for name, method in METHODS.items():
+    for name, method in TESTED_METHODS.items():
         np.testing.assert_array_equal(Bullet(method, 1).evaluate(voters)[0][clear], fptp[clear], err_msg=name)
 
 
@@ -409,11 +411,12 @@ def test_burial_and_compromise_are_the_method_on_moved_rankings(profile, strateg
     voters, n = _strategy_shares(rankings, probs), rankings.shape[1]
     share, moved_profile = (BURIAL, _buried_profile) if strategy is Burial else (COMPROMISE, _compromised_profile)
     pairs, gap = _pairs(voters)
-    for name, method in METHODS.items():
+    for name, method in TESTED_METHODS.items():
         winner, margin = strategy(method, share).evaluate(voters)
         expected, expected_margin = np.empty_like(winner), np.empty_like(margin)
+        scored = next((need for need in method.needs if isinstance(need, Scored)), SCORE_BALLOT.scored)
         comparisons = next((need for need in method.needs if isinstance(need, ScoredPairwise)),
-                           ScoredPairwise(SCORE_BALLOT.scored))
+                           ScoredPairwise(scored))
         key = comparisons.scored
         grid = voters.grid(key)
         for pair in np.unique(pairs):

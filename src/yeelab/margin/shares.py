@@ -343,30 +343,31 @@ def _voter_grid(model: Model, medians):
 
 
 @lru_cache(maxsize=8)  # a few MB each; all score shares of a ballot, and both grids of a drag, share one
-def _cached_ballots(candidates: bytes, model: Model, levels, rule, delta, mu, kappa, power, by_order):
+def _cached_ballots(candidates: bytes, model: Model, levels, rule, delta, mu, kappa, power, votes, by_order):
     lines = _grid_lines(model)
     return score.ballot_table(lines, lines, np.frombuffer(candidates).reshape(-1, 2), levels, GRID_SUB, rule, delta,
-                              mu=mu, kappa=kappa, power=power, by_order=by_order)
+                              mu=mu, kappa=kappa, power=power, votes=votes, by_order=by_order)
 
 
 def ballots(candidates, model: Model, levels: int, rule: score.Rule = score.RANGE, delta: float = score.DELTA,
             mu: float = score.MU, kappa: float = score.KAPPA, power: float = score.POWER,
-            by_order: bool = False) -> score.BallotTable:
+            votes: tuple[int, int, int] = score.VOTES, by_order: bool = False) -> score.BallotTable:
     """The ballots of the voter grid of the model (score.ballot_table), kept by the
     candidates and the ballot: they do not depend on the medians, so every score share of
     a ballot, at any points, comes from one pass over the grid."""
     candidates = np.ascontiguousarray(candidates, dtype=np.float64)
     return _cached_ballots(candidates.tobytes(), model, levels, rule, float(delta), float(mu), float(kappa),
-                           float(power), by_order)
+                           float(power), tuple(votes), by_order)
 
 
 def unscored_shares(candidates, model: Model, levels: int, medians,
                     rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
                     mu: float = score.MU, kappa: float = score.KAPPA,
-                    power: float = score.POWER, by_order: bool = False) -> np.ndarray:
+                    power: float = score.POWER, votes: tuple[int, int, int] = score.VOTES,
+                    by_order: bool = False) -> np.ndarray:
     """unscored[i, j, c] = mean part of the top score that the voters with median
     (medians[i], medians[j]) do not give c on a score ballot with `levels` scores by
-    `rule`, `delta`, `mu`, `kappa` and `power` (yeelab.score), from 0 to 1, shape (M, M, C). The mean score of c
+    `rule`, `delta`, `mu`, `kappa`, `power` and `votes` (yeelab.score), from 0 to 1, shape (M, M, C). The mean score of c
     is the top score, levels - 1, times 1 minus this. With two levels it is the share of
     the voters who do not approve c.
 
@@ -391,7 +392,7 @@ def unscored_shares(candidates, model: Model, levels: int, medians,
     cost only their sums; by_order takes them from the table of given() and raised(),
     whose rectangles also keep one order of distance, so that one pass serves all."""
     mass = _voter_grid(model, medians)[1]
-    table = ballots(candidates, model, levels, rule, delta, mu, kappa, power, by_order)
+    table = ballots(candidates, model, levels, rule, delta, mu, kappa, power, votes, by_order)
     short = score.tabulate(table, score.UNSCORED).astype(np.float64)
     return np.moveaxis(mass @ short @ mass.T, 0, -1) / (levels - 1)
 
@@ -399,17 +400,19 @@ def unscored_shares(candidates, model: Model, levels: int, medians,
 def graded_shares(candidates, model: Model, levels: int, medians,
                   rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
                   mu: float = score.MU, kappa: float = score.KAPPA,
-                  power: float = score.POWER, by_order: bool = False) -> np.ndarray:
+                  power: float = score.POWER, votes: tuple[int, int, int] = score.VOTES,
+                  by_order: bool = False) -> np.ndarray:
     """graded[i, j, c, k] = share of the voters with median (medians[i], medians[j]) who
     give c the score k on a score ballot with `levels` scores by `rule`, `delta`, `mu`,
-    `kappa` and `power` (yeelab.score), shape (M, M, C, levels): what the median of the
+    `kappa`, `power` and `votes` (yeelab.score), shape (M, M, C, levels): what the median of the
     ballot reads (build.judgment). Each share is summed over the voter grid like
     unscored_shares, which is sum_k (levels - 1 - k) graded[..., k] / (levels - 1), from
     the same kept ballots: one pair of matrix products per score and candidate instead of
     one per candidate. Every share is a sum of terms of one sign, so it is exact in
     relative terms where it is tiny, as the part not given is."""
     mass = _voter_grid(model, medians)[1]
-    short = score.tabulate(ballots(candidates, model, levels, rule, delta, mu, kappa, power, by_order), score.GRADES)
+    short = score.tabulate(ballots(candidates, model, levels, rule, delta, mu, kappa, power, votes, by_order),
+                           score.GRADES)
     n, m = len(candidates), len(medians)
     graded = np.empty((m, m, n, levels))
     for c in range(n):  # (levels, M, M) for each candidate: a few MB at a time
@@ -420,12 +423,12 @@ def graded_shares(candidates, model: Model, levels: int, medians,
 def score_comparison_shares(candidates, model: Model, medians, levels: int,
                             rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
                             mu: float = score.MU, kappa: float = score.KAPPA,
-                            power: float = score.POWER, by_order: bool = False,
-                            tie_weight: float = 0.0) -> np.ndarray:
+                            power: float = score.POWER, votes: tuple[int, int, int] = score.VOTES,
+                            by_order: bool = False, tie_weight: float = 0.0) -> np.ndarray:
     """Score-comparison differences at each median, weighting ordinal preferences where
     the pair has equal scores by `tie_weight`. From the kept ballots, like unscored_shares."""
     mass = _voter_grid(model, medians)[1]
-    table = ballots(candidates, model, levels, rule, delta, mu, kappa, power, by_order or tie_weight > 0)
+    table = ballots(candidates, model, levels, rule, delta, mu, kappa, power, votes, by_order or tie_weight > 0)
     short = score.tabulate(table, score.COMPARISONS, tie_weight).astype(np.float64)
     n, m = len(candidates), len(medians)
     comparisons = np.zeros((m, m, n, n), dtype=np.float64)
@@ -436,11 +439,11 @@ def score_comparison_shares(candidates, model: Model, medians, levels: int,
     return comparisons
 
 
-def _pair_shares(kind, candidates, model: Model, medians, levels, rule, delta, mu, kappa, power):
+def _pair_shares(kind, candidates, model: Model, medians, levels, rule, delta, mu, kappa, power, votes):
     """score.tabulate(kind) (GIVEN or RAISED) of the kept ballots by order, weighed with the
     voters of each median, as a part of the top score: (M, M, C, C), 0 for e = c."""
     mass = _voter_grid(model, medians)[1]
-    short = score.tabulate(ballots(candidates, model, levels, rule, delta, mu, kappa, power, True), kind)
+    short = score.tabulate(ballots(candidates, model, levels, rule, delta, mu, kappa, power, votes, True), kind)
     n, m = len(candidates), len(medians)
     shares = np.zeros((m, m, n, n))
     for c in range(n):
@@ -453,23 +456,23 @@ def _pair_shares(kind, candidates, model: Model, medians, levels, rule, delta, m
 def buried_shares(candidates, model: Model, medians, levels: int,
                   rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
                   mu: float = score.MU, kappa: float = score.KAPPA,
-                  power: float = score.POWER) -> np.ndarray:
+                  power: float = score.POWER, votes: tuple[int, int, int] = score.VOTES) -> np.ndarray:
     """buried[i, j, c, e] = mean part of the top score that the voters with median
     (medians[i], medians[j]) who rank e above c give c (score.given), shape (M, M, C, C):
     what the mean score of c loses where they bury it. 0 for e = c. On the voter grid,
     like unscored_shares."""
-    return _pair_shares(score.GIVEN, candidates, model, medians, levels, rule, delta, mu, kappa, power)
+    return _pair_shares(score.GIVEN, candidates, model, medians, levels, rule, delta, mu, kappa, power, votes)
 
 
 def raised_shares(candidates, model: Model, medians, levels: int,
                   rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
                   mu: float = score.MU, kappa: float = score.KAPPA,
-                  power: float = score.POWER) -> np.ndarray:
+                  power: float = score.POWER, votes: tuple[int, int, int] = score.VOTES) -> np.ndarray:
     """raised[i, j, c, e] = mean part of the top score that the voters with median
     (medians[i], medians[j]) who rank c above e, but neither first, do not give c
     (score.raised), shape (M, M, C, C): what the mean score of c gains where they
     compromise on it. 0 for e = c. On the voter grid, like unscored_shares."""
-    return _pair_shares(score.RAISED, candidates, model, medians, levels, rule, delta, mu, kappa, power)
+    return _pair_shares(score.RAISED, candidates, model, medians, levels, rule, delta, mu, kappa, power, votes)
 
 
 @dataclass(frozen=True, eq=False)
@@ -492,11 +495,12 @@ class ScoreGrid:
     mu: float = score.MU
     kappa: float = score.KAPPA
     power: float = score.POWER
+    votes: tuple[int, int, int] = score.VOTES
 
     @property
     def table(self) -> score.BallotTable:
         return ballots(self.candidates, self.model, self.levels, self.rule, self.delta, self.mu, self.kappa,
-                       self.power, True)
+                       self.power, self.votes, True)
 
     @cached_property
     def _pair_points(self) -> dict[int, np.ndarray]:

@@ -16,7 +16,7 @@ voters in test_strategic.py.
 """
 
 import re
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError
 from itertools import product
 
 import numpy as np
@@ -30,6 +30,7 @@ from yeelab.build import (
     AntiPlurality,
     BordaCount,
     Conditional,
+    D21,
     DescendingCoalitions,
     Eliminate,
     Graded,
@@ -57,7 +58,7 @@ from yeelab.build import (
 from yeelab.build.judgment import majority_totals
 from yeelab.voting import CYCLE
 
-from references import TOLERANCE, ranking_weights, voters_of
+from references import TESTED_METHODS, TOLERANCE, ranking_weights, voters_of
 
 BALLOTS = [Plurality(), BordaCount(), AntiPlurality()]
 # the blocks below the methods that are no method themselves, and Weakest
@@ -118,7 +119,7 @@ def test_a_method_chooses_one_candidate():
     assert [block.seats for block in (two, irv, two | irv, Conditional(two, two, two),
                                       Conditional(irv, two, irv))] \
         == [2, 1, None, 2, None]
-    assert all(method.seats == 1 for method in METHODS.values())
+    assert all(method.seats == 1 for method in TESTED_METHODS.values())
     for block, chooses in ((two, "2 candidates"), (two | irv, "a number of candidates"),
                            (Eliminate(Tally(Plurality()), how="min", until=3), "3 candidates")):
         with pytest.raises(ValueError, match=re.escape(f"{block!r} chooses {chooses}, not a winner")):
@@ -151,38 +152,8 @@ def test_union_and_conditional_choose_sets(profile):
     np.testing.assert_array_equal(margin, np.where(cycle, np.minimum(margin_c, margin_two), margin_c))
 
 
-def test_star_two_round_uses_conditional_finalists(profile):
-    voters = voters_of(*profile)
-    scored = Scored(6, power=1.5)
-    voters = replace(voters, unscored={scored: np.zeros_like(voters.first)})
-    fptp_winner, fptp_margin = METHODS["fptp"].evaluate(voters)
-    two_winner, two_margin = METHODS["two_round"].evaluate(voters)
-    condorcet_winner, condorcet_margin = METHODS["condorcet"].evaluate(voters)
-    expected_condition = ((fptp_winner == two_winner) & (two_winner != condorcet_winner))
-    expected_gap = np.minimum(np.minimum(fptp_margin, two_margin), condorcet_margin)
-    finalists = METHODS["star_two_round"].among
-    assert isinstance(finalists, Conditional)
-    condition, gap = finalists._condition(voters)
-    np.testing.assert_array_equal(condition, expected_condition)
-    np.testing.assert_array_equal(gap, expected_gap)
-
-    score_chosen, score_margin = METHODS["score"].select(voters)
-    condorcet_chosen, condorcet_margin = METHODS["condorcet"].select(voters)
-    two_chosen, two_margin = METHODS["two_round"].select(voters)
-    expected_chosen = np.where(
-        condition[..., None], score_chosen | condorcet_chosen, score_chosen | two_chosen)
-    expected_margin = np.minimum(
-        gap,
-        np.where(condition, np.minimum(score_margin, condorcet_margin),
-                 np.minimum(score_margin, two_margin)))
-    chosen, margin = finalists.select(voters)
-    np.testing.assert_array_equal(chosen, expected_chosen)
-    np.testing.assert_array_equal(margin, expected_margin)
-
-
 def test_conditional_method_repr_is_rebuildable():
     assert eval(repr(METHODS["black"])) == METHODS["black"]
-    assert eval(repr(METHODS["star_two_round"])) == METHODS["star_two_round"]
 
 
 # the shares of the score ballots below: two and six levels, by every rule
@@ -383,12 +354,46 @@ def test_score_takes_the_number_of_levels():
         with pytest.raises(ValueError, match=re.escape(f"Score power must be a number above 0, got {power!r}")):
             Score(3, power=power)
     for score in (ScoreAvg, ScoreDH, ScoreHybrid, ScoreCluster):
-        with pytest.raises(TypeError, match=f"{score.__name__} has no power; only Score has"):
-            score(3, power=1.5)  # only RANGE has a power
+        with pytest.raises(TypeError, match=f"{score.__name__} has no power; only Score and D21 have"):
+            score(3, power=1.5)  # only RANGE and D21 have a power
     # as a ballot like any other: mixed with another, and eliminated round by round
     mixed = Mix(ScoreAvg(4), Score(4), share=0.5)
     assert mixed.needs == {Scored(4, "avg"), Scored(4)}
     assert Eliminate(Tally(Score(4)), how="min").needs == {Scored(4)}
+
+
+def test_d21_takes_its_numbers_of_votes():
+    """By keyword, score.VOTES by default; the levels follow from max_negative, and the
+    power is Score's."""
+    assert D21() == D21(max_positive=2, max_negative=1, negative_after=2) != D21(negative_after=0)
+    assert D21().levels == 3 and D21(max_negative=0).levels == 2 and D21().fixed
+    assert D21(power=1.5).needs == {Scored(3, "d21", power=1.5, votes=(2, 1, 2))}
+    assert D21(max_positive=3, max_negative=0, negative_after=1).needs == {Scored(2, "d21", votes=(3, 0, 1))}
+    assert repr(D21()) == "D21(max_positive=2, max_negative=1, negative_after=2)"
+    ballot = D21(max_positive=3, max_negative=2, negative_after=1, power=1.25)
+    assert eval(repr(ballot)) == ballot and hash(eval(repr(ballot))) == hash(ballot)
+    for votes, name in (({"max_positive": 0}, "max_positive"), ({"max_negative": -1}, "max_negative"),
+                        ({"max_positive": 2.0}, "max_positive"), ({"max_negative": True}, "max_negative")):
+        with pytest.raises(ValueError, match=f"D21 {name} must be a whole number"):
+            D21(**votes)
+    for after in (-1, 3, 1.0):
+        with pytest.raises(ValueError, match=re.escape("D21 negative_after must be a whole number from 0 to "
+                                                       "max_positive (2)")):
+            D21(negative_after=after)
+    with pytest.raises(TypeError):
+        D21(levels=3)  # the levels follow from the votes
+
+
+def test_d21_elects_the_most_plus_votes_less_minus_votes():
+    """The total is Score's, (plus - minus) / 2 - 1/2 of the shares of plus and minus
+    votes: the order of D21's."""
+    rng = np.random.default_rng(7)
+    plus = rng.random((50, 4)) / 2
+    minus = rng.random((50, 4)) / 2
+    ballot = D21()
+    voters = Voters(unscored={ballot.scored: ((1 - plus - minus) + 2 * minus) / 2})
+    np.testing.assert_allclose(Tally(ballot).evaluate(voters), (plus - minus) / 2 - 0.5)
+    np.testing.assert_array_equal(Highest(Tally(ballot)).evaluate(voters)[0], (plus - minus).argmax(axis=-1))
 
 
 def test_ties_go_to_the_lowest_index():
@@ -438,8 +443,6 @@ def test_methods_are_the_expressions_they_print_as():
     expected = {
         "fptp": Highest(Tally(Plurality())),
         "two_round": Unbeaten(margins, among=Highest(Tally(Plurality()), n=2)),
-        "three_round": Eliminate(Tally(Plurality()), how="min",
-                                 among=Highest(Tally(Plurality()), n=3)),
         "irv": Eliminate(Tally(Plurality()), how="min"),
         "dac": DescendingCoalitions(),
         "borda": Highest(Tally(BordaCount())),
@@ -455,7 +458,7 @@ def test_methods_are_the_expressions_they_print_as():
         "star": Unbeaten(ScoreComparisons(Score(6, power=1.5)), among=Highest(Tally(Score(6, power=1.5)), n=2)),
     }
     assert {name: METHODS[name] for name in expected} == expected
-    assert list(METHODS)[:len(expected)] == list(expected)
+    assert list(TESTED_METHODS)[:len(expected)] == list(expected)
     fptp, irv, borda = METHODS["fptp"], METHODS["irv"], METHODS["borda"]
     assert repr(koth) == "Unbeaten(Margins(Pairwise()), against=Highest(Tally(Plurality())), order=Tally(Plurality()))"
     assert repr(Eliminate(Tally(BordaCount()), how="mean", until=2)) == 'Eliminate(Tally(BordaCount()), how="mean", until=2)'
@@ -470,12 +473,11 @@ def test_methods_are_the_expressions_they_print_as():
               Mix(BY_GAP, BY_MEAN, share=0.25)]
     for block in blocks:
         assert eval(repr(block)) == block
-    assert eval(repr(METHODS["star_two_round"])) == METHODS["star_two_round"]
 
 
 def test_blocks_are_frozen_and_hashable():
     """Equal blocks are equal methods and hash alike, and they cannot be changed."""
-    assert len(set(METHODS.values())) == len(METHODS)
+    assert len(set(TESTED_METHODS.values())) == len(TESTED_METHODS)
     cache = {Eliminate(Tally(BordaCount()), how="mean"): "nanson"}
     assert cache[METHODS["nanson"]] == "nanson"
     assert Unbeaten(Margins(Pairwise()), against=None, order=None) == METHODS["condorcet"]

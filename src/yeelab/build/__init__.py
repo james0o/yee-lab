@@ -1,6 +1,6 @@
 """Voting methods built from small blocks, like in Scratch but with Python constructors:
 
-    from yeelab.build import (AntiPlurality, BordaCount, Bullet, Burial, Compromise, DescendingCoalitions,
+    from yeelab.build import (AntiPlurality, BordaCount, Bullet, Burial, Compromise, D21, DescendingCoalitions,
                               Conditional, Eliminate,
                               Highest, Margins, Mix, Pairwise, Plurality, Score,
                               ScoreAvg, ScoreCluster, ScoreComparisons, ScoreDH, ScoreHybrid,
@@ -41,6 +41,8 @@
     Compromise(fptp, share=0.3)
     # the other ways to score of yeelab.score, for comparisons (not in the web UI)
     ScoreAvg(6), ScoreDH(6, delta=0.8), ScoreHybrid(6, delta=0.8), ScoreCluster(6, mu=0.1, kappa=2.0)
+    # Janeček's D21: at most 2 plus votes and 1 minus vote, the minus vote only after 2 plus votes
+    d21   = Highest(Tally(D21(max_positive=2, max_negative=1, negative_after=2, power=1.5)))
 
     winner, margin = nanson.evaluate(voters)  # Voters with the shares in nanson.needs
     chosen, margin = Highest(Tally(ballot), n=2).select(voters)  # several candidates: a mask
@@ -61,6 +63,7 @@ from yeelab.build.blocks import (
     Ballot,
     BordaCount,
     CandidateTotals,
+    D21,
     DescendingCoalitions,
     Eliminate,
     Conditional,
@@ -91,7 +94,7 @@ from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Ballots, Graded, Score
 
 __all__ = [
     "AntiPlurality", "Ballot", "Ballots", "BordaCount", "Bullet", "Burial", "CandidateTotals", "Compromise",
-    "DescendingCoalitions",
+    "D21", "DescendingCoalitions",
     "Conditional", "Eliminate", "Highest", "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise",
     "Plurality", "Score", "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH",
     "ScoreHybrid", "StrongestPaths", "Tally", "Unbeaten", "Undecided", "Union", "Weakest", "Winner", "METHODS",

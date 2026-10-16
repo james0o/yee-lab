@@ -2,7 +2,7 @@
 
 A score ballot has `levels` scores, 0 to levels - 1. A voter at v gives the closest
 candidate the top score and the farthest 0. Which score the others get depends on the
-distances r_i = |v - c_i|, in one of five ways (`rule`):
+distances r_i = |v - c_i|, in one of six ways (`rule`):
 
     RANGE   the score by where r_i is between the closest and the farthest, its part
             of the way to the power `power`, rounded to a whole score:
@@ -75,10 +75,25 @@ distances r_i = |v - c_i|, in one of five ways (`rule`):
             RANGE; with few levels a tight cluster keeps one score, with many it is
             graded like RANGE. A voter as far from every candidate gives them all the
             top score
+    D21     Janeček's D21: plus votes, minus votes and none, the scores 2, 0 and 1 of
+            levels = 3, or without minus votes plus votes and none, 1 and 0 of
+            levels = 2. votes = (max_positive, max_negative, negative_after), VOTES by
+            default. The voter starts from RANGE's ballot of three levels, at the
+            power `power`: a plus vote to the candidates it gives the top score, the
+            closest first, at most max_positive of them, and a minus vote to those it
+            gives 0, the farthest first, at most max_negative, but only after
+            negative_after plus votes or more. If that gives no minus vote, and RANGE's
+            approval ballot (two levels) gives more plus votes, at most max_positive,
+            the voter takes that instead: a plus vote to those it approves and a minus
+            vote, on the same terms, to those it does not. Without minus votes that is
+            always the ballot: RANGE's approval, of at most max_positive candidates.
+            The closest always gets a plus vote, but the farthest a minus vote only if
+            the voter gives one
 
 Nothing changes when all distances are scaled. With two levels every rule is an
 approval ballot: the voter approves the candidates with the top score, from the closest
-alone to all but the farthest. RANGE approves those closer than halfway between the
+alone to all but the farthest; D21's, without minus votes, is RANGE's of at most
+max_positive candidates. RANGE approves those closer than halfway between the
 closest and the farthest, AVG those closer than the mean distance (at it, the half is
 rounded to 0: not approved), DHONDT, whatever delta, those above the largest gap
 (ties: the first) and HYBRID, whatever delta, those above the largest gap among the
@@ -107,8 +122,10 @@ rbar for one end of its part of the way; a DHONDT step moves where two gaps tie,
 (l + delta) (r_a - r_b) = (k + delta) (r_c - r_d). A HYBRID score changes where one of
 its DHONDT steps moves, with m for r_a or r_c at the gap to the midrange, where a
 candidate crosses m, 2 r_i = r_min + r_max, and where a RANGE score of its lower half is
-half a score. A CLUSTER score changes where two choices of scores cost the same. Unlike
-the bisectors these are curves, so the mean score is not a sum
+half a score. A CLUSTER score changes where two choices of scores cost the same. A D21
+vote changes where a RANGE score of three or two levels does, and where two candidates
+with the same score are as far, if max_positive or max_negative cuts between them.
+Unlike the bisectors these are curves, so the mean score is not a sum
 over polygons. `ballot_table` gives, for a grid of rectangles, the distinct ballots in
 each rectangle and the part of its voters with each, and `tabulate` every mean over them:
 the points below the top score of each candidate (`unscored`), the share of the voters
@@ -133,15 +150,18 @@ DHONDT = "dhondt"
 AVG = "avg"
 HYBRID = "hybrid"
 CLUSTER = "cluster"
-Rule = Literal["range", "dhondt", "avg", "hybrid", "cluster"]
-RULES: tuple[Rule, ...] = (RANGE, DHONDT, AVG, HYBRID, CLUSTER)
+D21 = "d21"
+Rule = Literal["range", "dhondt", "avg", "hybrid", "cluster", "d21"]
+RULES: tuple[Rule, ...] = (RANGE, DHONDT, AVG, HYBRID, CLUSTER, D21)
 BITS = 4  # of each candidate in the code of a ballot: its points below the top score
 MASK = (1 << BITS) - 1
 MAX_CANDIDATES = 63 // BITS  # a ballot is a code in an int64
 MAX_LEVELS = MASK + 1  # the points below the top score fit the bits of a candidate
 DELTA = 0.8  # of DHONDT and HYBRID: each step to the largest g_k / (d_k + DELTA)
 MU, KAPPA = 0.1, 2.0  # of CLUSTER: the cost of a split, and how much farther a cluster's neighbours are
-POWER = 1.0  # of RANGE: the part of the way to this power; 1 is in proportion to the distance
+POWER = 1.0  # of RANGE and D21: the part of the way to this power; 1 is in proportion to the distance
+# of D21: at most 2 plus votes and 1 minus vote, the minus vote only after 2 plus votes
+VOTES = (2, 1, 2)  # (max_positive, max_negative, negative_after)
 ROWS = 8  # grid rows per task of the compiled loop (threads.py)
 
 
@@ -152,7 +172,9 @@ def distances(points, candidates) -> np.ndarray:
     return np.sqrt(((points[..., None, :] - candidates) ** 2).sum(axis=-1))
 
 
-def _check(rule, delta, mu=MU, kappa=KAPPA, power=POWER):
+def _check(rule, delta, mu=MU, kappa=KAPPA, power=POWER, votes=VOTES, levels=None):
+    """ValueError unless the parameters make a ballot; for D21 levels must be 3 with
+    minus votes and 2 without."""
     if rule not in RULES:
         raise ValueError(f"unknown rule {rule!r}; choose from {', '.join(RULES)}")
     if not 0 < delta < math.inf:
@@ -163,23 +185,33 @@ def _check(rule, delta, mu=MU, kappa=KAPPA, power=POWER):
         raise ValueError(f"kappa must be a number above 0, got {kappa!r}")
     if not 0 < power < math.inf:
         raise ValueError(f"power must be a number above 0, got {power!r}")
+    if (len(votes) != 3 or not all(isinstance(v, int | np.integer) and not isinstance(v, bool) for v in votes)
+            or not (votes[0] >= 1 and votes[1] >= 0 and 0 <= votes[2] <= votes[0])):
+        raise ValueError("votes must be whole numbers (max_positive, max_negative, negative_after) with "
+                         f"max_positive >= 1, max_negative >= 0 and negative_after from 0 to max_positive, "
+                         f"got {votes!r}")
+    if rule == D21 and levels is not None and levels != (3 if votes[1] else 2):
+        raise ValueError(f"a D21 ballot has {3 if votes[1] else 2} levels with {votes[1]} minus votes, "
+                         f"got {levels}")
 
 
 def scored(points, candidates, levels: int, rule: Rule = RANGE, delta: float = DELTA, *, mu: float = MU,
-           kappa: float = KAPPA, power: float = POWER) -> np.ndarray:
+           kappa: float = KAPPA, power: float = POWER, votes: tuple[int, int, int] = VOTES) -> np.ndarray:
     """The score a voter at each of the points (..., 2) gives each candidate, int
     (..., C) from 0 to levels - 1: the ballot from its definition, one voter at a time.
     delta is the divisor of DHONDT and HYBRID, mu and kappa the cost of a split and the
-    cohesion of CLUSTER, power that of RANGE; the other rules do not use them."""
-    return from_distances(distances(points, candidates), levels, rule, delta, mu=mu, kappa=kappa, power=power)
+    cohesion of CLUSTER, power that of RANGE and D21, votes the numbers of votes of D21;
+    the other rules do not use them."""
+    return from_distances(distances(points, candidates), levels, rule, delta, mu=mu, kappa=kappa, power=power,
+                          votes=votes)
 
 
 def from_distances(r, levels: int, rule: Rule = RANGE, delta: float = DELTA, *, mu: float = MU,
-                   kappa: float = KAPPA, power: float = POWER) -> np.ndarray:
+                   kappa: float = KAPPA, power: float = POWER, votes: tuple[int, int, int] = VOTES) -> np.ndarray:
     """scored() of voters at the distances r (..., C) from the candidates, wherever they
     are: the ballot depends on nothing else. docs/ballots.py gives it the distances of
     real voters."""
-    _check(rule, delta, mu, kappa, power)
+    _check(rule, delta, mu, kappa, power, votes, levels)
     r = np.asarray(r, dtype=np.float64)
     if rule == CLUSTER:
         return levels - 1 - _cluster_below(r, levels - 1, mu, kappa)
@@ -189,6 +221,8 @@ def from_distances(r, levels: int, rule: Rule = RANGE, delta: float = DELTA, *, 
         return levels - 1 - _hybrid_below(r, levels - 1, delta)
     if rule == AVG:
         return np.rint(_avg_part(r) * (levels - 1)).astype(np.int64)
+    if rule == D21:
+        return levels - 1 - _d21_below(r, levels - 1, power, votes)
     far = r.max(axis=-1, keepdims=True)
     span = far - r.min(axis=-1, keepdims=True)
     part = np.divide(far - r, span, out=np.ones_like(r), where=span > 0)
@@ -202,6 +236,28 @@ def _avg_part(r):
     closer = 0.5 + 0.5 * np.divide(mean - r, mean - near, out=np.zeros_like(r), where=r < mean)
     farther = 0.5 * np.divide(far - r, far - mean, out=np.zeros_like(r), where=(r >= mean) & (r < far))
     return np.where(far > near, np.where(r < mean, closer, farther), 1.0)
+
+
+def _d21_below(r, top, power, votes):
+    """Points below the top score `top` of each candidate on a D21 ballot with the
+    numbers of votes `votes`, int (..., C), for the distances r (..., C): 0 for a plus
+    vote, 1 for none and 2 (top) for a minus vote. The scores of RANGE fall with the
+    distance, so its plus votes go to a start of the order of distance and its minus
+    votes to an end of it: only how many of each there are counts."""
+    plus, minus, after = votes
+    far = r.max(axis=-1, keepdims=True)
+    span = far - r.min(axis=-1, keepdims=True)
+    part = np.divide(far - r, span, out=np.ones_like(r), where=span > 0) ** power
+    three, two = np.rint(part * 2), np.rint(part)  # RANGE's ballots of three and two levels
+    up = np.minimum((three == 2).sum(axis=-1), plus)
+    down = np.where(up >= after, np.minimum((three == 0).sum(axis=-1), minus), 0)
+    approved = np.minimum((two == 1).sum(axis=-1), plus)
+    switch = (down == 0) & (approved != up)  # no minus vote, and approval gives more plus votes
+    down = np.where(switch, np.where(approved >= after, np.minimum((two == 0).sum(axis=-1), minus), 0), down)
+    up = np.where(switch, approved, up)
+    n = r.shape[-1]
+    position = np.argsort(np.argsort(r, axis=-1, kind="stable"), axis=-1, kind="stable")  # 0 the closest
+    return np.where(position < up[..., None], 0, np.where(position >= n - down[..., None], top, 1))
 
 
 def _dhondt_below(r, top, delta):
@@ -340,14 +396,39 @@ def by_distance(x, y, candidates, r, order):
 
 
 @njit(inline="always", error_model="numpy")
-def _ballot(x, y, candidates, top, rule, delta, mu, kappa, power, r, order, steps, work, back):
+def _ballot(x, y, candidates, top, rule, delta, mu, kappa, power, votes, r, order, steps, work, back):
     """scored() of the voter at (x, y) as a code: BITS bits per candidate, holding the
     points it is below the top score `top`. `rule` is the index of the rule in RULES,
     delta the divisor of DHONDT and HYBRID, mu and kappa those of CLUSTER, power that of
-    RANGE; r, order and
+    RANGE and D21, votes the numbers of votes of D21; r, order and
     steps (C,), work and back (those of _cluster) are scratch."""
     n = candidates.shape[0]
     code = 0
+    if rule == 5:  # D21: as _d21_below
+        by_distance(x, y, candidates, r, order)
+        near, far = r[order[0]], r[order[n - 1]]
+        top3 = none3 = top2 = none2 = 0  # the top scores and the 0s of RANGE's three and two levels
+        for k in range(n):
+            part = (far - r[order[k]]) / (far - near) if far > near else 1.0
+            if power != 1.0:
+                part = part ** power
+            three = np.rint(part * 2)
+            if three == 2:
+                top3 += 1
+            elif three == 0:
+                none3 += 1
+            if np.rint(part) == 1:
+                top2 += 1
+            else:
+                none2 += 1
+        plus, minus, after = votes
+        up, approved = min(top3, plus), min(top2, plus)
+        down = min(none3, minus) if up >= after else 0
+        if down == 0 and approved != up:  # no minus vote, and approval gives more plus votes
+            up, down = approved, (min(none2, minus) if approved >= after else 0)
+        for k in range(n):
+            code |= (0 if k < up else top if k >= n - down else 1) << (BITS * order[k])
+        return code
     if rule == 4:  # CLUSTER
         by_distance(x, y, candidates, r, order)
         _cluster(r, order, top, mu, kappa, work, back, steps)
@@ -465,7 +546,7 @@ class BallotTable(NamedTuple):
 
 
 @njit(cache=True, nogil=True, error_model="numpy")
-def _table_rows(xs, ys, candidates, top, rule, delta, mu, kappa, power, sub, by_order, start, stop):
+def _table_rows(xs, ys, candidates, top, rule, delta, mu, kappa, power, votes, sub, by_order, start, stop):
     """The ballot table of the cells [xs[i], xs[i + 1]] with start <= i < stop: the
     number of distinct ballots of every cell (rows, Y), and their codes, orders and
     weights, cell after cell. A cell holds one ballot if its four corners have the same
@@ -484,12 +565,12 @@ def _table_rows(xs, ys, candidates, top, rule, delta, mu, kappa, power, sub, by_
     left, right = np.empty(ys.size, dtype=np.int64), np.empty(ys.size, dtype=np.int64)
     left_order, right_order = np.empty(ys.size, dtype=np.int64), np.empty(ys.size, dtype=np.int64)
     for j in range(ys.size):
-        left[j] = _ballot(xs[start], ys[j], candidates, top, rule, delta, mu, kappa, power, r, order, steps,
-                          work, back)
+        left[j] = _ballot(xs[start], ys[j], candidates, top, rule, delta, mu, kappa, power, votes, r, order,
+                          steps, work, back)
         left_order[j] = _order_code(r, order) if by_order else 0
     for i in range(start, stop):
         for j in range(ys.size):
-            right[j] = _ballot(xs[i + 1], ys[j], candidates, top, rule, delta, mu, kappa, power,
+            right[j] = _ballot(xs[i + 1], ys[j], candidates, top, rule, delta, mu, kappa, power, votes,
                                r, order, steps, work, back)
             right_order[j] = _order_code(r, order) if by_order else 0
         for j in range(ny):
@@ -505,8 +586,8 @@ def _table_rows(xs, ys, candidates, top, rule, delta, mu, kappa, power, sub, by_
                     x = xs[i] + (a + 0.5) / sub * (xs[i + 1] - xs[i])
                     for b in range(sub):
                         y = ys[j] + (b + 0.5) / sub * (ys[j + 1] - ys[j])
-                        code = _ballot(x, y, candidates, top, rule, delta, mu, kappa, power, r, order, steps,
-                                       work, back)
+                        code = _ballot(x, y, candidates, top, rule, delta, mu, kappa, power, votes, r, order,
+                                       steps, work, back)
                         ranked = _order_code(r, order) if by_order else 0
                         k = 0
                         while k < found and (point_codes[k] != code or point_orders[k] != ranked):
@@ -532,11 +613,11 @@ def _table_rows(xs, ys, candidates, top, rule, delta, mu, kappa, power, sub, by_
 
 def ballot_table(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
                  delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
-                 power: float = POWER, by_order: bool = False) -> BallotTable:
+                 power: float = POWER, votes: tuple[int, int, int] = VOTES, by_order: bool = False) -> BallotTable:
     """The distinct ballots of the voters of every rectangle [xs[i], xs[i + 1]] x
     [ys[j], ys[j + 1]], with the part of them that has each, for X + 1 and Y + 1
-    increasing grid lines; delta, mu, kappa and power as in scored(). A rectangle whose
-    four corners have the same ballot counts as all of that ballot, and with by_order
+    increasing grid lines; delta, mu, kappa, power and votes as in scored(). A rectangle
+    whose four corners have the same ballot counts as all of that ballot, and with by_order
     only if they also rank the candidates in the same order; the others, which a border
     crosses, hold the ballots of sub x sub points. given() and raised() need by_order:
     who ranks whom above whom is all they read. Chunks of the rows run in parallel
@@ -548,12 +629,13 @@ def ballot_table(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
         raise ValueError(f"score ballots need 2 to {MAX_CANDIDATES} candidates, got {len(candidates)}")
     if not 2 <= levels <= MAX_LEVELS:
         raise ValueError(f"score ballots need 2 to {MAX_LEVELS} levels, got {levels}")
-    _check(rule, delta, mu, kappa, power)
+    _check(rule, delta, mu, kappa, power, votes, levels)
+    votes = tuple(int(v) for v in votes)
     parts = {}
 
     def rows(a, b):
         parts[a] = _table_rows(xs, ys, candidates, levels - 1, RULES.index(rule), float(delta), float(mu),
-                               float(kappa), float(power), sub, by_order, a, b)
+                               float(kappa), float(power), votes, sub, by_order, a, b)
 
     threads.in_chunks(rows, len(xs) - 1, ROWS)
     chunks = [parts[a] for a in sorted(parts)]
@@ -763,59 +845,59 @@ def moved_grades(table: BallotTable, a: int, b: int) -> np.ndarray:
 
 def unscored(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
              delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
-             power: float = POWER) -> np.ndarray:
+             power: float = POWER, votes: tuple[int, int, int] = VOTES) -> np.ndarray:
     """short[c, i, j] = mean points below the top score that the voters of the rectangle
     [xs[i], xs[i + 1]] x [ys[j], ys[j + 1]] give candidate c, from 0 to levels - 1, shape
-    (C, X, Y) for X + 1 and Y + 1 increasing grid lines; delta, mu, kappa and power as in
-    scored(). A rectangle whose four corners have the same ballot counts as all of that
-    ballot; in the others, which a border crosses, the ballots at sub x sub points are
+    (C, X, Y) for X + 1 and Y + 1 increasing grid lines; delta, mu, kappa, power and votes
+    as in scored(). A rectangle whose four corners have the same ballot counts as all of
+    that ballot; in the others, which a border crosses, the ballots at sub x sub points are
     averaged (ballot_table, tabulate)."""
-    table = ballot_table(xs, ys, candidates, levels, sub, rule, delta, mu=mu, kappa=kappa, power=power)
+    table = ballot_table(xs, ys, candidates, levels, sub, rule, delta, mu=mu, kappa=kappa, power=power, votes=votes)
     return tabulate(table, UNSCORED)
 
 
 def graded(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
            delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
-           power: float = POWER) -> np.ndarray:
+           power: float = POWER, votes: tuple[int, int, int] = VOTES) -> np.ndarray:
     """short[c, k, i, j] = share of the voters of the rectangle [xs[i], xs[i + 1]] x
     [ys[j], ys[j + 1]] who give candidate c the score k, from 0 to levels - 1, shape
     (C, levels, X, Y); the shares of a candidate add up to 1 in every rectangle.
     Rectangles as in unscored(), whose mean is sum_k (levels - 1 - k) short[c, k]."""
-    table = ballot_table(xs, ys, candidates, levels, sub, rule, delta, mu=mu, kappa=kappa, power=power)
+    table = ballot_table(xs, ys, candidates, levels, sub, rule, delta, mu=mu, kappa=kappa, power=power, votes=votes)
     return tabulate(table, GRADES)
 
 
 def comparisons(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
                 delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
-                power: float = POWER) -> np.ndarray:
+                power: float = POWER, votes: tuple[int, int, int] = VOTES) -> np.ndarray:
     """short[c, e, i, j] = share strictly scoring c above e minus e above c among
     voters in each rectangle [xs[i], xs[i + 1]] x [ys[j], ys[j + 1]]. Voters who give
     the pair equal scores contribute 0. Rectangles as in unscored(); output shape is
     (C, C, X, Y)."""
-    table = ballot_table(xs, ys, candidates, levels, sub, rule, delta, mu=mu, kappa=kappa, power=power)
+    table = ballot_table(xs, ys, candidates, levels, sub, rule, delta, mu=mu, kappa=kappa, power=power, votes=votes)
     return tabulate(table, COMPARISONS)
 
 
 def given(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
           delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
-          power: float = POWER) -> np.ndarray:
+          power: float = POWER, votes: tuple[int, int, int] = VOTES) -> np.ndarray:
     """short[c, e, i, j] = mean points that the voters of the rectangle [xs[i], xs[i + 1]] x
     [ys[j], ys[j + 1]] who rank e above c give c, from 0 to levels - 1 (0 for e = c), shape
     (C, C, X, Y): what c loses if those voters bury it, giving it 0. A voter ranks e above c
     if e is closer (ties: the lower index first). Rectangles as in unscored(), but one
     holds one ballot only if its corners also have the same order of distance (by_order)."""
     table = ballot_table(xs, ys, candidates, levels, sub, rule, delta, mu=mu, kappa=kappa, power=power,
-                         by_order=True)
+                         votes=votes, by_order=True)
     return tabulate(table, GIVEN)
 
 
 def raised(xs, ys, candidates, levels: int, sub: int, rule: Rule = RANGE,
            delta: float = DELTA, *, mu: float = MU, kappa: float = KAPPA,
-           power: float = POWER) -> np.ndarray:
+           power: float = POWER, votes: tuple[int, int, int] = VOTES) -> np.ndarray:
     """short[c, e, i, j] = mean points below the top score that the voters of the rectangle
     who rank c above e, but neither first, give c, from 0 to levels - 1 (0 for e = c), shape
     (C, C, X, Y): what c gains if those voters compromise on it, giving it the top score.
     Rectangles as in given()."""
     table = ballot_table(xs, ys, candidates, levels, sub, rule, delta, mu=mu, kappa=kappa, power=power,
-                         by_order=True)
+                         votes=votes, by_order=True)
     return tabulate(table, RAISED)

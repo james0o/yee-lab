@@ -8,8 +8,11 @@ from itertools import permutations
 import numpy as np
 
 from yeelab.build import Voters
+from yeelab.build.methods import METHODS, TESTED
 
 TOLERANCE = 1e-6  # winners are compared where the margin is above (float32 profiles)
+# the methods above the wall of build/methods.py: the experimental ones below it are not tested
+TESTED_METHODS = {name: method for name, method in METHODS.items() if name in TESTED}
 
 
 def voters_of(rankings, probs):

@@ -4,6 +4,7 @@ lists them (margin/regions.py MARGINS)."""
 from yeelab.build.blocks import (
     AntiPlurality,
     BordaCount,
+    D21,
     DescendingCoalitions,
     Conditional,
     Eliminate,
@@ -50,20 +51,30 @@ mj = Highest(Tally(score_ballot, statistic="median"))
 # STAR: the two highest mean scores, head to head on the scores of each ballot (equal
 # scores abstain by default); a tie is a draw
 star = Unbeaten(ScoreComparisons(score_ballot), among=Highest(Tally(score_ballot), n=2))
-star_two_round = Unbeaten(ScoreComparisons(score_ballot), among= score | two_round)
-
-finalists = Conditional(
-    (fptp == two_round) & (two_round != condorcet),
-    when_true=score | condorcet,
-    when_false=score | two_round,
-)
-sun_two_round = Unbeaten(ScoreComparisons(score_ballot), among = finalists)
 
 top3 = Highest(Tally(Plurality()), n=3)
 top2 = Highest(Tally(AntiPlurality()), n=2, among=top3)
 system321 = Unbeaten(ScoreComparisons(Score(3, power=SCORE_POWER, fixed=True)), among=top2)
 
+# Janeček's D21: at most 2 plus votes and 1 minus vote, the minus vote only after 2 plus votes
+d21 = Highest(Tally(D21(max_positive=2, max_negative=1, negative_after=2, power=SCORE_POWER)))
+
+
+#-----------------------------------experimental methods, do not tests-----------------------------------
+TESTED = frozenset(globals())  # the names above the wall: the tests check only the methods among them
+star_two_round = Unbeaten(ScoreComparisons(score_ballot), among= score | two_round)
+finalists = Conditional(
+    (fptp == two_round) & (two_round != condorcet),
+    when_true=score | condorcet,
+    when_false=score | two_round,
+)
+
+d20 = Highest(Tally(D21(max_positive=2, max_negative=0, power=SCORE_POWER)))
+
+
+sun_two_round = Unbeaten(ScoreComparisons(score_ballot), among = finalists)
 score_two = Conditional((fptp == score), when_true=score, when_false=two_round)
+
 
 smj_fin = Conditional(
    (mj == two_round),
@@ -72,7 +83,15 @@ smj_fin = Conditional(
 
 )
 smj_two = Unbeaten(ScoreComparisons(score_ballot), among= smj_fin | two_round)
-smj_end = Conditional(((smj_two == two_round) & (smj_two == fptp)), when_true=star, when_false=smj_two)
+new = Conditional(
+    (Highest(Tally(Plurality()), n=2)) == (Highest(Tally(score_ballot), n=2)), 
+    when_true=two_round, 
+    when_false = Conditional(
+        (score == fptp) & (score == condorcet),
+        when_true=score,
+        when_false=Undecided()
+    )
+)
 
 three_round = Eliminate(Tally(Plurality()), how="min", among=top3)
 
@@ -110,7 +129,9 @@ METHODS: dict[str, Winner] = {
     "star_two_round": star_two_round,
     "system321": system321,
     "mj": mj,
+    "d21": d21,
+    "d20": d20,
     "smj_two": smj_two,
-    "smj_end": smj_end,
+    "new": new,
     "adhoc": adhoc,
 }

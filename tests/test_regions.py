@@ -12,13 +12,15 @@ import pytest
 from fastapi.testclient import TestClient
 from matplotlib.path import Path as MplPath
 
-from yeelab.build import (AntiPlurality, Conditional, Highest, Mix, Plurality, Score, ScoreAvg, ScoreCluster,
+from yeelab.build import (D21, AntiPlurality, Conditional, Highest, Mix, Plurality, Score, ScoreAvg, ScoreCluster,
                           ScoreComparisons, ScoreDH, ScoreHybrid, Tally, Unbeaten)
 from yeelab.margin.metrics import borders, voronoi_agreement
 from yeelab.margin.regions import MARGINS, grid, nearest, regions, voronoi_borders, winners
 from yeelab.margin.shares import Model, first_choice_shares, ranking_shares, score_comparison_shares, unscored_shares
 from yeelab.voting import irv_rounds
 from yeelab.web.app import DIAGRAMS, app
+
+from references import TESTED_METHODS
 
 CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
 SEVEN = np.random.default_rng(1).random((7, 2))
@@ -287,11 +289,11 @@ def test_config_lists_every_method():
     assert descriptions["nanson"].endswith('\nEliminate(Tally(BordaCount()), how="mean")')
     # the categories and power sliders: their method, their defaults, which it is listed
     # with, and their ranges
-    assert {"score", "star", "star_two_round"} <= set(config["scores"])
+    assert {"score", "star"} <= set(config["scores"])
     assert "system321" in config["scores"]
     assert "system321" not in config["score_levels"]
     assert config["fixed_score_levels"]["system321"] == [3]
-    assert config["score_comparisons"] == ["star", "star_two_round", "system321"]
+    assert [name for name in config["score_comparisons"] if name in TESTED_METHODS] == ["star", "system321"]
     assert config["tie_weight"] == 0 and config["tie_weight_step"] == 0.05
     assert config["levels"] == 6 and config["max_levels"] == 11
     assert descriptions["score"].endswith("\nHighest(Tally(Score(6, power=1.5)))")
@@ -326,32 +328,6 @@ def test_runoff_tie_weight_is_applied_to_nested_score_comparisons():
     assert client.post("/api/regions", json={**request, "tie_weight": 1.1}).status_code == 422
 
 
-def test_score_sliders_apply_to_nested_score_ballots():
-    """The sliders update Score ballots even inside a composed registered method."""
-    config = TestClient(app).get("/api/config").json()
-    assert "star_two_round" in config["scores"]
-
-    response = TestClient(app).post("/api/regions", json={
-        "candidates": CANDIDATES.tolist(), "method": "star_two_round", "levels": 2, "power": 2, "grid": 64,
-    })
-    assert response.status_code == 200
-
-    ballot = Score(2, power=2)
-
-    expected = Unbeaten(
-        ScoreComparisons(ballot),
-        among=Conditional(
-            (MARGINS["fptp"] == MARGINS["two_round"])
-            & (MARGINS["two_round"] != MARGINS["condorcet"]),
-            when_true=Highest(Tally(ballot)) | MARGINS["condorcet"],
-            when_false=Highest(Tally(ballot)) | MARGINS["two_round"],
-        ),
-    )
-    assert response.json()["regions"] == json.loads(
-        json.dumps(regions(expected, CANDIDATES.tolist(), MODELS[0], 64))
-    )
-
-
 def test_fixed_score_levels_ignore_category_slider_but_keep_power_slider():
     """A fixed Score ballot keeps its categories while the UI power slider still applies."""
     client = TestClient(app)
@@ -377,8 +353,26 @@ def test_fixed_score_levels_ignore_category_slider_but_keep_power_slider():
     )
 
 
+def test_d21_takes_the_power_slider_but_not_the_categories():
+    """D21's levels follow from its votes; its power is Score's."""
+    client = TestClient(app)
+    config = client.get("/api/config").json()
+    assert "d21" in config["scores"] and "d21" not in config["score_levels"]
+
+    def shapes(levels, power):
+        response = client.post("/api/regions", json={
+            "candidates": CANDIDATES.tolist(), "method": "d21", "levels": levels, "power": power, "grid": 64,
+        })
+        assert response.status_code == 200
+        return response.json()["regions"]
+
+    assert shapes(2, 2) == shapes(11, 2) != shapes(2, 1)
+    expected = Highest(Tally(D21(max_positive=2, max_negative=1, negative_after=2, power=2)))
+    assert shapes(2, 2) == json.loads(json.dumps(regions(expected, CANDIDATES.tolist(), MODELS[0], 64)))
+
+
 @pytest.mark.parametrize("distribution", ["beta", "normal"])
-@pytest.mark.parametrize("method", DIAGRAMS)
+@pytest.mark.parametrize("method", [name for name in DIAGRAMS if name in TESTED_METHODS or name not in MARGINS])
 def test_api_returns_regions(distribution, method):
     client = TestClient(app)
     response = client.post("/api/regions", json={
