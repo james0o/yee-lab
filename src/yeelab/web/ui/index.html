@@ -26,8 +26,8 @@
     .choices > span { font-size: .9rem; color: #666; }  /* row labels only, not KaTeX spans */
     .choices > label { font-size: .9rem; display: flex; align-items: center; gap: .3rem; cursor: pointer; }
     .choices input[type=checkbox] { accent-color: #222; margin: 0; }
-    #deviation, #levels, #power, #strategies input { width: 12rem; accent-color: #222; }
-    #deviationValue, #levelsValue, #powerValue, #strategies output { font-size: .9rem; min-width: 6rem; }
+    #deviation, #spreadPower, #levels, #power, #strategies input { width: 12rem; accent-color: #222; }
+    #deviationValue, #spreadPowerValue, #levelsValue, #powerValue, #strategies output { font-size: .9rem; min-width: 6rem; }
     button { font: inherit; padding: .4rem .9rem; border: 1px solid #222; border-radius: 4px; background: #fff; cursor: pointer; }
     button.active { background: #222; color: #fff; }
     button:disabled { opacity: .35; cursor: default; }
@@ -77,6 +77,7 @@
         <label><input type="checkbox" id="showHull">candidate convex hull</label>
       </div>
       <div class="choices"><span>Deviation:</span><input type="range" id="deviation"><output id="deviationValue"></output></div>
+      <div class="choices"><span>Beta spread p:</span><input type="range" id="spreadPower"><output id="spreadPowerValue"></output></div>
       <div class="choices" id="pixelMedians"><span>Point in diagram is:</span></div>
       <div class="choices" id="methods"><span>Voting method:</span></div>
       <div class="choices"><span>Score categories:</span><input type="range" id="levels" min="2" step="1"><output id="levelsValue"></output></div>
@@ -114,6 +115,8 @@
     const pixelMedians = document.getElementById("pixelMedians");
     const deviationSlider = document.getElementById("deviation");
     const deviationValue = document.getElementById("deviationValue");
+    const spreadPowerSlider = document.getElementById("spreadPower");
+    const spreadPowerValue = document.getElementById("spreadPowerValue");
     const levelsSlider = document.getElementById("levels");
     const levelsValue = document.getElementById("levelsValue");
     const powerSlider = document.getElementById("power");
@@ -172,10 +175,11 @@
     let moving = null;    // {from, to, start}: the diagram is on its way between the two, since
                           // `start` (ms), from pixels drawn `from` of the way to their geometric
                           // median to `to` of it (0: at their medians along the axes, 1: there)
-    let lookups = {};     // deviation -> /api/geometric: {pixels, outline}, for the points of a
+    let lookups = {};     // deviation/power -> /api/geometric: {pixels, outline}, for the points of a
                           // quarter of the square the pixel whose voters have their geometric
                           // median there, and the border of the coloured region
     let deviation = 0;    // mean absolute deviation of the voters from their pixel
+    let spreadPower = 2;  // Lp distance from the median, kept constant across Beta pixels
     let scoreLevelMethods = []; // methods with at least one Score ballot whose categories can change
     let scorePowerMethods = []; // methods with a Score ballot whose power can change
     let fixedScoreLevels = {};  // method -> fixed category counts when no category slider applies
@@ -189,8 +193,10 @@
     let strategyOf = {};     // strategy name -> the strategy whose voters it leaves out, if any
     let unsupported = {};    // strategy name -> the methods it cannot do
     let strategySliders = {}; // strategy name -> its slider
-    let voters = {};      // deviation -> {sigma, beta_params} from the backend, where
+    let voters = {};      // deviation/power -> {sigma, beta_params} from the backend, where
                           // beta_params is [a, b] along one axis, per pixel
+    let voterRequest = 0;
+    let voterTimer = null;
     let hovered = [0.5, 0.5];  // point whose voters are shown in the strip and the shade
     let showDensity = false;   // their 2D density over the square, while hovering it (if shown at all)
     let regions = null;   // last computed win regions [{winner, path}], path a Path2D in the unit square
@@ -200,6 +206,8 @@
     let dragGrid = 0, finalGrid = 0;  // grid the backend traces regions on: while dragging, after
     let inFlight = false; // a request is on its way; at most one is, so a drag never queues up
     let queued = null;    // grid of the request to send once it is back (with the latest candidates)
+
+    const voterKey = () => `${deviation}:${distribution === "beta" ? spreadPower : 2}`;
 
     // Unit square has y up, the canvas has y down.
     const clamp = v => Math.min(1, Math.max(0, v));
@@ -354,7 +362,7 @@
     // Voters of pixel k along one axis: median m (the pixel centre, as in the backend), pdf and a label.
     function voterDensity(k) {
       const m = (k + 0.5) / pixels;
-      const { sigma, beta_params } = voters[deviation];
+      const { sigma, beta_params } = voters[voterKey()];
       if (distribution === "beta") {
         const [a, b] = beta_params[k];
         const logB = lgamma(a) + lgamma(b) - lgamma(a + b);
@@ -481,22 +489,41 @@
       return moving.from + (moving.to - moving.from) * t * t * (3 - 2 * t);  // eases in and out
     }
 
-    // What a diagram of geometric medians needs at this deviation, /api/geometric, or null while
-    // it is on its way: asked for once per deviation. When it arrives the candidates are moved
+    // What a diagram of geometric medians needs at these voter settings, /api/geometric, or null
+    // while it is on its way. When it arrives the candidates are moved
     // into the coloured region, and the voters shown again.
     function lookup() {
-      const key = deviation;  // the slider may have moved by the time the answer is back
+      const key = `${deviation}:${spreadPower}`;
       if (!(key in lookups)) {
         lookups[key] = null;
-        fetch(`/api/geometric?deviation=${key}`)
+        fetch(`/api/geometric?deviation=${deviation}&spread_power=${spreadPower}`)
           .then(response => response.json())
           .then(answer => {
             lookups[key] = answer;
-            if (confineAll()) compute();
-            drawVoters();
+            if (key === `${deviation}:${spreadPower}`) {
+              if (confineAll()) compute();
+              drawVoters();
+            }
           });
       }
       return lookups[key];
+    }
+
+    async function refreshVoters() {
+      const key = `${deviation}:${spreadPower}`;
+      if (key in voters || distribution !== "beta") return;
+      const token = ++voterRequest;
+      try {
+        const response = await fetch(`/api/voters?deviation=${deviation}&spread_power=${spreadPower}`);
+        if (!response.ok) throw new Error(await response.text());
+        const answer = await response.json();
+        if (token === voterRequest && key === `${deviation}:${spreadPower}`) {
+          voters[key] = answer;
+          drawVoters();
+        }
+      } catch (error) {
+        if (token === voterRequest) message.textContent = `Error loading voters: ${error.message}`;
+      }
     }
 
     // Is the point inside the ring [x0, y0, x1, y1, ...]? (Even-odd: a ray to the right crosses
@@ -562,6 +589,13 @@
     function drawVoters() {
       const pixel = pixelAt(hovered);
       const at = `(${hovered.map(v => v.toFixed(3)).join(", ")})`;
+      if (!(voterKey() in voters)) {
+        stripX.clear();
+        votersText.textContent = "Updating voter distribution…";
+        densityCanvas.getContext("2d").clearRect(0, 0, DENSITY_SIZE, DENSITY_SIZE);
+        draw();
+        return;
+      }
       if (pixel) {
         const [x, y] = pixel.map(voterDensity);
         stripX.show(x);
@@ -571,7 +605,7 @@
         if (showDensity) fillDensity(x, y);
       } else {
         stripX.clear();
-        votersText.textContent = lookups[deviation]
+        votersText.textContent = lookups[`${deviation}:${spreadPower}`]
           ? `No voters have their geometric median at ${at}` : "";
         densityCanvas.getContext("2d").clearRect(0, 0, DENSITY_SIZE, DENSITY_SIZE);
       }
@@ -622,7 +656,8 @@
     // What an answer depends on besides the candidates' positions and the sliders. An answer to
     // other settings (or to a candidate added or removed since, whose colours shifted) is not drawn;
     // one to an older slider value is, so sliding it shows the newest diagram it can, like a drag.
-    const settings = () => JSON.stringify([method, distribution, pixelMedian, candidates.length, tieWeight]);
+    const settings = () => JSON.stringify([method, distribution, pixelMedian, candidates.length, tieWeight,
+                                           deviation, spreadPower]);
 
     // The shares of the strategies that apply to the method: none in the Voronoi diagram,
     // which has no election, nor in a method a strategy cannot do.
@@ -654,8 +689,9 @@
       // grid, so that showing them later draws them at once.
       const measured = grid === finalGrid;
       const part = shift();
-      const asked = settings(), sliders = [deviation, levels, power, tieWeight, applied()];
-      const key = JSON.stringify([candidates, distribution, deviation, levels, power, tieWeight, shares, part]);
+      const asked = settings(), sliders = [deviation, levels, power, tieWeight, applied(), spreadPower];
+      const key = JSON.stringify([candidates, distribution, deviation, spreadPower, levels, power,
+                                  tieWeight, shares, part]);
       if (grid === finalGrid) message.textContent = `Computing ${labels[method]}…`;
       const start = performance.now();
       try {
@@ -663,7 +699,8 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            candidates, method, distribution, deviation, levels, power, tie_weight: tieWeight, ...sliders[4], grid,
+            candidates, method, distribution, deviation, spread_power: spreadPower, levels, power,
+            tie_weight: tieWeight, ...sliders[4], grid,
             pixel_median: part > 0 ? "geometric" : "marginal", shift: part,
             metrics: measured, overlay: measured || showBoundaries.checked,
           }),
@@ -677,7 +714,7 @@
           voronoiBoundaries = answer.overlays.voronoi_boundaries ?? [];
           boundaryPath = null;
           draw();
-          describe(...sliders, Math.round(performance.now() - start), Math.round(answer.ms));
+          describe(...sliders.slice(0, 5), Math.round(performance.now() - start), Math.round(answer.ms));
           let errors = null;  // a coarse drag has none, and is not compared
           if (measured) {
             const { assignment, inside_hull, boundary_mean } = answer.metrics;
@@ -745,8 +782,13 @@
         message.textContent = `${name}${where}${tail}`;
       } else if (distribution === "beta") {
         const formula = document.createElement("span");
-        typeset(formula, spreadInfo);
-        formula.title = spreadInfo.description;
+        const formulaInfo = {
+          ...spreadInfo,
+          tex: spreadInfo.tex.replaceAll("P", spreadPower.toFixed(2)),
+          description: `${spreadInfo.description} Current p = ${spreadPower.toFixed(2)}.`,
+        };
+        typeset(formula, formulaInfo);
+        formula.title = formulaInfo.description;
         const where = pixelMedian === "geometric" ? ", pixels at their geometric median" : "";
         message.replaceChildren(`${name} · beta voters, deviation ${deviation}, `, formula, " fixed" + where + tail);
       } else {
@@ -836,6 +878,7 @@
     // The choice of what a pixel is only applies to Beta voters.
     function updatePixelMedians() {
       for (const button of pixelMedians.querySelectorAll("button")) button.disabled = distribution !== "beta";
+      spreadPowerSlider.disabled = distribution !== "beta";
     }
 
     // The categories and power sliders only apply to the Score ballots they can change.
@@ -862,10 +905,11 @@
     dragGrid = config.drag_grid;
     finalGrid = config.final_grid;
     spreadInfo = config.spread;
-    voters = Object.fromEntries(config.voters.map(({ deviation, ...rest }) => [deviation, rest]));
+    voters = Object.fromEntries(config.voters.map(({ deviation, ...rest }) => [`${deviation}:${config.spread_power}`, rest]));
     choices(distributions, config.distributions, name => {
       distribution = name;
       updatePixelMedians();
+      refreshVoters();
       confineAll();
       drawVoters();
     });
@@ -880,8 +924,36 @@
     }
     Object.assign(deviationSlider, { min: 0, max: config.deviations.length - 1, step: 1 });
     deviationSlider.value = config.deviations.indexOf(config.deviation);
-    deviationSlider.addEventListener("input", () => { pickDeviation(); confineAll(); drawVoters(); compute(dragGrid); });
+    deviationSlider.addEventListener("input", () => {
+      pickDeviation();
+      clearTimeout(voterTimer);
+      voterTimer = setTimeout(refreshVoters, 120);
+      confineAll();
+      drawVoters();
+      compute(dragGrid);
+    });
     deviationSlider.addEventListener("change", () => compute());
+    spreadPower = config.spread_power;
+    function pickSpreadPower() {
+      spreadPower = config.spread_powers[spreadPowerSlider.valueAsNumber];
+      spreadPowerValue.textContent = spreadPower.toFixed(2);
+      spreadPowerSlider.title = "The p-th power mean distance of Beta voters from the pixel median, " +
+        "kept equal across pixels: (E|X − m|^p)^(1/p). p = 1 is mean absolute deviation, " +
+        "p = 2 is RMS; higher p gives more weight to distant voters.";
+    }
+    Object.assign(spreadPowerSlider, {
+      min: 0, max: config.spread_powers.length - 1,
+      step: 1, value: config.spread_powers.indexOf(config.spread_power),
+    });
+    spreadPowerSlider.addEventListener("input", () => {
+      pickSpreadPower();
+      clearTimeout(voterTimer);
+      voterTimer = setTimeout(refreshVoters, 120);
+      confineAll();
+      drawVoters();
+      compute(dragGrid);
+    });
+    spreadPowerSlider.addEventListener("change", () => { clearTimeout(voterTimer); refreshVoters(); compute(); });
     // The categories slider is the number of scores of a score ballot. It recomputes like the
     // deviation slider.
     scorePowerMethods = config.scores;
@@ -962,6 +1034,7 @@
     pixelMedians.querySelectorAll("button")[config.pixel_medians.findIndex(info => info.name === pixelMedian)]
       .classList.add("active");
     pickDeviation();
+    pickSpreadPower();
     pickLevels();
     pickPower();
     pickMethod(null);  // none yet: the categories and power sliders wait for Score

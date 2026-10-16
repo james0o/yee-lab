@@ -76,6 +76,18 @@ def test_params_keep_their_spread(solved):
         assert _moment(m, a, b, power) == pytest.approx(target, abs=1e-9)
 
 
+@pytest.mark.parametrize("power", [1.25, 1.5, 1.75, 2.5, 3.0, 4.0, 5.0])
+def test_numeric_power_keeps_its_median_centered_moment(power):
+    """The UI's Lp rule fixes the same median-centered power mean at every pixel."""
+    medians = np.array([0.5, 0.7, 0.9, 0.98])
+    params = beta_params_at(medians, DEVIATION, power)
+    a0 = centre_shape(DEVIATION)
+    target = _moment(0.5, a0, a0, power)
+    for median, (a, b) in zip(medians, params):
+        assert betainc(a, b, median) == pytest.approx(0.5, abs=1e-12)
+        assert _moment(median, a, b, power) == pytest.approx(target, rel=1e-8)
+
+
 def test_params_are_mirror_symmetric(solved):
     _, _, params = solved
     np.testing.assert_allclose(params, params[::-1, ::-1], rtol=1e-10)
@@ -112,6 +124,12 @@ def test_rejects_impossible_deviation(deviation):
 def test_rejects_unknown_spread():
     with pytest.raises(ValueError):
         beta_params_at([0.5], DEVIATION, "median_abs")
+
+
+@pytest.mark.parametrize("power", [0.99, 5.01, np.nan])
+def test_rejects_numeric_power_outside_supported_range(power):
+    with pytest.raises(ValueError):
+        beta_params_at([0.5], DEVIATION, power)
 
 
 # ---------------------------------------------------------------- Cells

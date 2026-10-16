@@ -34,6 +34,8 @@ MAX_CANDIDATES = 8
 # The candidates the page starts with.
 CANDIDATES = [[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]]
 DEVIATION = 0.2  # default of the deviation slider
+SPREAD_POWER = 2.0
+SPREAD_POWERS = (1.0, 2.0, 4.0, 16.0, 32.0, 64.0)
 
 # The UI offers the Voronoi diagram (no voters) as the ideal scenario, below the voting methods.
 IDEALS = ["voronoi"]
@@ -266,12 +268,18 @@ assert set(DISTRIBUTION_INFO) == set(DISTRIBUTIONS)
 # The UI's Beta voters all follow one spread rule, the default one: what it keeps the same
 # for every pixel, as a plain label, a LaTeX label (typeset by KaTeX in the UI) and a tooltip.
 SPREAD_INFO = {
-    "label": "RMS of X − m",
-    "tex": r"\sqrt{\operatorname{E}(X-m)^2}",
-    "description": "Every pixel has the same root mean square distance of its voters from "
-    "the median along each axis.",
+    "label": "Lᵖ distance from median",
+    "tex": r"\left(\operatorname{E}|X-m|^{P}\right)^{1/P}",
+    "description": "Every pixel has the same p-th power mean distance of its voters from "
+    "the median along each axis. At p = 1 this is mean absolute deviation; at p = 2 it is RMS.",
 }
 assert SPREAD == "rms"
+
+
+def _spread_rule(power: float):
+    return SPREAD if power == 2 else power
+
+
 # What a pixel is, for Beta voters: plain label, LaTeX label (typeset by KaTeX in the UI)
 # and tooltip, in the order the UI lists them. V = (V_x, V_y) is a voter of the pixel p.
 PIXEL_MEDIAN_INFO = {
@@ -300,6 +308,15 @@ UI_PIXEL_MEDIAN: PixelMedian = "geometric"  # what the UI starts with; the API's
 app = FastAPI()
 
 
+def _offered_spread_power(spread_power: float) -> float:
+    if spread_power not in SPREAD_POWERS:
+        raise ValueError(f"spread_power must be one of {SPREAD_POWERS}")
+    return spread_power
+
+
+SpreadPower = Annotated[float, AfterValidator(_offered_spread_power)]
+
+
 class DiagramRequest(BaseModel):
     candidates: list[tuple[Coordinate, Coordinate]] = Field(
         min_length=2, max_length=MAX_CANDIDATES
@@ -311,6 +328,7 @@ class DiagramRequest(BaseModel):
     # towards their geometric median. The UI moves the diagram between the two in steps.
     shift: float = Field(1.0, ge=0, le=1)
     deviation: float = DEVIATION
+    spread_power: SpreadPower = SPREAD_POWER
     levels: int = Field(SCORE_LEVELS, ge=2, le=MAX_LEVELS)  # SCORES only
     power: float = Field(SCORE_POWER, ge=MIN_POWER, le=MAX_POWER)  # SCORES only
     tie_weight: float = Field(TIE_WEIGHT, ge=0, le=1)  # ScoreComparisons only
@@ -412,6 +430,8 @@ def config():
         "final_grid": FINAL_GRID,
         "deviations": DEVIATIONS,
         "deviation": DEVIATION,
+        "spread_power": SPREAD_POWER,
+        "spread_powers": SPREAD_POWERS,
         # the methods of the categories and power sliders, their defaults and ranges
         "scores": SCORE_POWER_METHODS,
         "score_levels": SCORE_LEVEL_METHODS,
@@ -444,7 +464,7 @@ def diagram_regions(request: DiagramRequest):
     `compromise` compromise (strategic). metrics is null unless `metrics`, and the
     overlays have no voronoi_boundaries unless `overlay`."""
     start = time.perf_counter()
-    spread = SPREAD if request.distribution == "beta" else None
+    spread = _spread_rule(request.spread_power) if request.distribution == "beta" else None
     model = Model(request.distribution, request.deviation, spread)
     if request.method in SCORE_METHODS or request.method in SCORE_COMPARISON_METHODS:
         method = _score_ballot_settings(MARGINS[request.method], request.levels, request.power)
@@ -474,9 +494,9 @@ def diagram_regions(request: DiagramRequest):
     return Response(json.dumps(payload, separators=(",", ":")), media_type="application/json")
 
 
-@lru_cache(maxsize=len(DEVIATIONS))  # ~0.1 MB each, built in ~0.1 s
-def _pixels_at(deviation: float) -> str:
-    model = Model("beta", deviation, SPREAD)
+@lru_cache(maxsize=32)
+def _pixels_at(deviation: float, spread_power: float) -> str:
+    model = Model("beta", deviation, _spread_rule(spread_power))
     at = pixels_at(model)
     payload = {"pixels": at[:PIXELS // 2, :PIXELS // 2].ravel().tolist(),
                "outline": np.round(outline(model), 6).ravel().tolist()}
@@ -487,7 +507,10 @@ assert PIXELS % 2 == 0  # so a quarter of the pixels is a quarter of the square
 
 
 @app.get("/api/geometric")
-def geometric_pixels(deviation: Annotated[float, AfterValidator(_offered)]):
+def geometric_pixels(
+    deviation: Annotated[float, AfterValidator(_offered)],
+    spread_power: SpreadPower = SPREAD_POWER,
+):
     """For a diagram of geometric medians (Beta voters): {"pixels": [...], "outline": [...]}.
     pixels, for the voters shown while hovering: for the point (i + 1/2, j + 1/2) / PIXELS
     at [i * PIXELS / 2 + j] the pixel (k, l), as k * PIXELS + l, whose voters have their
@@ -495,7 +518,28 @@ def geometric_pixels(deviation: Annotated[float, AfterValidator(_offered)]):
     quarter of the square next to the origin, i, j < PIXELS / 2: the rest are its mirror
     images. outline, which the candidates are kept within: the border of the coloured
     region, [x0, y0, x1, y1, ...] counter-clockwise (geometric.outline)."""
-    return Response(_pixels_at(deviation), media_type="application/json")
+    return Response(_pixels_at(deviation, spread_power), media_type="application/json")
+
+
+@lru_cache(maxsize=32)
+def _voters_at(deviation: float, spread_power: float) -> str:
+    return json.dumps(
+        {
+            "deviation": deviation,
+            "sigma": sigma_from_deviation(deviation),
+            "beta_params": beta_params(PIXELS, deviation, _spread_rule(spread_power)).tolist(),
+        },
+        separators=(",", ":"),
+    )
+
+
+@app.get("/api/voters")
+def voter_parameters(
+    deviation: Annotated[float, AfterValidator(_offered)],
+    spread_power: SpreadPower = SPREAD_POWER,
+):
+    """Beta parameters for the pixel medians at the selected deviation and Lp power."""
+    return Response(_voters_at(deviation, spread_power), media_type="application/json")
 
 
 # Last, so that /api/... is matched first; "/" serves ui/index.html.

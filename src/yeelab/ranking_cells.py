@@ -6,10 +6,11 @@ spread rule (`spread`) fixes one more quantity for every pixel:
 
     "mean_abs"  E|X - m| = deviation (legacy: pushes voters away near the walls)
     "rms"       sqrt(E (X - m)^2) is the same as at the centre pixel
+    p in [1, 3] (numeric)  (E|X - m|^p)^(1/p) is the same as at the centre pixel
 
-Both give the same centre pixel, Beta(a0, a0) with E|X - 1/2| = deviation.
-Near the walls "mean_abs" pushes the voters on the far side of the median twice as far
-out, "rms" by sqrt(2) (docs/math.typ).
+All choices give the same centre pixel, Beta(a0, a0) with E|X - 1/2| = deviation.
+Near a wall, smaller powers push the voters on the far side of the median farther out:
+"mean_abs" by a factor of 2 and "rms" by sqrt(2) (docs/math.typ).
 
 A voter's strict ranking of the candidates changes only when the voter crosses
 the perpendicular bisector of some pair of candidates. The bisectors cut the unit
@@ -26,19 +27,19 @@ Beta parameters change fastest; the error decreases exponentially with NODES.
 
 import math
 from functools import lru_cache
-from typing import Literal, get_args
+from typing import Literal
 
 import numpy as np
 from numba import njit
 from scipy.optimize import brentq, root
-from scipy.special import betainc, betaln, expit, logit
+from scipy.special import betainc, betaln, expit, hyp2f1, logit
 
 QUAD_NODES = 24  # Gauss-Legendre points per edge integral
 NODES = 49
 EPS = 1e-12
 
-Spread = Literal["mean_abs", "rms"]
-SPREADS = get_args(Spread)
+Spread = Literal["mean_abs", "rms"] | float
+SPREADS = ("mean_abs", "rms")
 SPREAD: Spread = "rms"
 CONTINUATION_STEP = 0.25  # largest step in logit(median) of the mean_abs solver
 
@@ -124,25 +125,83 @@ def _solve_rms(upper, a0):
     return np.array(solved, dtype=np.float64)
 
 
+def _power_moment(median, a, b, power):
+    """E|X - median|^power for X ~ Beta(a, b), using incomplete beta integrals."""
+    left = np.exp(
+        (a + power) * np.log(median)
+        + betaln(a, power + 1)
+        + np.log(hyp2f1(1 - b, a, a + power + 1, median))
+        - betaln(a, b)
+    )
+    right = np.exp(
+        (b + power) * np.log1p(-median)
+        + betaln(b, power + 1)
+        + np.log(hyp2f1(1 - a, b, b + power + 1, 1 - median))
+        - betaln(a, b)
+    )
+    return left + right
+
+
+def _solve_power(upper, a0, power):
+    """(a, b) whose median is `upper` and whose p-th absolute moment matches
+    the symmetric centre pixel."""
+    target = np.log(_power_moment(0.5, a0, a0, power))
+    solved, log_kappa = [], np.log(2 * a0)
+
+    def excess(t, median):
+        kappa = np.exp(t)
+        b = _b_for_median(kappa, median)
+        moment = _power_moment(median, kappa - b, b, power)
+        return np.log(moment) / power - target / power
+
+    for median in upper:
+        f0, step = excess(log_kappa, median), 0.05
+        while f0 != 0:
+            lower, higher = log_kappa - step, log_kappa + step
+            if np.sign(excess(lower, median)) != np.sign(f0):
+                log_kappa = brentq(excess, lower, log_kappa, args=(median,), xtol=1e-14)
+                break
+            if np.sign(excess(higher, median)) != np.sign(f0):
+                log_kappa = brentq(excess, log_kappa, higher, args=(median,), xtol=1e-14)
+                break
+            step *= 2
+            if step > 40:
+                raise RuntimeError(f"no Beta with median {median} and this L{power:g} spread")
+        kappa = np.exp(log_kappa)
+        b = _b_for_median(kappa, median)
+        solved.append((kappa - b, b))
+    return np.array(solved, dtype=np.float64)
+
+
 def _upper_params(upper, deviation, spread):
     """(a, b) for the increasing medians `upper` >= 1/2, shape (len(upper), 2)."""
-    if spread not in SPREADS:
+    if isinstance(spread, (int, float, np.number)) and not isinstance(spread, (bool, np.bool_)):
+        if not np.isfinite(spread) or not 1 <= spread <= 100:
+            raise ValueError("numeric spread power must be between 1 and 100")
+        power = float(spread)
+    elif spread not in SPREADS:
         raise ValueError(f"unknown spread {spread!r}; choose from {', '.join(SPREADS)}")
+    else:
+        power = {"mean_abs": 1.0, "rms": 2.0}[spread]
     a0 = centre_shape(deviation)
-    if spread == "mean_abs":
-        # Continuation from the centre, Beta(a0, a0), outwards, with steps of at
-        # most CONTINUATION_STEP in logit(median) so the solver stays on its branch.
-        solved = np.empty((len(upper), 2), dtype=np.float64)
-        x0, z0 = [a0, a0], 0.0
-        for k, median in enumerate(upper):
-            z = logit(median)
-            steps = int(np.ceil((z - z0) / CONTINUATION_STEP))
-            for t in np.linspace(z0, z, steps + 1)[1:-1]:
-                x0 = _solve_beta(expit(t), deviation, x0)
-            x0 = _solve_beta(median, deviation, x0)
-            solved[k], z0 = x0, z
-        return solved
-    return _solve_rms(upper, a0)
+    if power == 1:
+        if spread == "mean_abs":
+            # Continuation from the centre, Beta(a0, a0), outwards, with steps of at
+            # most CONTINUATION_STEP in logit(median) so the solver stays on its branch.
+            solved = np.empty((len(upper), 2), dtype=np.float64)
+            x0, z0 = [a0, a0], 0.0
+            for k, median in enumerate(upper):
+                z = logit(median)
+                steps = int(np.ceil((z - z0) / CONTINUATION_STEP))
+                for t in np.linspace(z0, z, steps + 1)[1:-1]:
+                    x0 = _solve_beta(expit(t), deviation, x0)
+                x0 = _solve_beta(median, deviation, x0)
+                solved[k], z0 = x0, z
+            return solved
+        return _solve_power(upper, a0, power)
+    if power == 2:
+        return _solve_rms(upper, a0)
+    return _solve_power(upper, a0, power)
 
 
 def pixel_medians(pixels):

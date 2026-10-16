@@ -295,6 +295,8 @@ def test_config_lists_every_method():
     assert config["fixed_score_levels"]["system321"] == [3]
     assert [name for name in config["score_comparisons"] if name in TESTED_METHODS] == ["star", "system321"]
     assert config["tie_weight"] == 0 and config["tie_weight_step"] == 0.05
+    assert config["spread_power"] == 2.0
+    assert config["spread_powers"] == [1.0, 2.0, 4.0, 16.0, 32.0, 64.0]
     assert config["levels"] == 6 and config["max_levels"] == 11
     assert descriptions["score"].endswith("\nHighest(Tally(Score(6, power=1.5)))")
     assert descriptions["star"].endswith(
@@ -303,6 +305,29 @@ def test_config_lists_every_method():
     assert (config["min_power"], config["max_power"], config["power_step"]) == (1.0, 2.0, 0.05)
     for gone in ("deltas", "delta", "clusters", "mu", "kappa", "powers"):
         assert gone not in config
+
+
+def test_regions_accept_the_beta_spread_power():
+    client = TestClient(app)
+    request = {
+        "candidates": CANDIDATES.tolist(), "method": "fptp", "spread_power": 16,
+        "grid": 32, "metrics": False, "overlay": False,
+    }
+    response = client.post("/api/regions", json=request)
+    assert response.status_code == 200
+    expected = regions("fptp", CANDIDATES, Model("beta", 0.2, 16), 32)
+    assert response.json()["regions"] == json.loads(json.dumps(expected))
+    assert client.post("/api/regions", json={**request, "spread_power": 8}).status_code == 422
+
+
+def test_voter_density_endpoint_returns_parameters_for_selected_power():
+    client = TestClient(app)
+    response = client.get("/api/voters", params={"deviation": 0.2, "spread_power": 64})
+    assert response.status_code == 200
+    voters = response.json()
+    assert voters["deviation"] == 0.2
+    assert len(voters["beta_params"]) == 300
+    assert client.get("/api/voters", params={"deviation": 0.2, "spread_power": 8}).status_code == 422
 
 
 def test_runoff_tie_weight_is_applied_to_nested_score_comparisons():

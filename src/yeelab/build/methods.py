@@ -109,6 +109,19 @@ adhoc = Conditional(
     )
 )
 
+con_fptp = Conditional(
+    condorcet == fptp, 
+    when_true=fptp, 
+    when_false=Conditional(
+        condorcet == two_round,
+        when_true=two_round,
+        when_false = Conditional(
+            condorcet == mj,
+            when_true=condorcet,
+            when_false=Undecided()
+        )
+    )
+)
 
 METHODS: dict[str, Winner] = {
     "fptp": fptp,
@@ -134,4 +147,5 @@ METHODS: dict[str, Winner] = {
     "smj_two": smj_two,
     "new": new,
     "adhoc": adhoc,
+    "con_fptp": con_fptp,
 }

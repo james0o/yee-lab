@@ -51,7 +51,7 @@ package `src/yeelab/`):
   [medians per axis], [$n$], [`PIXELS` (`margin/shares.py`)], [300],
   [deviation], [$D$], [Model parameter, _Deviation_ slider], [0.2],
   [voter distribution], [], [Model parameter, _Voters_ control], [Beta],
-  [Beta spread rule], [], [Model parameter; the web UI always uses `rms`], [`rms`],
+  [Beta spread rule], [$p$], [_Beta spread p_, default 2 (`web/app.py`)], [2 (`rms`)],
   [what a pixel is (Beta, UI)], [], [_Point in diagram is_, `UI_PIXEL_MEDIAN` (`web/app.py`)], [geometric median],
   [interpolation nodes per axis], [$N$], [`NODES`], [49],
   [Gauss–Legendre points per edge], [$Q$], [`QUAD_NODES`], [24],
@@ -198,7 +198,7 @@ square, $1.26$ for $p = 3$. This holds for every distribution on $[0, 1]$, not o
 Beta. Every rule therefore decides, in effect, how far the far half of the voters is
 pushed out near a wall, and this is what the two rules differ in.
 
-=== The two rules
+=== The default and legacy rules
 
 *`rms` (default).* The root mean square distance of the voters from the median is the
 same as at the centre pixel,
@@ -209,7 +209,8 @@ where $s$ is the standard deviation of $Beta(a_0, a_0)$ ($s = 0.237$ for $D = 0.
 $0.337$ for $D = 0.3$). The square weights distant voters more, so near a wall a few
 voters far out make up the spread and the rest of the far half stays where it is. It is
 the rule with the clearest meaning, and of the rules compared in @sec-bench its borders
-are among the straightest. The web UI uses it for all its Beta voters.
+are among the straightest. The web UI starts at this rule and offers $p in
+{1, 2, 4, 16, 32, 64}$ in the same power-mean family.
 
 *`mean_abs` (legacy).* The mean absolute deviation is $D$ for every median,
 $E|X - m| = D$. This was the first rule, and it is kept to reproduce older results.
@@ -217,8 +218,8 @@ Because it keeps the mean absolute deviation fixed, @eq-push applies in full: ne
 wall the far half of the voters is pushed twice as far out, towards the opposite wall.
 At median $0.98$ the share of voters below $0.1$ is back at $0.192$, more than at the
 centre, where `rms` has $0.049$ (@fig-densities). This push bends Condorcet borders,
-adds cycles and gives IRV a round edge that `rms` does not have (@ch-spread). It is not
-offered in the web UI; it remains available as a model spread rule.
+adds cycles and gives IRV a round edge that `rms` does not have (@ch-spread). The web UI
+offers this quantity at $p = 1$; the legacy name remains available to existing models.
 
 #figure(
   image("figures/spread_densities.png", width: 100%),
