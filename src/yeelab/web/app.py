@@ -54,8 +54,9 @@ TIE_WEIGHT_STEP = 0.05
 
 
 def _score_ballots(block) -> list[Score]:
-    """Find Score and D21 ballots nested in a built method: the ballots with a power."""
-    if type(block) in (Score, D21):
+    """Find Score and D21 ballots nested in a built method: the ballots with a power (an
+    ordinal D21 has none)."""
+    if type(block) is Score or (type(block) is D21 and not block.ordinal):
         return [block]
     if not is_dataclass(block):
         return []
@@ -67,7 +68,7 @@ def _score_ballot_settings(block, levels: int, power: float):
     """Replace adjustable Score settings while preserving fixed levels and block structure."""
     if type(block) is Score:
         return Score(block.levels if block.fixed else levels, power=power, fixed=block.fixed)
-    if type(block) is D21:  # its levels follow from its votes
+    if type(block) is D21 and not block.ordinal:  # its levels follow from its votes
         return replace(block, power=power)
     if not is_dataclass(block):
         return block

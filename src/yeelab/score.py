@@ -2,7 +2,7 @@
 
 A score ballot has `levels` scores, 0 to levels - 1. A voter at v gives the closest
 candidate the top score and the farthest 0. Which score the others get depends on the
-distances r_i = |v - c_i|, in one of six ways (`rule`):
+distances r_i = |v - c_i|, in one of seven ways (`rule`):
 
     RANGE   the score by where r_i is between the closest and the farthest, its part
             of the way to the power `power`, rounded to a whole score:
@@ -89,24 +89,28 @@ distances r_i = |v - c_i|, in one of six ways (`rule`):
             always the ballot: RANGE's approval, of at most max_positive candidates.
             The closest always gets a plus vote, but the farthest a minus vote only if
             the voter gives one
+    D21_ORDINAL  D21 by the order of distance alone: a plus vote to the max_positive
+            closest candidates and a minus vote to the max_negative farthest of the
+            others, every voter all of them; negative_after and the power do not count.
+            With two levels it is the approval of the max_positive closest
 
-Nothing changes when all distances are scaled. With two levels every rule is an
-approval ballot: the voter approves the candidates with the top score, from the closest
-alone to all but the farthest; D21's, without minus votes, is RANGE's of at most
-max_positive candidates. RANGE approves those closer than halfway between the
-closest and the farthest, AVG those closer than the mean distance (at it, the half is
-rounded to 0: not approved), DHONDT, whatever delta, those above the largest gap
-(ties: the first) and HYBRID, whatever delta, those above the largest gap among the
-candidates closer than halfway, the gap from the last of them to halfway included
-(ties: the first). CLUSTER approves those RANGE approves, unless that cut splits a
-cluster and another gap costs less. AVG's is the best ballot of a voter with the utility -r_i who takes
-every pair of candidates to be as likely to tie (Weber): approving c is worth
-sum_e (r_e - r_c), which is positive for these. For three candidates RANGE, AVG and
-DHONDT are the same ballot, and HYBRID approves the middle one only closer than a
-quarter of the way, r_(2) < (3 r_(1) + r_(3)) / 4; for more candidates all four differ.
-The gaps are those of the distances, not of their squares: a voter at the squared
-distances 0, 0.35, 0.45, 0.55 and 1 has the gaps 0.59, 0.08, 0.07 and 0.26, so DHONDT
-approves only the candidate the voter stands on.
+Nothing changes when all distances are scaled. With two levels every rule is an approval
+ballot: the voter approves the candidates with the top score, from the closest alone to
+all but the farthest; D21's, without minus votes, is RANGE's of at most max_positive
+candidates, and D21_ORDINAL's that of the max_positive closest. RANGE approves those
+closer than halfway between the closest and the farthest, AVG those closer than the mean
+distance (at it, the half is rounded to 0: not approved), DHONDT, whatever delta, those
+above the largest gap (ties: the first) and HYBRID, whatever delta, those above the
+largest gap among the candidates closer than halfway, the gap from the last of them to
+halfway included (ties: the first). CLUSTER approves those RANGE approves, unless that
+cut splits a cluster and another gap costs less. AVG's is the best ballot of a voter
+with the utility -r_i who takes every pair of candidates to be as likely to tie (Weber):
+approving c is worth sum_e (r_e - r_c), which is positive for these. For three
+candidates RANGE, AVG and DHONDT are the same ballot, and HYBRID approves the middle one
+only closer than a quarter of the way, r_(2) < (3 r_(1) + r_(3)) / 4; for more
+candidates all four differ. The gaps are those of the distances, not of their squares: a
+voter at the squared distances 0, 0.35, 0.45, 0.55 and 1 has the gaps 0.59, 0.08, 0.07
+and 0.26, so DHONDT approves only the candidate the voter stands on.
 
 As the number of levels grows, AVG comes closer to its part of the way, and RANGE,
 DHONDT and HYBRID to that of RANGE, (r_max - r_i) / (r_max - r_min): for delta up to 1,
@@ -124,10 +128,11 @@ its DHONDT steps moves, with m for r_a or r_c at the gap to the midrange, where 
 candidate crosses m, 2 r_i = r_min + r_max, and where a RANGE score of its lower half is
 half a score. A CLUSTER score changes where two choices of scores cost the same. A D21
 vote changes where a RANGE score of three or two levels does, and where two candidates
-with the same score are as far, if max_positive or max_negative cuts between them.
-Unlike the bisectors these are curves, so the mean score is not a sum
-over polygons. `ballot_table` gives, for a grid of rectangles, the distinct ballots in
-each rectangle and the part of its voters with each, and `tabulate` every mean over them:
+with the same score are as far, if max_positive or max_negative cuts between them;
+a D21_ORDINAL vote only on a bisector, like a ranking. Unlike the bisectors the others
+are curves, so the mean score is not a sum over polygons. `ballot_table` gives, for a
+grid of rectangles, the distinct ballots in each rectangle and the part of its voters
+with each, and `tabulate` every mean over them:
 the points below the top score of each candidate (`unscored`), the share of the voters
 who give each candidate each score (`graded`, what its median reads), the strict
 comparisons of each pair (`comparisons`), the points each candidate gets from the voters
@@ -151,8 +156,9 @@ AVG = "avg"
 HYBRID = "hybrid"
 CLUSTER = "cluster"
 D21 = "d21"
-Rule = Literal["range", "dhondt", "avg", "hybrid", "cluster", "d21"]
-RULES: tuple[Rule, ...] = (RANGE, DHONDT, AVG, HYBRID, CLUSTER, D21)
+D21_ORDINAL = "d21_ordinal"
+Rule = Literal["range", "dhondt", "avg", "hybrid", "cluster", "d21", "d21_ordinal"]
+RULES: tuple[Rule, ...] = (RANGE, DHONDT, AVG, HYBRID, CLUSTER, D21, D21_ORDINAL)
 BITS = 4  # of each candidate in the code of a ballot: its points below the top score
 MASK = (1 << BITS) - 1
 MAX_CANDIDATES = 63 // BITS  # a ballot is a code in an int64
@@ -160,7 +166,8 @@ MAX_LEVELS = MASK + 1  # the points below the top score fit the bits of a candid
 DELTA = 0.8  # of DHONDT and HYBRID: each step to the largest g_k / (d_k + DELTA)
 MU, KAPPA = 0.1, 2.0  # of CLUSTER: the cost of a split, and how much farther a cluster's neighbours are
 POWER = 1.0  # of RANGE and D21: the part of the way to this power; 1 is in proportion to the distance
-# of D21: at most 2 plus votes and 1 minus vote, the minus vote only after 2 plus votes
+# of D21 and D21_ORDINAL: at most 2 plus votes and 1 minus vote, the minus vote only after
+# 2 plus votes
 VOTES = (2, 1, 2)  # (max_positive, max_negative, negative_after)
 ROWS = 8  # grid rows per task of the compiled loop (threads.py)
 
@@ -173,8 +180,9 @@ def distances(points, candidates) -> np.ndarray:
 
 
 def _check(rule, delta, mu=MU, kappa=KAPPA, power=POWER, votes=VOTES, levels=None):
-    """ValueError unless the parameters make a ballot; for D21 levels must be 3 with
-    minus votes and 2 without."""
+    """ValueError unless the parameters make a ballot; for D21 and D21_ORDINAL levels
+    must be 3 with minus votes and 2 without. negative_after may be above max_positive
+    only without minus votes, where it does not count."""
     if rule not in RULES:
         raise ValueError(f"unknown rule {rule!r}; choose from {', '.join(RULES)}")
     if not 0 < delta < math.inf:
@@ -186,11 +194,12 @@ def _check(rule, delta, mu=MU, kappa=KAPPA, power=POWER, votes=VOTES, levels=Non
     if not 0 < power < math.inf:
         raise ValueError(f"power must be a number above 0, got {power!r}")
     if (len(votes) != 3 or not all(isinstance(v, int | np.integer) and not isinstance(v, bool) for v in votes)
-            or not (votes[0] >= 1 and votes[1] >= 0 and 0 <= votes[2] <= votes[0])):
+            or not (votes[0] >= 1 and votes[1] >= 0 and votes[2] >= 0)
+            or (votes[1] and votes[2] > votes[0])):
         raise ValueError("votes must be whole numbers (max_positive, max_negative, negative_after) with "
                          f"max_positive >= 1, max_negative >= 0 and negative_after from 0 to max_positive, "
                          f"got {votes!r}")
-    if rule == D21 and levels is not None and levels != (3 if votes[1] else 2):
+    if rule in (D21, D21_ORDINAL) and levels is not None and levels != (3 if votes[1] else 2):
         raise ValueError(f"a D21 ballot has {3 if votes[1] else 2} levels with {votes[1]} minus votes, "
                          f"got {levels}")
 
@@ -200,8 +209,8 @@ def scored(points, candidates, levels: int, rule: Rule = RANGE, delta: float = D
     """The score a voter at each of the points (..., 2) gives each candidate, int
     (..., C) from 0 to levels - 1: the ballot from its definition, one voter at a time.
     delta is the divisor of DHONDT and HYBRID, mu and kappa the cost of a split and the
-    cohesion of CLUSTER, power that of RANGE and D21, votes the numbers of votes of D21;
-    the other rules do not use them."""
+    cohesion of CLUSTER, power that of RANGE and D21, votes the numbers of votes of D21
+    and D21_ORDINAL; the other rules do not use them."""
     return from_distances(distances(points, candidates), levels, rule, delta, mu=mu, kappa=kappa, power=power,
                           votes=votes)
 
@@ -223,6 +232,10 @@ def from_distances(r, levels: int, rule: Rule = RANGE, delta: float = DELTA, *, 
         return np.rint(_avg_part(r) * (levels - 1)).astype(np.int64)
     if rule == D21:
         return levels - 1 - _d21_below(r, levels - 1, power, votes)
+    if rule == D21_ORDINAL:
+        n = r.shape[-1]
+        up = np.full(r.shape[:-1], min(votes[0], n))
+        return levels - 1 - _votes_below(r, levels - 1, up, np.minimum(votes[1], n - up))
     far = r.max(axis=-1, keepdims=True)
     span = far - r.min(axis=-1, keepdims=True)
     part = np.divide(far - r, span, out=np.ones_like(r), where=span > 0)
@@ -254,7 +267,14 @@ def _d21_below(r, top, power, votes):
     approved = np.minimum((two == 1).sum(axis=-1), plus)
     switch = (down == 0) & (approved != up)  # no minus vote, and approval gives more plus votes
     down = np.where(switch, np.where(approved >= after, np.minimum((two == 0).sum(axis=-1), minus), 0), down)
-    up = np.where(switch, approved, up)
+    return _votes_below(r, top, np.where(switch, approved, up), down)
+
+
+def _votes_below(r, top, up, down):
+    """Points below the top score `top` of each candidate, int (..., C), for the
+    distances r (..., C) of a voter who gives a plus vote to the `up` (...) closest
+    candidates and a minus vote to the `down` (...) farthest: 0, 2 (top) and 1 for none
+    (ties: the lowest index the closer, as in by_distance)."""
     n = r.shape[-1]
     position = np.argsort(np.argsort(r, axis=-1, kind="stable"), axis=-1, kind="stable")  # 0 the closest
     return np.where(position < up[..., None], 0, np.where(position >= n - down[..., None], top, 1))
@@ -400,32 +420,36 @@ def _ballot(x, y, candidates, top, rule, delta, mu, kappa, power, votes, r, orde
     """scored() of the voter at (x, y) as a code: BITS bits per candidate, holding the
     points it is below the top score `top`. `rule` is the index of the rule in RULES,
     delta the divisor of DHONDT and HYBRID, mu and kappa those of CLUSTER, power that of
-    RANGE and D21, votes the numbers of votes of D21; r, order and
+    RANGE and D21, votes the numbers of votes of D21 and D21_ORDINAL; r, order and
     steps (C,), work and back (those of _cluster) are scratch."""
     n = candidates.shape[0]
     code = 0
-    if rule == 5:  # D21: as _d21_below
+    if rule == 5 or rule == 6:  # D21 as _d21_below, D21_ORDINAL by the order alone
         by_distance(x, y, candidates, r, order)
-        near, far = r[order[0]], r[order[n - 1]]
-        top3 = none3 = top2 = none2 = 0  # the top scores and the 0s of RANGE's three and two levels
-        for k in range(n):
-            part = (far - r[order[k]]) / (far - near) if far > near else 1.0
-            if power != 1.0:
-                part = part ** power
-            three = np.rint(part * 2)
-            if three == 2:
-                top3 += 1
-            elif three == 0:
-                none3 += 1
-            if np.rint(part) == 1:
-                top2 += 1
-            else:
-                none2 += 1
         plus, minus, after = votes
-        up, approved = min(top3, plus), min(top2, plus)
-        down = min(none3, minus) if up >= after else 0
-        if down == 0 and approved != up:  # no minus vote, and approval gives more plus votes
-            up, down = approved, (min(none2, minus) if approved >= after else 0)
+        if rule == 6:
+            up = min(plus, n)
+            down = min(minus, n - up)
+        else:
+            near, far = r[order[0]], r[order[n - 1]]
+            top3 = none3 = top2 = none2 = 0  # the top scores and the 0s of RANGE's three and two levels
+            for k in range(n):
+                part = (far - r[order[k]]) / (far - near) if far > near else 1.0
+                if power != 1.0:
+                    part = part ** power
+                three = np.rint(part * 2)
+                if three == 2:
+                    top3 += 1
+                elif three == 0:
+                    none3 += 1
+                if np.rint(part) == 1:
+                    top2 += 1
+                else:
+                    none2 += 1
+            up, approved = min(top3, plus), min(top2, plus)
+            down = min(none3, minus) if up >= after else 0
+            if down == 0 and approved != up:  # no minus vote, and approval gives more plus votes
+                up, down = approved, (min(none2, minus) if approved >= after else 0)
         for k in range(n):
             code |= (0 if k < up else top if k >= n - down else 1) << (BITS * order[k])
         return code

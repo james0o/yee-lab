@@ -11,6 +11,7 @@ Every block has one type of output:
                      Score(levels, power=...), ScoreAvg(levels), ScoreDH(levels, delta=...),
                      ScoreHybrid(levels, delta=...), ScoreCluster(levels, mu=..., kappa=...),
                      D21(max_positive=..., max_negative=..., negative_after=..., power=...),
+                     D21(max_positive=..., max_negative=..., ordinal=True),
                      Mix(first, second, share=...)
     CandidateTotals  Tally(ballot), Weakest(diffs),     a total of each candidate at a point
                      Tally(ballot, statistic="median")
@@ -43,7 +44,8 @@ each is an approval ballot. D21(max_positive=..., max_negative=..., negative_aft
 power=...) is Janeček's D21, plus votes, minus votes and none, from Score's ballots of
 three and two levels: at most max_positive plus votes to the closest candidates, at most
 max_negative minus votes to the farthest, and a minus vote only after negative_after plus
-votes. Its total is the mean score as a part of the top score, counted down
+votes; with ordinal=True always to the max_positive closest and the max_negative
+farthest, by the order alone. Its total is the mean score as a part of the top score, counted down
 from 1: a voter who does not give a candidate the top score takes off what is missing.
 Mix(first, second, share=s) is two kinds of voters: s of them mark `second`, the others
 `first`.
@@ -112,7 +114,7 @@ from yeelab.build.judgment import majority_totals
 from yeelab.build.rounds import drop_below_mean, drop_lowest
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Graded, Scored, ScoredPairwise, Share, Voters
 from yeelab.score import AVG, CLUSTER, DELTA, DHONDT, HYBRID, KAPPA, MU, POWER, RANGE, VOTES
-from yeelab.score import D21 as D21_RULE
+from yeelab.score import D21 as D21_RULE, D21_ORDINAL
 from yeelab.voting import CYCLE, descending_coalitions, irv_rounds
 
 Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) or (chosen, margin) at every point
@@ -512,7 +514,16 @@ class D21(Score):
     max_positive, the voter marks that instead, with a minus vote, on the same terms, to
     the candidates it does not approve. Without minus votes the ballot is Score(2) of at
     most max_positive candidates: D21(max_positive=1, max_negative=0) is FPTP. The
-    defaults are score.VOTES: 2 plus votes and 1 minus vote, after 2 plus votes.
+    defaults are score.VOTES: 2 plus votes and 1 minus vote, after 2 plus votes
+    (negative_after=None is 2); without minus votes negative_after does not count.
+
+    ordinal=True gives the votes by the order of distance alone: a plus vote to the
+    max_positive closest candidates and a minus vote to the max_negative farthest of the
+    others, every voter all of them (score.D21_ORDINAL). negative_after and the power do
+    not apply to it, and a block that sets them with ordinal=True is refused.
+    D21(max_positive=2, max_negative=0, ordinal=True) votes for the two closest; with three
+    candidates it is AntiPlurality, and D21(max_positive=1, max_negative=1, ordinal=True)
+    is Borda.
 
     A plus vote is the score 2, none 1 and a minus vote 0, of 3 levels, or without minus
     votes a plus vote 1 and none 0, of 2: levels follows from max_negative, and the UI's
@@ -523,7 +534,8 @@ class D21(Score):
     fixed: bool = field(default=True, init=False)
     max_positive: int = field(default=VOTES[0], kw_only=True)
     max_negative: int = field(default=VOTES[1], kw_only=True)
-    negative_after: int = field(default=VOTES[2], kw_only=True)
+    negative_after: int | None = field(default=None, kw_only=True)
+    ordinal: bool = field(default=False, kw_only=True)
     rule = D21_RULE
 
     def __post_init__(self):
@@ -531,26 +543,42 @@ class D21(Score):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < least:
                 raise ValueError(f"D21 {name} must be a whole number of at least {least}, got {value!r}")
+        if not isinstance(self.ordinal, bool):
+            raise TypeError(f"D21 ordinal must be a bool, got {self.ordinal!r}")
         after = self.negative_after
-        if isinstance(after, bool) or not isinstance(after, int) or not 0 <= after <= self.max_positive:
-            raise ValueError(f"D21 negative_after must be a whole number from 0 to max_positive "
-                             f"({self.max_positive}), got {after!r}")
+        if self.ordinal:
+            if after is not None:
+                raise ValueError("D21 with ordinal=True has no negative_after: every voter gives all "
+                                 "max_positive plus votes")
+            if self.power != POWER:  # as for any keyword the block does not take
+                raise TypeError("D21 with ordinal=True has no power: it reads the order of distance alone")
+        else:
+            default = after is None
+            after = VOTES[2] if default else after
+            if (isinstance(after, bool) or not isinstance(after, int) or after < 0
+                    or (self.max_negative and after > self.max_positive)):
+                raise ValueError(f"D21 negative_after must be a whole number of 0 or more, and with minus votes "
+                                 f"at most max_positive ({self.max_positive}), got {after!r}"
+                                 + (" (the default)" if default else ""))
+            object.__setattr__(self, "negative_after", after)
         object.__setattr__(self, "levels", 3 if self.max_negative else 2)
         super().__post_init__()
 
     @property
     def votes(self) -> tuple[int, int, int]:
-        """(max_positive, max_negative, negative_after), as score.VOTES."""
-        return self.max_positive, self.max_negative, self.negative_after
+        """(max_positive, max_negative, negative_after), as score.VOTES; negative_after is
+        0 with ordinal=True."""
+        return self.max_positive, self.max_negative, 0 if self.ordinal else self.negative_after
 
     @property
     def scored(self) -> Scored:
-        return Scored(self.levels, self.rule, power=self.power, votes=self.votes)
+        return Scored(self.levels, D21_ORDINAL if self.ordinal else self.rule, power=self.power, votes=self.votes)
 
     def __repr__(self):
+        votes = "ordinal=True" if self.ordinal else f"negative_after={self.negative_after!r}"
         power = f", power={self.power!r}" if self.power != POWER else ""
         return (f"{type(self).__name__}(max_positive={self.max_positive!r}, max_negative={self.max_negative!r}, "
-                f"negative_after={self.negative_after!r}{power})")
+                f"{votes}{power})")
 
 
 @dataclass(frozen=True)

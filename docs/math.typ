@@ -1498,7 +1498,8 @@ D21 (Janeček) gives every voter a few plus votes and fewer minus votes, at most
 each per candidate; the most plus votes less minus votes win. Here it is
 `Highest(Tally(D21(max_positive=2, max_negative=1, negative_after=2, power=1.5)))`:
 at most $P = 2$ plus votes, at most $N = 1$ minus vote, and a minus vote only from a voter
-who gives at least $A = 2$ plus votes. It is a score ballot of $3$ levels, a plus vote
+who gives at least $A = 2$ plus votes, the default of `negative_after`, which does not
+count without minus votes. It is a score ballot of $3$ levels, a plus vote
 $2$, none $1$ and a minus vote $0$, or of $2$ levels without minus votes, built from the
 ballot of Score (@eq-range) at the power $p$ of its slider (`score.D21`). The number of
 levels follows from $N$, so the categories slider does not apply.
@@ -1524,13 +1525,28 @@ $A < 2$, $P >= 3$ or $N >= 2$. Without minus votes the ballot is always Score's 
 candidates: `D21(max_positive=1, max_negative=0)` is FPTP, and with $P >= C$ it is
 approval voting.
 
+*By the order alone.* `D21(max_positive=2, max_negative=1, ordinal=True)` gives the votes
+by the position in the order of distance (@eq-distances) alone (`score.D21_ORDINAL`): a
+plus vote to the $P$ closest candidates and a minus vote to the $N$ farthest of the
+others, every voter all of them, the plus votes first where there are fewer than
+$P + N$ candidates. It is a positional count like Borda, with the points
+$1, dots, 1, 0, dots, 0, -1, dots, -1$: with three candidates
+`D21(max_positive=1, max_negative=1, ordinal=True)` is Borda and
+`D21(max_positive=2, max_negative=0, ordinal=True)` AntiPlurality, and
+`D21(max_positive=1, max_negative=0, ordinal=True)` is FPTP. $A$ cannot count, as every
+voter gives all $P$ plus votes, nor can $p$, which changes no order, so the block refuses
+both with `ordinal=True`, and neither slider applies to it.
+
 *Total.* With $s_i^+$ and $s_i^-$ the shares of the voters who give $c_i$ a plus and a
 minus vote, the tally of the score ballot (@sec-score) is
 $-u_i = (s_i^+ - s_i^-) slash 2 - 1 slash 2$, in the order of $s_i^+ - s_i^-$, and the
 margin is half the lead in plus votes less minus votes. A vote changes where a score of
 @eq-range-borders does, at $t_i^p = 1 slash 4$, $1 slash 2$ or $3 slash 4$, and, where
-$P$ or $N$ cuts between two candidates with the same score, on their bisector. The
-shares come from the ballot table of @sec-score, as for Score.
+$P$ or $N$ cuts between two candidates with the same score, on their bisector; by the
+order alone only on a bisector, as a ranking does. The shares come from the ballot table
+of @sec-score, as for Score, by the order alone too: without minus votes they agree with
+the exact shares of the ranking cells as closely as those of @sec-score
+(`tests/test_score.py`).
 
 *In the plane.* On the default candidates A–E (Beta voters, `rms`, $D = 0.2$,
 $p = 1.5$) a voter of the square gives $1.73$ plus votes and $0.73$ minus votes on
@@ -1543,6 +1559,11 @@ under Score; without minus votes ($N = 0$) it wins 23%, and with a minus vote at
 ($A = 0$) 25%. The part of the square not won by the nearest candidate is 12%, as under
 FPTP (12%), against 9% under approval and 5% under Score: the plus votes spread the
 regions as approval does, and the minus votes push the edge candidates further back.
+By the order alone every voter gives both plus votes and the minus vote, however far
+the second candidate and however near the farthest: D, the second choice of many, wins
+42% of the square, A 15% and E 11%, and the part not won by the nearest candidate is
+29%. Without minus votes D wins 35%, and with one plus and one minus vote 25% (Borda:
+31%).
 
 *Strategic voters.* The strategies of @ch-strategy treat the ballot as any score ballot:
 a burying voter gives the frontrunner they rank lower $0$, a minus vote, and a

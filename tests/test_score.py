@@ -21,8 +21,10 @@ from score.py over every ballot it may give; with mu = 0 it is RANGE. D21 gives 
 worked out by hand for a few voters, never more votes than it may and a minus vote only
 after enough plus votes; without minus votes it is RANGE's approval of at most
 max_positive candidates (FPTP for one), and with its defaults one cut at halfway, both
-defined apart from score.py. The compiled ballot of the grid must be that of the
-definition.
+defined apart from score.py. D21_ORDINAL gives the votes by the position in the order of
+distance alone: with three candidates Borda's points or AntiPlurality's, and the share
+approving with two levels is the exact share with the candidate among the max_positive
+closest. The compiled ballot of the grid must be that of the definition.
 
 The shares come from a grid of voters, so they are approximate. They are compared with
 exact shares where there are some (two candidates get the top score from their first
@@ -54,8 +56,8 @@ from yeelab.margin import shares as shares_module
 from yeelab.margin.shares import (GRID_CELLS, GRID_SUB, Model, ScoreGrid, _grid_lines, _voter_grid, ballots,
                                   buried_shares, first_choice_shares, graded_shares, pairwise_shares, raised_shares,
                                   ranking_shares, score_comparison_shares, unscored_shares)
-from yeelab.score import (AVG, BITS, BallotTable, CLUSTER, COMPARISONS, D21, DELTA, DHONDT, GIVEN, GRADES, HYBRID,
-                          KAPPA, MAX_CANDIDATES, MAX_LEVELS, MU, POWER, RAISED, RANGE, RULES, UNSCORED, VOTES,
+from yeelab.score import (AVG, BITS, BallotTable, CLUSTER, COMPARISONS, D21, D21_ORDINAL, DELTA, DHONDT, GIVEN,
+                          GRADES, HYBRID, KAPPA, MAX_CANDIDATES, MAX_LEVELS, MU, POWER, RAISED, RANGE, RULES, UNSCORED, VOTES,
                           ballot_table, comparisons, distances, from_distances, given, graded, moved_comparisons,
                           moved_grades, raised, scored, tabulate, unscored)
 
@@ -64,7 +66,8 @@ CANDIDATES = {2: np.random.default_rng(5).random((2, 2)), 3: np.random.default_r
               4: np.random.default_rng(6).random((4, 2)), 5: FIVE,
               6: np.random.default_rng(4).random((6, 2)), 7: np.random.default_rng(1).random((7, 2))}
 LEVELS = [2, 3, 6, 11, 16]
-SCALES = [rule for rule in RULES if rule != D21]  # of any number of levels; D21's follow from its votes
+# of any number of levels; D21's follow from its votes
+SCALES = [rule for rule in RULES if rule not in (D21, D21_ORDINAL)]
 DELTAS = [0.5, DELTA, 1.0]  # the range of the UI's slider and its default
 MODELS = [Model("beta", 0.2, "rms"), Model("beta", 0.05, "rms"), Model("beta", 0.35, "mean_abs"),
           Model("normal", 0.2), Model("normal", 0.05)]
@@ -445,7 +448,7 @@ def test_hybrid_gives_each_half_its_own_part_of_the_scale(levels):
 
 
 def test_unknown_rules_are_rejected():
-    choose = "choose from range, dhondt, avg, hybrid, cluster, d21"
+    choose = "choose from range, dhondt, avg, hybrid, cluster, d21, d21_ordinal"
     for rule in ("gap", "dh", None):
         with pytest.raises(ValueError, match=f"unknown rule {rule!r}; {choose}"):
             scored(np.zeros(2), FIVE, 3, rule)
@@ -544,11 +547,11 @@ def test_cluster_without_a_cost_of_splitting_is_range(levels):
     np.testing.assert_array_equal(from_distances(r, levels, CLUSTER, mu=0.0), from_distances(r, levels, RANGE))
 
 
-def _d21(parts, votes=VOTES, power=POWER):
+def _d21(parts, votes=VOTES, power=POWER, rule=D21):
     """The D21 ballot of a voter at the parts of the way (the closest 1, the farthest 0),
     as + for a plus vote, - for a minus vote and 0 for none."""
     levels = 3 if votes[1] else 2
-    ballot = from_distances(1 - np.asarray(parts, dtype=np.float64), levels, D21, power=power, votes=votes)
+    ballot = from_distances(1 - np.asarray(parts, dtype=np.float64), levels, rule, power=power, votes=votes)
     return "".join(("0+" if levels == 2 else "-0+")[score] for score in ballot)
 
 
@@ -618,14 +621,41 @@ def test_d21_with_its_defaults_is_one_cut_at_halfway(power):
 
 
 def test_d21_votes_and_levels_must_fit():
+    """negative_after counts only with minus votes: above max_positive only without them."""
     for votes in ((0, 1, 0), (2, -1, 2), (2, 1, 3), (2, 1, -1), (2.0, 1, 2), (2, True, 2), (2, 1)):
         with pytest.raises(ValueError, match="votes must be whole numbers"):
             scored(np.zeros(2), FIVE, 3, D21, votes=votes)
-    for levels, votes in ((2, (2, 1, 2)), (3, (2, 0, 2)), (6, (2, 1, 2))):
-        with pytest.raises(ValueError, match=f"a D21 ballot has {3 if votes[1] else 2} levels"):
-            scored(np.zeros(2), FIVE, levels, D21, votes=votes)
-        with pytest.raises(ValueError, match=f"a D21 ballot has {3 if votes[1] else 2} levels"):
-            unscored(np.linspace(0, 1, 5), np.linspace(0, 1, 5), FIVE, levels, 4, D21, votes=votes)
+    assert _d21([1, 0.6, 0], votes=(1, 0, 2)) == "+00"
+    for rule in (D21, D21_ORDINAL):
+        for levels, votes in ((2, (2, 1, 2)), (3, (2, 0, 2)), (6, (2, 1, 2))):
+            with pytest.raises(ValueError, match=f"a D21 ballot has {3 if votes[1] else 2} levels"):
+                scored(np.zeros(2), FIVE, levels, rule, votes=votes)
+            with pytest.raises(ValueError, match=f"a D21 ballot has {3 if votes[1] else 2} levels"):
+                unscored(np.linspace(0, 1, 5), np.linspace(0, 1, 5), FIVE, levels, 4, rule, votes=votes)
+
+
+def test_d21_ordinal_gives_the_votes_by_the_order_alone():
+    """Y, whom D21 gives one plus vote, still gives two and the minus vote; the votes go
+    by position, all of them, the plus votes first where there are fewer candidates."""
+    y = [1, 0.3, 0.2, 0]
+    assert (_d21(y), _d21(y, rule=D21_ORDINAL)) == ("+000", "++0-")
+    assert _d21(y, votes=(2, 0, 0), rule=D21_ORDINAL) == "++00"
+    assert _d21([1, 0.9, 0.1, 0], votes=(1, 2, 0), rule=D21_ORDINAL) == "+0--"
+    assert _d21([1, 0], rule=D21_ORDINAL) == "++" and _d21([1, 0.5, 0], votes=(2, 2, 0), rule=D21_ORDINAL) == "++-"
+    rng = np.random.default_rng(19)
+    for n in range(2, 9):
+        candidates, points = rng.random((n, 2)), rng.random((2000, 2))
+        position = np.argsort(np.argsort(distances(points, candidates), axis=-1, kind="stable"), axis=-1,
+                              kind="stable")
+        for plus, minus in ((2, 1), (1, 1), (3, 2), (2, 0)):
+            levels, up = (3 if minus else 2), min(plus, n)
+            down = min(minus, n - up)
+            expected = np.where(position < up, levels - 1, np.where(position >= n - down, 0, levels - 2))
+            np.testing.assert_array_equal(scored(points, candidates, levels, D21_ORDINAL, votes=(plus, minus, 0)),
+                                          expected)
+        if n == 3:  # Borda's points 2, 1, 0, and AntiPlurality's approval of all but the last
+            np.testing.assert_array_equal(scored(points, candidates, 3, D21_ORDINAL, votes=(1, 1, 0)), 2 - position)
+            np.testing.assert_array_equal(scored(points, candidates, 2, D21_ORDINAL, votes=(2, 0, 0)), position < 2)
 
 
 def test_score_comparisons_count_strict_preferences_and_abstain_on_ties():
@@ -662,15 +692,15 @@ def test_the_compiled_ballot_is_the_definition(n, rule, delta, mu, kappa, power)
 
 
 @pytest.mark.parametrize("votes", [VOTES, (2, 1, 0), (3, 2, 2), (2, 0, 2), (1, 0, 0)])
-@pytest.mark.parametrize("power", [POWER, 1.5])
+@pytest.mark.parametrize(("rule", "power"), [(D21, POWER), (D21, 1.5), (D21_ORDINAL, POWER)])
 @pytest.mark.parametrize("n", CANDIDATES)
-def test_the_compiled_d21_ballot_is_the_definition(n, power, votes):
+def test_the_compiled_d21_ballot_is_the_definition(n, rule, power, votes):
     """As for the other rules, with the levels of the votes."""
     rng = np.random.default_rng(n)
     points, levels = 2 * rng.random((200, 2)) - 0.5, 3 if votes[1] else 2
-    short = np.stack([unscored([x, x + 1e-9], [y, y + 1e-9], CANDIDATES[n], levels, 2, D21, power=power,
+    short = np.stack([unscored([x, x + 1e-9], [y, y + 1e-9], CANDIDATES[n], levels, 2, rule, power=power,
                                votes=votes)[:, 0, 0] for x, y in points])
-    np.testing.assert_array_equal(short, levels - 1 - scored(points, CANDIDATES[n], levels, D21, power=power,
+    np.testing.assert_array_equal(short, levels - 1 - scored(points, CANDIDATES[n], levels, rule, power=power,
                                                              votes=votes))
 
 
@@ -1118,6 +1148,17 @@ def test_two_levels_approve_from_the_closest_alone_to_all_but_the_farthest(model
         assert (shares >= _top_shares(candidates, model, 1) - TOLERANCE).all()
         assert (shares <= _top_shares(candidates, model, n - 1) + TOLERANCE).all()
         assert (shares >= -1e-12).all() and (shares <= 1 + 1e-12).all()
+
+
+@pytest.mark.parametrize("model", MODELS, ids=_ids)
+def test_d21_ordinal_approval_is_the_exact_share_among_the_closest(model):
+    """Without minus votes the share giving c a plus vote is that with c among the
+    max_positive closest, exact from the cells of the ranking."""
+    for n in (5, 7):
+        candidates = CANDIDATES[n]
+        for plus in (1, 2, n - 1):
+            shares = 1 - unscored_shares(candidates, model, 2, model.medians, D21_ORDINAL, votes=(plus, 0, 0))
+            np.testing.assert_allclose(shares, _top_shares(candidates, model, plus), rtol=0, atol=TOLERANCE)
 
 
 @pytest.mark.parametrize("model", MODELS, ids=_ids)

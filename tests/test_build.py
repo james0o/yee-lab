@@ -377,11 +377,31 @@ def test_d21_takes_its_numbers_of_votes():
         with pytest.raises(ValueError, match=f"D21 {name} must be a whole number"):
             D21(**votes)
     for after in (-1, 3, 1.0):
-        with pytest.raises(ValueError, match=re.escape("D21 negative_after must be a whole number from 0 to "
-                                                       "max_positive (2)")):
+        with pytest.raises(ValueError, match=re.escape("D21 negative_after must be a whole number of 0 or more, "
+                                                       "and with minus votes at most max_positive (2)")):
             D21(negative_after=after)
+    with pytest.raises(ValueError, match=re.escape("at most max_positive (1), got 2 (the default)")):
+        D21(max_positive=1)
+    # without minus votes negative_after does not count: FPTP takes the default
+    assert D21(max_positive=1, max_negative=0).needs == {Scored(2, "d21", votes=(1, 0, 2))}
     with pytest.raises(TypeError):
         D21(levels=3)  # the levels follow from the votes
+
+
+def test_d21_ordinal_takes_neither_negative_after_nor_a_power():
+    """Every voter gives all the votes, by the order of distance alone."""
+    ordinal = D21(max_positive=2, max_negative=1, ordinal=True)
+    assert ordinal != D21() and ordinal.negative_after is None and ordinal.levels == 3
+    assert ordinal.needs == {Scored(3, "d21_ordinal", votes=(2, 1, 0))}
+    assert D21(max_negative=0, ordinal=True).needs == {Scored(2, "d21_ordinal", votes=(2, 0, 0))}
+    assert repr(ordinal) == "D21(max_positive=2, max_negative=1, ordinal=True)"
+    assert eval(repr(ordinal)) == ordinal and hash(eval(repr(ordinal))) == hash(ordinal)
+    with pytest.raises(ValueError, match="D21 with ordinal=True has no negative_after"):
+        D21(negative_after=2, ordinal=True)
+    with pytest.raises(TypeError, match="D21 with ordinal=True has no power"):
+        D21(power=1.5, ordinal=True)
+    with pytest.raises(TypeError, match="D21 ordinal must be a bool, got 1"):
+        D21(ordinal=1)
 
 
 def test_d21_elects_the_most_plus_votes_less_minus_votes():

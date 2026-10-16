@@ -18,7 +18,7 @@ from yeelab.margin.metrics import borders, voronoi_agreement
 from yeelab.margin.regions import MARGINS, grid, nearest, regions, voronoi_borders, winners
 from yeelab.margin.shares import Model, first_choice_shares, ranking_shares, score_comparison_shares, unscored_shares
 from yeelab.voting import irv_rounds
-from yeelab.web.app import DIAGRAMS, app
+from yeelab.web.app import DIAGRAMS, _score_ballot_settings, _score_ballots, app
 
 from references import TESTED_METHODS
 
@@ -369,6 +369,9 @@ def test_d21_takes_the_power_slider_but_not_the_categories():
     assert shapes(2, 2) == shapes(11, 2) != shapes(2, 1)
     expected = Highest(Tally(D21(max_positive=2, max_negative=1, negative_after=2, power=2)))
     assert shapes(2, 2) == json.loads(json.dumps(regions(expected, CANDIDATES.tolist(), MODELS[0], 64)))
+    # an ordinal D21 has no power: neither slider applies
+    ordinal = Highest(Tally(D21(ordinal=True)))
+    assert _score_ballots(ordinal) == [] and _score_ballot_settings(ordinal, 2, 2) == ordinal
 
 
 @pytest.mark.parametrize("distribution", ["beta", "normal"])

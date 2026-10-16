@@ -69,7 +69,7 @@ finalists = Conditional(
     when_false=score | two_round,
 )
 
-d20 = Highest(Tally(D21(max_positive=2, max_negative=0, power=SCORE_POWER)))
+d20 = Highest(Tally(D21(max_positive=2, max_negative=0, ordinal = True)))
 
 
 sun_two_round = Unbeaten(ScoreComparisons(score_ballot), among = finalists)
