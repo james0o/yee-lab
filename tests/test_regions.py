@@ -17,7 +17,7 @@ from yeelab.build import (D21, AntiPlurality, Conditional, Highest, Mix, Plurali
 from yeelab.margin.metrics import borders, voronoi_agreement
 from yeelab.margin.regions import MARGINS, grid, nearest, regions, voronoi_borders, winners
 from yeelab.margin.shares import Model, first_choice_shares, ranking_shares, score_comparison_shares, unscored_shares
-from yeelab.voting import irv_rounds
+from yeelab.voting import CYCLE, irv_rounds
 from yeelab.web.app import DIAGRAMS, _score_ballot_settings, _score_ballots, app
 
 from references import TESTED_METHODS
@@ -157,90 +157,73 @@ def test_voronoi_regions_are_exact():
                                   expected[clear])
 
 
-def test_voronoi_agreement_is_perfect_for_the_reference_diagram():
-    coordinates = (np.arange(100) + 0.5) / 100
-    points = np.stack(np.meshgrid(coordinates, coordinates, indexing="ij"), axis=-1)
-    winner, _ = nearest(CANDIDATES, points)
-    shapes = regions("voronoi", CANDIDATES, None, 100)
-
-    result = voronoi_agreement(CANDIDATES, points, winner, borders(shapes), borders(shapes))
-
-    assert result["assignment"] == pytest.approx(100)
-    assert result["inside_hull"] == pytest.approx(100)
-    assert result["boundary_mean"] == pytest.approx(0)
+def _grid_points(size):
+    coordinates = (np.arange(size) + 0.5) / size
+    return np.stack(np.meshgrid(coordinates, coordinates, indexing="ij"), axis=-1)
 
 
-def test_voronoi_agreement_has_no_inside_score_for_collinear_candidates():
-    candidates = np.array([[0.1, 0.5], [0.5, 0.5], [0.9, 0.5]])
-    coordinates = (np.arange(20) + 0.5) / 20
-    points = np.stack(np.meshgrid(coordinates, coordinates, indexing="ij"), axis=-1)
-    winner, _ = nearest(candidates, points)
-    shapes = regions("voronoi", candidates, None, 20)
-
-    assert voronoi_agreement(candidates, points, winner, borders(shapes), borders(shapes))["inside_hull"] is None
+def test_metric_is_zero_for_the_voronoi_diagram():
+    points = _grid_points(100)
+    result = voronoi_agreement(CANDIDATES, points, nearest(CANDIDATES, points)[0])
+    assert result["error"] == pytest.approx(0) and result["relative"] == pytest.approx(0)
+    assert result["random"] > 0
 
 
-def test_wrong_assignments_reduce_regret_and_boundary_agreement():
-    coordinates = (np.arange(80) + 0.5) / 80
-    points = np.stack(np.meshgrid(coordinates, coordinates, indexing="ij"), axis=-1)
-    winner, _ = nearest(CANDIDATES, points)
-    incorrect = winner.copy()
-    incorrect[:40] = (incorrect[:40] + 1) % len(CANDIDATES)
-    shapes = regions("voronoi", CANDIDATES, None, 80)
+def test_loss_is_the_regret_over_regret_plus_the_median_gap():
+    """Two candidates 0.4 apart (L = 0.4), every point given to the left one: the loss of a
+    point is r / (r + L) with r its extra distance, averaged over the area of the grid."""
+    from yeelab.margin.metrics import _area_weights
 
-    result = voronoi_agreement(CANDIDATES, points, incorrect, borders(shapes), borders(shapes))
-
-    assert result["assignment"] < 100
-    assert result["inside_hull"] < 100
-
-
-def test_boundary_distance_is_relative_to_half_the_candidate_gap():
-    from yeelab.margin.metrics import boundary_distance
-
-    def cells(split):
-        return [
-            {"winner": 0, "polygons": [[
-                [0, 0, split, 0, split, 1, 0, 1],
-            ]]},
-            {"winner": 1, "polygons": [[
-                [split, 0, 1, 0, 1, 1, split, 1],
-            ]]},
-        ]
-
-    # the boundaries are 0.1 apart everywhere: half of the gap of 0.2 between the candidates
     candidates = np.array([[0.3, 0.5], [0.7, 0.5]])
-    assert boundary_distance(borders(cells(0.45)), borders(cells(0.55)), candidates, 0.4) == pytest.approx(0.5, abs=1e-6)
-    # beyond a candidate a boundary cannot be any worse
-    candidates = np.array([[0.45, 0.5], [0.55, 0.5]])
-    assert boundary_distance(borders(cells(0.45)), borders(cells(0.55)), candidates, 0.1) == pytest.approx(1)
+    points = _grid_points(60)
+    distances = np.linalg.norm(points[..., None, :] - candidates, axis=-1)
+    regret = distances[..., 0] - distances.min(axis=-1)
+    result = voronoi_agreement(candidates, points, np.zeros(points.shape[:2], dtype=int))
+    assert result["error"] == pytest.approx(100 * np.average(regret / (regret + 0.4), weights=_area_weights(points)))
 
 
-def test_boundary_distance_uses_perpendicular_projection_onto_segments():
-    from yeelab.margin.metrics import _point_to_segments
+def test_random_winner_is_the_mean_over_the_candidates():
+    """The error of a random winner is the mean of the errors of giving every point to one
+    candidate, whatever the method; relative is the error over it."""
+    points = _grid_points(50)
+    every = [voronoi_agreement(CANDIDATES, points, np.full(points.shape[:2], c))["error"]
+             for c in range(len(CANDIDATES))]
+    winner = (nearest(CANDIDATES, points)[0] + 1) % len(CANDIDATES)
+    result = voronoi_agreement(CANDIDATES, points, winner)
+    assert result["random"] == pytest.approx(np.mean(every))
+    assert result["relative"] == pytest.approx(100 * result["error"] / result["random"])
 
-    distance = _point_to_segments(
-        np.array([[0.5, 0.3]]),
-        np.array([[[0.2, 0.5], [0.8, 0.5]]]),
-    )
 
-    assert distance[0] == pytest.approx(0.2)
+def test_cycles_are_left_out():
+    """A point without a winner (a Condorcet cycle, Undecided) is no result: both errors are
+    area means over the decided points only, and undefined where nothing is decided."""
+    from yeelab.margin.metrics import _area_weights
+
+    points = _grid_points(40)
+    winner = (nearest(CANDIDATES, points)[0] + 1) % len(CANDIDATES)
+    winner[:10] = CYCLE
+    distances = np.linalg.norm(points[..., None, :] - CANDIDATES, axis=-1)
+    regret = distances - distances.min(axis=-1, keepdims=True)
+    gaps = np.linalg.norm(CANDIDATES[:, None] - CANDIDATES[None], axis=-1)
+    loss = regret / (regret + np.median(gaps[np.triu_indices(len(CANDIDATES), 1)]))
+    decided, area = winner >= 0, _area_weights(points)
+    chosen = np.take_along_axis(loss, np.maximum(winner, 0)[..., None], -1)[..., 0]
+    result = voronoi_agreement(CANDIDATES, points, winner)
+    assert result["error"] == pytest.approx(100 * np.average(chosen[decided], weights=area[decided]))
+    assert result["random"] == pytest.approx(100 * np.average(loss.mean(-1)[decided], weights=area[decided]))
+    assert voronoi_agreement(CANDIDATES, points, np.full(points.shape[:2], CYCLE))["relative"] is None
 
 
-def test_point_to_segments_goes_to_the_nearer_end_beyond_a_segment():
-    """Beyond its ends the nearest point of a segment is the nearer end, segments of no
-    length are left out, and the distance is the smallest over all segments."""
-    from yeelab.margin.metrics import _point_to_segments
-
-    segments = np.array([[[0.0, 0.0], [1.0, 0.0]], [[2.0, 2.0], [2.0, 2.0]]])
-    points = np.array([[0.5, 0.3], [-0.3, 0.4], [1.6, -0.8], [2.0, 2.1]])
-    assert _point_to_segments(points, segments) == pytest.approx([0.3, 0.5, 1.0, 5.41 ** 0.5])
-
-    rng = np.random.default_rng(0)
-    points, segments = rng.random((50, 2)), rng.random((40, 2, 2))
+def _to_segments(points, segments):
+    """Distance of each point to the nearest of the segments (S, 2, 2)."""
     starts, directions = segments[:, 0], segments[:, 1] - segments[:, 0]
     t = np.clip(((points[:, None] - starts) * directions).sum(-1) / (directions ** 2).sum(-1), 0, 1)
-    nearest = np.linalg.norm(points[:, None] - (starts + t[..., None] * directions), axis=-1).min(axis=1)
-    assert _point_to_segments(points, segments) == pytest.approx(nearest, abs=1e-15)
+    return np.linalg.norm(points[:, None] - (starts + t[..., None] * directions), axis=-1).min(axis=1)
+
+
+def _along(segments, step=0.005):
+    """Points along the segments, about `step` apart."""
+    return np.concatenate([np.linspace(a, b, max(2, int(np.linalg.norm(b - a) / step))) for a, b in segments])
 
 
 @pytest.mark.parametrize("pixel_median, shift", [("marginal", 1.0), ("geometric", 1.0), ("geometric", 0.5)])
@@ -249,17 +232,15 @@ def test_exact_voronoi_borders_are_where_the_traced_ones_are(pixel_median, shift
     at geometric medians only within the moved grid too. They differ only next to a point
     where three Voronoi cells meet, by less than a grid cell: there the traced ones stop
     short, and leave the bisector where a grid point's margin is to a third candidate."""
-    from yeelab.margin.metrics import _point_to_segments, _sample_segments
-
     size = 160
     exact = voronoi_borders(CANDIDATES, MODELS[0], size, pixel_median, shift)
     traced = borders(regions("voronoi", CANDIDATES, MODELS[0], size, pixel_median, shift))
     assert {tuple(sorted(pair)) for pair in exact[1]} == {tuple(sorted(pair)) for pair in traced[1]}
-    on_traced, on_exact = _sample_segments(traced[0])[0], _sample_segments(exact[0])[0]
-    off = _point_to_segments(on_traced, exact[0])
+    exact_segments, traced_segments = np.asarray(exact[0], dtype=float), np.asarray(traced[0], dtype=float)
+    off = _to_segments(_along(traced_segments), exact_segments)
     assert np.mean(off < 1e-6) > 0.95  # on the bisectors, to the six decimals of the traced vertices
     assert off.max() < 2 ** 0.5 / size
-    assert _point_to_segments(on_exact, traced[0]).max() < 2 ** 0.5 / size
+    assert _to_segments(_along(exact_segments), traced_segments).max() < 2 ** 0.5 / size
 
 
 def test_grid_reaches_the_walls():
@@ -415,11 +396,9 @@ def test_api_returns_regions(distribution, method):
     payload = response.json()
     shapes = payload["regions"]
     assert shapes and all(region["polygons"] for region in shapes)
-    assert {"assignment", "inside_hull", "boundary_mean"} == set(payload["metrics"])
-    assert 0 <= payload["metrics"]["assignment"] <= 100
-    assert payload["metrics"]["inside_hull"] is None or 0 <= payload["metrics"]["inside_hull"] <= 100
-    boundary_mean = payload["metrics"]["boundary_mean"]
-    assert boundary_mean is None or 0 <= boundary_mean <= 2 ** 0.5
+    metrics = payload["metrics"]
+    assert {"error", "random", "relative"} == set(metrics)
+    assert 0 <= metrics["error"] <= 100 and 0 < metrics["random"] <= 100 and metrics["relative"] >= 0
     overlays = payload["overlays"]
     assert overlays["voronoi_boundaries"]
     assert all(len(segment) == 4
@@ -433,9 +412,7 @@ def test_api_reports_perfect_metrics_for_voronoi():
 
     assert response.status_code == 200
     metrics = response.json()["metrics"]
-    assert metrics["assignment"] == pytest.approx(100)
-    assert metrics["inside_hull"] == pytest.approx(100)
-    assert metrics["boundary_mean"] == pytest.approx(0)
+    assert metrics["error"] == pytest.approx(0) and metrics["relative"] == pytest.approx(0)
 
 
 @pytest.mark.parametrize("pixel_median", ["marginal", "geometric"])

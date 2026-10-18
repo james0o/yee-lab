@@ -2227,8 +2227,8 @@ same. In the cycles even the strongest majority is a near tie: $51.1 %$ at $D = 
 $52.7 %$ at $0.3$.
 
 For a Condorcet method, then, all of its disagreement with the Voronoi diagram
-(@ch-metrics) is these slivers and the cycles: it measures the electorate, not the
-method. A method is judged better by the elections that have a Condorcet winner and where
+(@ch-metrics) is these slivers, the cycles being left out: it measures the electorate,
+not the method. A method is judged better by the elections that have a Condorcet winner and where
 it elects someone else.
 
 == Curved borders <sec-round-edges>
@@ -3084,9 +3084,6 @@ remain are therefore compiled with numba:
 - the rounds of DAC, on the scores of all sets of candidates as bit masks (@sec-dac);
 - which candidates a round of Baldwin or Nanson drops (`build/rounds.py`); their Borda
   scores (@eq-borda-pairwise) are one `einsum` of numpy per round;
-- the distance of every sample of one boundary to the nearest segment of the other
-  (@ch-metrics): both directions, about 700 samples against 1200 segments each at
-  $G = 320$, take 3 to 9 ms instead of 55 to 130 ms in numpy.
 
 The kernels release the interpreter lock but are not parallel themselves; `threads.py`
 runs chunks of their work (edges, pixels) in a pool of threads. A kernel with numba's
@@ -3770,111 +3767,64 @@ there when the pixels go back to their medians along the axes.
 
 = Comparing a diagram with Voronoi <ch-metrics>
 
-The web UI reports three errors for a method's diagram, using the Voronoi diagram of
-the same candidate positions as the reference. All are shown as percentages, are zero
-for the Voronoi diagram itself, and smaller values indicate closer agreement. The
-assignment error and the assignment error inside the candidates' convex hull are
-$100 - S$ for the scores $S$ below; the hull-restricted one is the same metric evaluated
-only within the convex hull, so the two values are related rather than independent. The
-boundary distance is a mean in units of the unit square's width.
+The web UI scores a method's diagram against the Voronoi diagram of the same candidates:
+how far, at each point, the elected candidate is from the nearest one. Each metric has a
+section of its own below; there is one so far, and others can be added next to it.
 
-The UI computes the errors only for the diagram on the fine grid ($G = 320$, @sec-tracing),
-once a candidate is dropped or a slider let go. While a candidate is dragged it shows
-none: the comparison takes longer than most methods themselves.
+What all metrics share:
 
-The errors have a true zero, so two methods are compared by their ratio: an error of
-2 % against 6 % is three times smaller. For small regrets the assignment loss below is
-nearly linear ($ell approx r \/ L$), so this holds approximately for the assignment errors
-too. Errors near zero are dominated by the grid resolution, and there a ratio says little.
+- *When.* The UI computes them only for the diagram on the fine grid ($G = 320$,
+  @sec-tracing), once a candidate is dropped or a slider let go. While a candidate is
+  dragged it shows none: the comparison takes longer than most methods themselves.
+- *Where.* A metric is an average over the area of the diagram: every grid point counts
+  with the area it represents (the trapezoidal weights of the grid, which follow the moved
+  grid when pixels are at geometric medians, @ch-geometric). Points where no candidate wins,
+  a Condorcet cycle or `Undecided()`, are no result and are left out, as if they were not
+  part of the diagram.
+- *Comparing methods.* The errors have a true zero, so two methods are compared by their
+  ratio: an error of 2 % against 6 % is three times smaller. After switching methods the UI
+  shows that ratio for the same candidates and voters. Errors near zero are dominated by
+  the grid resolution, and there a ratio says little.
+- *What they measure.* The Voronoi diagram is what a method draws if every electorate acts
+  as one voter at its point. For a Condorcet method the whole error is the slivers of
+  @sec-meaning, where a majority prefers a candidate other than the nearest: the error
+  measures the electorate there, not the method.
 
-== Assignment regret (`margin/metrics.py`)
+== Error relative to a random winner (`margin/metrics.py`)
 
-At each evaluation point $x$, let $d_min(x)$ be its distance to the nearest candidate,
-and $d_a(x)$ its distance to the candidate assigned the point by the method diagram.
-The regret is the extra distance paid by that assignment:
+At a point $x$, let $d_c (x)$ be the distance of candidate $c$ and $d_min (x)$ that of the
+nearest one. Electing $c$ costs the extra distance
 
-$ r(x) = d_a(x) - d_min(x) . $
+$ r_c (x) = d_c (x) - d_min (x) , $
 
-This is more informative than counting mismatched labels. At a Voronoi boundary the two
-nearest candidates have nearly equal distances, so switching their labels has very
-little regret. Assigning a point to a much farther candidate has larger regret. If the
-method reports a cycle rather than a candidate, the point receives the maximum loss.
+which is small next to a Voronoi border, where the two nearest candidates are nearly
+equally far, and large for a far candidate. With $L$ the median of the distances between
+two candidates, a fixed number for the candidates, its loss is
 
-To put regrets of different candidate layouts on a comparable scale, let $L$ be the
-median of all pairwise candidate distances. The bounded loss and the importance weight
-at $x$ are
+$ ell_c (x) = (r_c (x)) / (r_c (x) + L) , $
 
-$ ell(x) = r(x) / (r(x) + L), quad
-  w_a(x) = 1 / (1 + (d_min(x) / L)^2). $
+$0$ for the nearest candidate and approaching $1$ for a far one; for small regrets
+$ell approx r slash L$, the extra distance in typical gaps between candidates. With $a(x)$
+the elected candidate and $A(x)$ the area of the grid point, over the decided points
+$Omega$:
 
-Thus $ell$ is zero for a perfect assignment and approaches one for a very poor one.
-The weight decreases with distance from the nearest candidate, so mistakes in remote
-parts of the square matter less. Let $A(x)$ be the area represented by the grid point
-(the trapezoidal area weight of the evaluation grid). The whole-square score is
+$ e = (sum_(x in Omega) A(x) ell_(a(x)) (x)) / (sum_(x in Omega) A(x)) , quad
+  e_"random" = (sum_(x in Omega) A(x) 1/C sum_c ell_c (x)) / (sum_(x in Omega) A(x)) . $
 
-$ S_a = 100 (1 -
-  (sum_(x in Omega) A(x) w_a(x) ell(x)) /
-  (sum_(x in Omega) A(x) w_a(x))). $
+$e_"random"$ is the error of electing a candidate drawn at random at every point. It
+depends on the candidates only, not on the method or the voters, and it is positive for
+two candidates or more: at every point at least one of them is not the nearest. The UI
+shows
 
-Here $Omega$ is the full evaluated region. To obtain the inside-hull score, use exactly
-the same formula and weights, but sum only over grid points inside the convex hull $H$
-of the candidate positions:
+$ e slash e_"random" , $
 
-$ S_H = 100 (1 -
-  (sum_(x in H) A(x) w_a(x) ell(x)) /
-  (sum_(x in H) A(x) w_a(x))). $
+$0 %$ where the nearest candidate wins everywhere and $100 %$ for no better than chance.
+Dividing by $e_"random"$ puts layouts of different difficulty on one scale (more
+candidates, or candidates far apart, make both errors larger); for the same candidates it
+divides every method by the same number, so the ratio of two methods is that of their
+errors $e$. On the default candidates A–E at $D = 0.2$: Condorcet $0.6 %$, IRV $2.0 %$,
+FPTP $5.6 %$ (grid $G = 64$).
 
-If the candidates are collinear, their convex hull has no area and the inside-hull
-score is not defined; the UI displays `n/a`. The UI displays the errors $100 - S_a$ and
-$100 - S_H$.
+The API returns all three, $100 e$, $100 e_"random"$ and $100 e slash e_"random"$, in
+percent, and `null` where nothing is decided.
 
-== Symmetric mean distance between boundaries
-
-Let $B_a$ be the shared borders between the method's win regions and $B_v$ the Voronoi
-borders. The outer edge of the square is not included: it is not a boundary between two
-winners. Distances are measured in both directions, so extra borders in one diagram and
-missing borders in the other are both represented.
-
-$B_v$ is exact, not traced: for each pair of candidates the part of their bisector that
-is no farther from them than from any other candidate, and with pixels at geometric
-medians only its parts within the moved grid, where the methods are drawn
-(@ch-geometric). The traced Voronoi diagram differs from it only next to a point where
-three cells meet. The Voronoi diagram itself is compared with its own traced borders, so
-that its errors are 0 (to rounding). The overlay of the UI draws $B_v$ as well.
-
-For a sampled point $x$ on one boundary and a line segment of the other boundary with
-endpoints $a$ and $b$, the nearest point on that segment is the perpendicular projection
-clamped to the segment:
-
-$ t = max(0, min(1, ((x - a) dot (b - a)) / ||b - a||^2)), quad
-  p = a + t (b - a), quad d(x, [a,b]) = ||x - p||. $
-
-The distance $d(x, B)$ to a whole boundary is the minimum over all its segments. This
-is a true point-to-segment distance, not the distance to the nearest sampled vertex:
-when the perpendicular foot falls within a segment, it gives the perpendicular
-distance; outside the segment it gives the distance to the nearer endpoint.
-
-The boundaries are sampled uniformly by arc length, at approximately $0.005$ units per
-sample. Each sample represents an equal small piece of boundary length. For the
-whole-square metric, its weight is further reduced toward the square's edge by
-
-$ w_b(x) = exp(-4 ||x - (0.5, 0.5)||^2). $
-
-This weight is largest at the centre and smaller toward the corners. For each
-direction, take the weighted mean distance and then give the two directions equal
-weight. The reported boundary distance is
-
-$ D_b = 1/2 (
-  (sum_(x in B_a) Delta s w_b(x) d(x, B_v)) /
-    (sum_(x in B_a) Delta s w_b(x))
-  +
-  (sum_(x in B_v) Delta s w_b(x) d(x, B_a)) /
-    (sum_(x in B_v) Delta s w_b(x))
-). $
-
-The UI displays $100 D_b$ as a percentage of the square's width.
-
-The boundary overlay in the UI draws the method's boundary in black and the Voronoi
-reference boundary in blue. The candidate hull can be shown separately as a dashed
-outline. There is no tolerance band and no binary inside/outside decision in the
-boundary metric.
