@@ -20,9 +20,11 @@ same for every median. Only the probability of each cell changes with the median
 over the cell boundaries, evaluated from tables and compiled in margin/beta_tables.py.
 
 The probabilities are smooth in the pixel median (only the winners jump), so they
-are computed exactly on NODES x NODES Chebyshev-Lobatto points in logit(median) and
-interpolated (barycentric formula). The points cluster towards 0 and 1, where the
-Beta parameters change fastest; the error decreases exponentially with NODES.
+are computed exactly on NODES x NODES nodes and interpolated (barycentric formula).
+Along each axis the nodes are two grids of Chebyshev-Lobatto points in logit(median),
+one on each side of 1/2, which they share. The points cluster towards 0 and 1, where
+the Beta parameters change fastest, and towards 1/2, where a large spread power turns
+them sharply; the error decreases exponentially with NODES.
 """
 
 import math
@@ -237,14 +239,24 @@ def effective_nodes(pixels, nodes):
 
 
 def node_medians(pixels, nodes=NODES):
-    """Medians at which probabilities are computed exactly: `nodes`
-    Chebyshev-Lobatto points in logit(median) spanning the pixel medians,
-    or the pixel medians themselves if effective_nodes(...) is 0."""
+    """Medians at which probabilities are computed exactly, or the pixel medians
+    themselves if effective_nodes(...) is 0. Otherwise two grids of (nodes + 1) / 2
+    Chebyshev-Lobatto points in logit(median) that share the node 1/2: one from the
+    first pixel median to 1/2, and its mirror image from 1/2 to the last.
+
+    A large spread power turns the Beta parameters sharply at 1/2, almost like
+    |m - 1/2|. One polynomial across 1/2 follows that corner only with ripples, which
+    bend the borders of the diagram into waves; each half is smooth up to 1/2, and
+    its grid clusters there as well as at the wall."""
     nodes = effective_nodes(pixels, nodes)
     if nodes == 0:
         return pixel_medians(pixels)
-    t = np.sin(np.pi * (2 * np.arange(nodes) - (nodes - 1)) / (2 * (nodes - 1)))
-    return expit(-logit(0.5 / pixels) * t)
+    if nodes % 2 == 0:
+        raise ValueError("nodes must be odd: the two halves share the node 1/2")
+    half = (nodes + 1) // 2
+    t = np.sin(np.pi * (2 * np.arange(half) - (half - 1)) / (2 * (half - 1)))
+    lower = 0.5 * logit(0.5 / pixels) * (1 - t)  # logit(median) from the first pixel to 1/2
+    return expit(np.concatenate([lower, -lower[-2::-1]]))
 
 
 @lru_cache(maxsize=None)
@@ -258,7 +270,7 @@ def node_params(pixels, nodes, deviation, spread=SPREAD):
     return medians, params
 
 
-def _interpolation_matrix(nodes, targets):
+def _barycentric_matrix(nodes, targets):
     """L (targets, nodes) with f(targets) ~ L @ f(nodes) for Chebyshev-Lobatto
     `nodes` (barycentric formula, weights (-1)^k halved at both ends)."""
     weights = (-1.0) ** np.arange(len(nodes))
@@ -273,9 +285,27 @@ def _interpolation_matrix(nodes, targets):
     return matrix
 
 
-def interpolate_to(probs, medians, targets, transform=logit):
+def _interpolation_matrix(nodes, targets, split=None):
+    """L (targets, nodes) with f(targets) ~ L @ f(nodes). The increasing `nodes` are
+    Chebyshev-Lobatto points, or two such grids that meet at the node `split`
+    (node_medians): a target on either side of it is interpolated from the grid on
+    its side alone. Exact pixel medians need not contain `split`; they are one grid."""
+    if split is None or split not in nodes:
+        return _barycentric_matrix(nodes, targets)
+    middle = np.searchsorted(nodes, split)
+    lower = targets <= split
+    matrix = np.zeros((len(targets), len(nodes)))
+    matrix[lower, :middle + 1] = _barycentric_matrix(nodes[:middle + 1], targets[lower])
+    matrix[~lower, middle:] = _barycentric_matrix(nodes[middle:], targets[~lower])
+    return matrix
+
+
+def interpolate_to(probs, medians, targets, transform=logit, split=0.0):
     """Values (T, T, ...) at the medians `targets` on both axes from values
-    (N, N, ...) at `medians`, which are Chebyshev-Lobatto points in transform(median).
+    (N, N, ...) at `medians`, which are Chebyshev-Lobatto points in transform(median):
+    two grids that meet at transform(median) = `split`, or one grid if it is None.
+    The defaults are those of the Beta nodes (node_medians), which meet at
+    logit(1/2) = 0.
 
     The result is float32: it is the largest array by far and only feeds the
     voting methods, where float32 halves memory and time. Its rounding (~1e-7)
@@ -284,7 +314,7 @@ def interpolate_to(probs, medians, targets, transform=logit):
     shape = probs.shape[2:]
     if np.array_equal(medians, targets):
         return probs.astype(np.float32)
-    matrix = _interpolation_matrix(transform(medians), transform(targets))
+    matrix = _interpolation_matrix(transform(medians), transform(targets), split)
     probs = probs.reshape(len(medians), len(medians), -1)
     # columns[i, q, r] = sum_j matrix[q, j] probs[i, j, r]; small, so kept in float64
     columns = (matrix @ probs).reshape(len(medians), -1).astype(np.float32)

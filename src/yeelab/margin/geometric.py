@@ -212,7 +212,7 @@ def geometric_medians(model: Model, medians) -> np.ndarray:
     if model.distribution != "beta":
         return np.stack(np.meshgrid(medians, medians, indexing="ij"), axis=-1)
     nodes, table = node_table(model)
-    matrix = _interpolation_matrix(logit(nodes), logit(medians))
+    matrix = _interpolation_matrix(logit(nodes), logit(medians), model.split)
     return np.stack([matrix @ table[..., axis] @ matrix.T for axis in (0, 1)], axis=-1)
 
 # ---------------------------------------------------------------- The inverse of g

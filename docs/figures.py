@@ -58,7 +58,7 @@ def profile(name, spread=SPREAD, deviation=DEVIATION, medians=MEDIANS, candidate
     """Ranking shares from margin's polygon integrals, interpolated to requested medians."""
     model = Model(name, deviation, spread if name == "beta" else None, PIXELS)
     rankings, shares = ranking_shares(candidates, model)
-    shares = ranking_cells.interpolate_to(shares, model.medians, medians, model.transform)
+    shares = ranking_cells.interpolate_to(shares, model.medians, medians, model.transform, model.split)
     return rankings, shares
 
 
@@ -796,7 +796,7 @@ def _border_distances(model):
     linear interpolation, and along the moved edge for the geometric medians, as
     margin/regions.py does."""
     above = ranking_cells.interpolate_to(pairwise_shares(CANDIDATES, model), model.medians, MEDIANS,
-                                         model.transform)
+                                         model.transform, model.split)
     drawn = [np.stack(np.meshgrid(MEDIANS, MEDIANS, indexing="ij"), axis=-1),
              geometric_medians(model, MEDIANS)]
     distances = [[], []]
@@ -1064,7 +1064,8 @@ def burial():
     plt.close(fig)
     medians = grid(FINAL_GRID, PIXELS)[1]
     first = ranking_cells.interpolate_to(
-        first_choice_shares_at(CANDIDATES, UI_MODEL), UI_MODEL.medians, medians, UI_MODEL.transform)[1:-1, 1:-1]
+        first_choice_shares_at(CANDIDATES, UI_MODEL), UI_MODEL.medians, medians, UI_MODEL.transform,
+        UI_MODEL.split)[1:-1, 1:-1]
     frontrunners = np.argsort(-first, axis=-1, kind="stable")[..., :2]
     for name, method in BUILD_METHODS.items():
         if name == "star" or name in UNSUPPORTED["burial"]:

@@ -18,7 +18,9 @@ from yeelab.ranking_cells import (
     SPREADS,
     beta_params_at,
     centre_shape,
+    interpolate_to,
     node_medians,
+    pixel_medians,
     ranking_cells,
 )
 
@@ -165,3 +167,21 @@ def test_node_medians_span_model_domain():
     assert medians[-1] == pytest.approx(1 - 0.5 / 200, rel=1e-12)
     assert np.all(np.diff(medians) > 0)
     np.testing.assert_allclose(medians, 1 - medians[::-1], atol=1e-15)
+    assert medians[NODES // 2] == 0.5  # where the two grids meet
+
+
+@pytest.mark.parametrize("spread, error", [("rms", 1e-6), (16.0, 1e-4), (64.0, 2e-3)])
+def test_interpolation_follows_the_turn_at_the_centre(spread, error):
+    """A large spread power turns the Beta parameters sharply at median 1/2. The two
+    grids of nodes meet there, so the interpolated share of the voters in a corner
+    [0, x] x [0, y], F_X(x) F_Y(y), stays close to the direct one (one grid across 1/2
+    missed it by 6e-6, 9e-3 and 5e-2)."""
+
+    def shares(medians):
+        a, b = beta_params_at(medians, 0.2, spread).T
+        return np.stack([betainc(a, b, x)[:, None] * betainc(a, b, y)[None]
+                         for x, y in [(0.3, 0.6), (0.45, 0.55), (0.1, 0.9), (0.7, 0.2)]], axis=-1)
+
+    nodes, targets = node_medians(300, NODES), pixel_medians(300)
+    np.testing.assert_allclose(interpolate_to(shares(nodes), nodes, targets), shares(targets),
+                               rtol=0, atol=error)

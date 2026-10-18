@@ -554,20 +554,39 @@ interpolated to the $n times n$ evaluation grid. If $N >= n$ no interpolation is
 === Nodes (`node_medians`)
 
 The interpolation variable is $z = logit(m) = log(m slash (1 - m))$. It stretches the
-regions near $0$ and $1$, where $(a, b)$ change fastest. The nodes are the
-Chebyshev–Lobatto points in $z$ spanning the first and last target median:
+regions near $0$ and $1$, where $(a, b)$ change fastest. Along each axis the nodes are
+two grids of $H = (N + 1) slash 2$ Chebyshev–Lobatto points in $z$ ($N$ is odd), one
+from the first target median to $m = 1/2$ and its mirror image from $1/2$ to the last
+target median. They share the node $m = 1/2$, $z = 0$:
 
 $
-t_j = -cos(pi j / (N - 1)), quad
-z_j = Z t_j, quad
+t_j = -cos(pi j / (H - 1)), quad
+z_j = -Z (1 - t_j) / 2, quad
 m_j = expit(z_j), quad
-j = 0, dots, N - 1,
+j = 0, dots, H - 1,
 $
 
-where $Z = logit(1 - 1/(2n))$. (The code writes $t_j$ as
-$sin(pi (2j - (N-1)) / (2(N-1)))$, which is the same thing.) Chebyshev–Lobatto points
-cluster at the ends of the interval, which further concentrates nodes near the walls
-and avoids the Runge phenomenon.
+and $m_(N - 1 - j) = 1 - m_j$ above $1/2$, where $Z = logit(1 - 1/(2n))$. (The code writes $t_j$ as
+$sin(pi (2j - (H-1)) / (2(H-1)))$, which is the same thing.) Chebyshev–Lobatto points
+cluster at the ends of their interval, which concentrates nodes near the walls and at
+the centre and avoids the Runge phenomenon.
+
+*Why two grids.* With a large power $p$ in the spread rule (@sec-spreads) the Beta
+parameters turn sharply at $m = 1/2$. $(E|X - m|^p)^(1 slash p)$ is ruled by the
+voters farthest from the median. At the centre they are at most $1/2$ away, at
+median $m$ up to $max(m, 1 - m)$, so to keep the spread of the centre the voters near
+the far wall must thin out by about $(1 slash (2 max(m, 1 - m)))^p$, a factor of
+$0.002$ at $m = 0.55$ for $p = 64$. For $D = 0.2$, $kappa$ grows from $3.4$ at
+$m = 1/2$ to $6.9$ at $0.55$ and $10.8$ at $0.6$, almost like $|m - 1/2|$; for `rms` it
+changes by less than $3 %$ there. The probabilities are smooth in $z$ on each side of
+$1/2$, but one polynomial across the turn follows it only with ripples that change sign
+from node to node, and they bend the borders of the diagram into waves. Each of the two
+grids ends at the turn instead and has its densest nodes there. The share of the voters
+in a corner of the square, $F_X (x) F_Y (y)$, is then interpolated to within
+$1 dot 10^(-3)$ for $p = 64$, $5 dot 10^(-5)$ for $p = 16$ and $3 dot 10^(-7)$ for
+`rms`, against $5 dot 10^(-2)$, $9 dot 10^(-3)$ and $6 dot 10^(-6)$ with one grid of
+$N = 49$ Chebyshev–Lobatto points across $[-Z, Z]$
+(`test_interpolation_follows_the_turn_at_the_centre`).
 
 === Barycentric interpolation (`_interpolation_matrix`)
 
@@ -575,13 +594,15 @@ For Chebyshev–Lobatto nodes the barycentric formula of the second kind is
 
 $
 p(z) = (sum_j (lambda_j)/(z - z_j) h_j) / (sum_j (lambda_j)/(z - z_j)),
-quad lambda_j = (-1)^j, quad lambda_0, lambda_(N-1) "halved",
+quad lambda_j = (-1)^j, quad lambda_0, lambda_(H-1) "halved",
 $
 
-where $h_j$ are the values at the nodes. (The weights are invariant under the affine map
-$t -> Z t$, up to a common factor that cancels.) When a target coincides with a node,
-the node value is used directly. Evaluated at all $n$ target medians this is a fixed
-$n times N$ matrix $L$, and on the 2-D tensor grid
+where $z_j$ and $h_j$ are the $H$ nodes of the grid on the target's side of $1/2$ and
+the values there. (The weights are invariant under the
+affine map from $t$ to $z$, up to a common factor that cancels.) When a target coincides
+with a node, the node value is used directly; the target $1/2$ is the node both grids
+share. Evaluated at all $n$ target medians this is a fixed $n times N$ matrix $L$,
+each row nonzero only on the $H$ nodes of its side, and on the 2-D tensor grid
 
 $ P_("grid")[dot, dot, r] = L thin P_("nodes")[dot, dot, r] thin L^T , $
 
@@ -590,8 +611,8 @@ out in `float32` because the result is by far the largest array; the rounding
 ($approx 10^(-7)$) can only affect evaluation points whose winning margin is equally small.
 Values are finally clipped to $[0, 1]$.
 
-Because the probabilities are analytic in $z$, the interpolation error decreases
-exponentially in $N$. The interpolation reproduces constants exactly, so the
+Because the probabilities are analytic in $z$ on each side of $1/2$, the interpolation
+error decreases exponentially in $N$. The interpolation reproduces constants exactly, so the
 probabilities at each evaluation point still sum to one up to rounding. Narrow voters
 change faster with the median: for Beta voters with $D < 0.1$ the web UI uses
 $2N - 1 = 97$ nodes, because with $49$ the shares at a target median with $D = 0.05$
@@ -667,8 +688,8 @@ $0.02$ s on $49 times 49$ nodes.
 Unlike the Beta parameters, nothing changes faster near $0$ or $1$, so the nodes are
 Chebyshev–Lobatto points in the median itself,
 $m_j = 1/2 + (1/2 - 1/(2n)) t_j$, and the barycentric interpolation of
-@sec-interpolation is applied in $m$ instead of $logit(m)$
-(`ranking_cells.interpolate_to(..., transform=...)`). The logit nodes would be far too
+@sec-interpolation is applied in $m$ instead of $logit(m)$, over one grid: nothing
+turns at $m = 1/2$ either (`ranking_cells.interpolate_to(..., transform=..., split=None)`). The logit nodes would be far too
 sparse in the middle for small $sigma$ (maximum error at $120$ pixels, $N = 49$):
 
 #align(center, table(

@@ -116,8 +116,8 @@ con_fptp = Conditional(
         condorcet == two_round,
         when_true=two_round,
         when_false = Conditional(
-            condorcet == mj,
-            when_true=condorcet,
+            (condorcet == d20),
+            when_true = condorcet, 
             when_false=Undecided()
         )
     )

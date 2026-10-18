@@ -75,7 +75,7 @@ def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Vote
     medians = grid(size, model.pixels)[1]
 
     def interpolate(values):
-        return interpolate_to(values, model.medians, medians, model.transform)
+        return interpolate_to(values, model.medians, medians, model.transform, model.split)
 
     shares = {}
     if FIRST in needs:

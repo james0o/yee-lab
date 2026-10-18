@@ -93,6 +93,12 @@ class Model:
         return logit(medians) if self.distribution == "beta" else medians
 
     @property
+    def split(self) -> float | None:
+        """Where the two grids of Beta nodes meet in transform(median), logit(1/2) = 0;
+        None for normal voters, whose nodes are one grid."""
+        return 0.0 if self.distribution == "beta" else None
+
+    @property
     def sigma(self) -> float:
         return normal.sigma_from_deviation(self.deviation)
 

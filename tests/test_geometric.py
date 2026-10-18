@@ -164,12 +164,14 @@ def test_node_table_is_built_once():
 @pytest.mark.parametrize("deviation, corner, middle", [(0.1, 0.0066, 0.0180), (0.25, 0.0136, 0.0521)])
 def test_no_voters_have_their_geometric_median_next_to_a_wall(deviation, corner, middle):
     """The strip g does not reach (rms rule): narrowest at the corners, widest in the
-    middle of a wall. Every geometric median is pulled towards the centre."""
+    middle of a wall. Every geometric median is pulled towards the centre. The reach is
+    flat in the middle, to 1e-6 over 20 pixels, and g is computed to about that, so the
+    widest pixel can be a few off the middle; its reach is not wider by more."""
     g = geometric_medians(Model("beta", deviation, "rms"), CENTRES)
     reach = g[0, :, 0]  # from the wall x = 0 to the geometric medians of its outermost pixels
     assert reach.min() == pytest.approx(corner, abs=2e-4) and reach.argmin() in (0, PIXELS - 1)
     assert reach.max() == pytest.approx(middle, abs=2e-4)
-    assert abs(reach.argmax() - PIXELS / 2) <= 1
+    assert reach.max() - reach[PIXELS // 2] < 1e-6
     assert g.min() == pytest.approx(corner, abs=2e-4) and g.max() == pytest.approx(1 - corner, abs=2e-4)
     towards_centre = np.abs(g - 0.5) <= np.abs(np.stack(np.meshgrid(CENTRES, CENTRES, indexing="ij"), -1) - 0.5)
     assert towards_centre.all()
