@@ -23,6 +23,7 @@
     /* opaque, so the voter density shade behind it only shows around it */
     #square { box-sizing: border-box; border: 1px solid #222; background: #fff; cursor: crosshair; touch-action: none; }
     .choices { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 0 0 1rem; }
+    .choices[hidden] { display: none; }  /* a row with nothing to choose, such as the spread power */
     .choices > span { font-size: .9rem; color: #666; }  /* row labels only, not KaTeX spans */
     .choices > label { font-size: .9rem; display: flex; align-items: center; gap: .3rem; cursor: pointer; }
     .choices input[type=checkbox] { accent-color: #222; margin: 0; }
@@ -77,7 +78,7 @@
         <label><input type="checkbox" id="showHull">candidate convex hull</label>
       </div>
       <div class="choices"><span>Deviation:</span><input type="range" id="deviation"><output id="deviationValue"></output></div>
-      <div class="choices"><span>Beta spread p:</span><input type="range" id="spreadPower"><output id="spreadPowerValue"></output></div>
+      <div class="choices" id="spreadPowerRow"><span>Beta spread p:</span><input type="range" id="spreadPower"><output id="spreadPowerValue"></output></div>
       <div class="choices" id="pixelMedians"><span>Point in diagram is:</span></div>
       <div class="choices" id="methods"><span>Voting method:</span></div>
       <div class="choices"><span>Score categories:</span><input type="range" id="levels" min="2" step="1"><output id="levelsValue"></output></div>
@@ -115,6 +116,7 @@
     const pixelMedians = document.getElementById("pixelMedians");
     const deviationSlider = document.getElementById("deviation");
     const deviationValue = document.getElementById("deviationValue");
+    const spreadPowerRow = document.getElementById("spreadPowerRow");  // shown only if powers are offered
     const spreadPowerSlider = document.getElementById("spreadPower");
     const spreadPowerValue = document.getElementById("spreadPowerValue");
     const levelsSlider = document.getElementById("levels");
@@ -180,6 +182,7 @@
                           // median there, and the border of the coloured region
     let deviation = 0;    // mean absolute deviation of the voters from their pixel
     let spreadPower = 2;  // Lp distance from the median, kept constant across Beta pixels
+    let spreadPowers = []; // the powers offered: a slider, and the power in the status line, only for two or more
     let scoreLevelMethods = []; // methods with at least one Score ballot whose categories can change
     let scorePowerMethods = []; // methods with a Score ballot whose power can change
     let fixedScoreLevels = {};  // method -> fixed category counts when no category slider applies
@@ -782,11 +785,11 @@
         message.textContent = `${name}${where}${tail}`;
       } else if (distribution === "beta") {
         const formula = document.createElement("span");
-        const formulaInfo = {
+        const formulaInfo = spreadPowers.length > 1 ? {
           ...spreadInfo,
           tex: spreadInfo.tex.replaceAll("P", spreadPower.toFixed(2)),
           description: `${spreadInfo.description} Current p = ${spreadPower.toFixed(2)}.`,
-        };
+        } : spreadInfo;
         typeset(formula, formulaInfo);
         formula.title = formulaInfo.description;
         const where = pixelMedian === "geometric" ? ", pixels at their geometric median" : "";
@@ -934,6 +937,8 @@
     });
     deviationSlider.addEventListener("change", () => compute());
     spreadPower = config.spread_power;
+    spreadPowers = config.spread_powers;
+    spreadPowerRow.hidden = spreadPowers.length < 2;  // one power: nothing to choose
     function pickSpreadPower() {
       spreadPower = config.spread_powers[spreadPowerSlider.valueAsNumber];
       spreadPowerValue.textContent = spreadPower.toFixed(2);

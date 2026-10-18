@@ -35,7 +35,11 @@ MAX_CANDIDATES = 8
 CANDIDATES = [[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]]
 DEVIATION = 0.2  # default of the deviation slider
 SPREAD_POWER = 2.0
-SPREAD_POWERS = (1.0, 2.0, 4.0, 16.0, 32.0, 64.0)
+# The powers p of the Beta spread rule that the UI offers: only the default, rms (math.typ,
+# "Large powers"). The model takes any p from 1 to 100; listing more here, such as
+# (1.0, 2.0, 4.0), offers them, and the UI shows its slider again once there are two.
+SPREAD_POWERS = (SPREAD_POWER,)
+assert SPREAD_POWER in SPREAD_POWERS
 
 # The UI offers the Voronoi diagram (no voters) as the ideal scenario, below the voting methods.
 IDEALS = ["voronoi"]
@@ -265,14 +269,22 @@ DISTRIBUTION_INFO = {
     },
 }
 assert set(DISTRIBUTION_INFO) == set(DISTRIBUTIONS)
-# The UI's Beta voters all follow one spread rule, the default one: what it keeps the same
-# for every pixel, as a plain label, a LaTeX label (typeset by KaTeX in the UI) and a tooltip.
-SPREAD_INFO = {
+# What the spread rule of the UI's Beta voters keeps the same for every pixel, as a plain
+# label, a LaTeX label (typeset by KaTeX in the UI) and a tooltip: the RMS distance while only
+# p = 2 is offered, the p-th power mean once there are more (the UI puts the power for P).
+RMS_INFO = {
+    "label": "RMS distance from median",
+    "tex": r"\sqrt{\operatorname{E}(X-m)^2}",
+    "description": "Every pixel has the same root mean square distance of its voters from "
+    "the median along each axis.",
+}
+POWER_MEAN_INFO = {
     "label": "Lᵖ distance from median",
     "tex": r"\left(\operatorname{E}|X-m|^{P}\right)^{1/P}",
     "description": "Every pixel has the same p-th power mean distance of its voters from "
     "the median along each axis. At p = 1 this is mean absolute deviation; at p = 2 it is RMS.",
 }
+SPREAD_INFO = RMS_INFO if SPREAD_POWERS == (2.0,) else POWER_MEAN_INFO
 assert SPREAD == "rms"
 
 

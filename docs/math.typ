@@ -51,7 +51,7 @@ package `src/yeelab/`):
   [medians per axis], [$n$], [`PIXELS` (`margin/shares.py`)], [300],
   [deviation], [$D$], [Model parameter, _Deviation_ slider], [0.2],
   [voter distribution], [], [Model parameter, _Voters_ control], [Beta],
-  [Beta spread rule], [$p$], [_Beta spread p_, default 2 (`web/app.py`)], [2 (`rms`)],
+  [Beta spread rule], [$p$], [`SPREAD_POWERS` (`web/app.py`), only 2 in the web UI], [2 (`rms`)],
   [what a pixel is (Beta, UI)], [], [_Point in diagram is_, `UI_PIXEL_MEDIAN` (`web/app.py`)], [geometric median],
   [interpolation nodes per axis], [$N$], [`NODES`], [49],
   [Gauss–Legendre points per edge], [$Q$], [`QUAD_NODES`], [24],
@@ -209,8 +209,9 @@ where $s$ is the standard deviation of $Beta(a_0, a_0)$ ($s = 0.237$ for $D = 0.
 $0.337$ for $D = 0.3$). The square weights distant voters more, so near a wall a few
 voters far out make up the spread and the rest of the far half stays where it is. It is
 the rule with the clearest meaning, and of the rules compared in @sec-bench its borders
-are among the straightest. The web UI starts at this rule and offers $p in
-{1, 2, 4, 16, 32, 64}$ in the same power-mean family.
+are among the straightest. The web UI uses this rule only; the model also takes any other
+power $p$ of the same family (@sec-large-p), which the UI offers once they are listed in
+`SPREAD_POWERS` (`web/app.py`).
 
 *`mean_abs` (legacy).* The mean absolute deviation is $D$ for every median,
 $E|X - m| = D$. This was the first rule, and it is kept to reproduce older results.
@@ -218,8 +219,8 @@ Because it keeps the mean absolute deviation fixed, @eq-push applies in full: ne
 wall the far half of the voters is pushed twice as far out, towards the opposite wall.
 At median $0.98$ the share of voters below $0.1$ is back at $0.192$, more than at the
 centre, where `rms` has $0.049$ (@fig-densities). This push bends Condorcet borders,
-adds cycles and gives IRV a round edge that `rms` does not have (@ch-spread). The web UI
-offers this quantity at $p = 1$; the legacy name remains available to existing models.
+adds cycles and gives IRV a round edge that `rms` does not have (@ch-spread). It is the
+power $p = 1$ of the same family, which the web UI does not offer.
 
 #figure(
   image("figures/spread_densities.png", width: 100%),
@@ -2585,7 +2586,8 @@ pixels on average (90th percentile 3.1 pixels, the single worst border 4.9 pixel
 
 == Large powers <sec-large-p>
 
-The web UI's _Beta spread p_ also offers $p = 4, 16, 32, 64$. A large $p$ keeps the
+The model also takes larger powers (`spread` a number up to 100; the web UI offers only
+$p = 2$). A large $p$ keeps the
 farthest voters where they are at the centre pixel: away from it the voters near the far
 wall must thin out by about $(1 slash (2 max(m, 1 - m)))^p$, so the electorates narrow
 quickly with the distance from the centre (standard deviation along one axis,
@@ -2647,7 +2649,7 @@ as $p = 16$. Fewer cycles are had by a smaller $D$, with the same voters everywh
 
 == Conclusion
 
-- *`rms`* is the default, $p = 2$ of the web UI's _Beta spread p_. It fixes a quantity with a
+- *`rms`* is the default, and the only rule of the web UI. It fixes a quantity with a
   clear meaning, pushes the far half of the voters out only by $sqrt(2)$ near a wall,
   has no round IRV edge, and its borders bend by 1.5 pixels on average at $D = 0.3$; of
   the rules compared, only power means slightly below $2$ bend less, and only at larger
