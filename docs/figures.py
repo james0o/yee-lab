@@ -22,8 +22,8 @@ from scipy.special import betainc, ndtr, ndtri
 from scipy.stats import beta as beta_dist
 
 from yeelab import normal, ranking_cells
-from yeelab.build import (Bullet, Burial, Compromise, Graded, Highest, Score, ScoreAvg, ScoreCluster, ScoreDH,
-                          Scored, ScoreHybrid, Tally, Voters, Winner)
+from yeelab.build import (PAIRWISE, Bullet, Burial, Compromise, Graded, Highest, Score, ScoreAvg, ScoreCluster,
+                          ScoreDH, Scored, ScoreHybrid, Tally, Voters, Winner)
 from yeelab.build.judgment import majority_grades, majority_totals
 from yeelab.build.methods import METHODS as BUILD_METHODS
 from yeelab.margin.geometric import geometric_median_at, geometric_medians
@@ -193,6 +193,33 @@ def spread_rules():
     plt.close(fig)
 
 
+def large_powers():
+    """Spread powers p above 4: the spread of the voters changes from pixel to pixel, FPTP
+    draws the lines x = 1/2 and y = 1/2, and fewer cycles come from narrower voters."""
+    print("standard deviation of the voters along one axis, D = 0.2, by median")
+    medians = np.array([0.5, 0.55, 0.6, 0.7, 0.8, 0.9, 0.98])
+    for power in (1.0, 2.0, 4.0, 16.0, 64.0):
+        a, b = ranking_cells.beta_params_at(medians, 0.2, power).T
+        sd = np.sqrt(a * b / ((a + b) ** 2 * (a + b + 1)))
+        print(f"  p = {power:g}: " + ", ".join(f"{m}: {v:.3f}" for m, v in zip(medians, sd)))
+    print("pixels without a Condorcet winner, candidates A-E, 200 x 200")
+    for deviation, power in ((0.2, 2.0), (0.2, 4.0), (0.2, 16.0), (0.2, 64.0), (0.15, 2.0), (0.1, 2.0)):
+        winner = winners("condorcet", CANDIDATES, Model("beta", deviation, power), 200)[1][1:-1, 1:-1]
+        print(f"  D = {deviation}, p = {power:g}: {(winner == CYCLE).mean():.2%}")
+    fig, axes = plt.subplots(2, 2, figsize=(8, 8.2))
+    for row, power in enumerate((2.0, 64.0)):
+        for col, shift in enumerate((0.0, 0.1)):
+            ax = axes[row, col]
+            show(ax, "fptp", Model("beta", 0.2, power), f"FPTP, p = {power:g}, candidates moved by {shift}",
+                 candidates=CANDIDATES + shift)
+            for line in (ax.axvline, ax.axhline):
+                line(0.5, color="k", linestyle="--", linewidth=0.8)
+            ax.set_aspect("equal")
+    fig.tight_layout()
+    _save_figure(fig, "large_power", dpi=110)
+    plt.close(fig)
+
+
 def irv_round():
     """Beta IRV with the round 3 ties among A, D, E, under the legacy and the default rule."""
     fig, axes = plt.subplots(1, 2, figsize=(10, 5.2))
@@ -259,6 +286,70 @@ def pull_example(samples=4_000_000, seed=0):
         dist = (n @ pixel - offset) / np.linalg.norm(n)
         print(f"  pixel {pixel}: distance {dist:+.3f}, Beta share {share:.3f}, "
               f"normal share {ndtr(dist / sigma):.3f}, Beta mean ({bx.mean():.3f}, {by.mean():.3f})")
+
+
+def _triangle(centre, radius, turn):
+    """Three candidates on a circle of `radius` around `centre`, the first at `turn` + 90 degrees."""
+    angles = np.radians(turn + np.array([90.0, 210.0, 330.0]))
+    return np.asarray(centre) + radius * np.column_stack([np.cos(angles), np.sin(angles)])
+
+
+def voronoi_slivers(size=300):
+    """Where a Condorcet winner is not the candidate nearest to the pixel: how much the
+    majority wins by there, by the distance from a wall and the slant of the bisector;
+    the majorities in the cycles; and cycles against the distance from the centre."""
+    n, eye = len(CANDIDATES), np.eye(len(CANDIDATES), dtype=bool)
+    for model in (Model("beta", 0.2, SPREAD), Model("beta", DEVIATION, SPREAD), Model("normal", 0.2)):
+        m = grid(size, model.pixels)[1][1:-1]
+        d = voters_at(frozenset({PAIRWISE}), CANDIDATES, model, size).pairwise[1:-1, 1:-1].astype(np.float64)
+        beats = ((d > 0.5) | eye).all(-1)
+        has, winner = beats.any(-1), beats.argmax(-1)
+        # left out: pixels whose centre lies exactly on a Voronoi border, where the two nearest tie
+        centres = np.stack(np.meshgrid(m, m, indexing="ij"), -1)
+        tie = nearest(CANDIDATES, centres)[1] < 1e-12
+        has &= ~tie
+        lead = np.where(eye, 1, d)[np.arange(size)[:, None], np.arange(size)[None, :], winner].min(-1) - 0.5
+        minimax = np.swapaxes(d, -1, -2).max(-1).min(-1)
+        cycle = ~has & ~tie
+        print(f"{model.distribution} D = {model.deviation} ({tie.sum()} pixels on a bisector left out): the Condorcet "
+              f"winner leads its closest rival by a median of {np.median(lead[has]):.1%}; no Condorcet winner on "
+              f"{cycle.mean():.2%} of the pixels, the strongest majority there "
+              f"{minimax[cycle].max() if cycle.any() else 0.5:.2%}")
+        points = {"medians along the axes": np.stack(np.meshgrid(m, m, indexing="ij"), -1)}
+        if model.distribution == "beta":
+            points["geometric medians"] = geometric_medians(model, m)
+        for name, p in points.items():
+            near = np.linalg.norm(p[..., None, :] - CANDIDATES, axis=-1).argmin(-1)
+            off = has & (winner != near)
+            ahead = d[np.arange(size)[:, None], np.arange(size)[None, :], winner, near] - 0.5
+            print(f"  drawn at the {name}: the Condorcet winner is not the nearest on {off.mean():.1%} of the "
+                  f"pixels, ahead of the nearest by a median of {np.median(ahead[off]) if off.any() else 0:.2%} "
+                  f"(largest {ahead[off].max() if off.any() else 0:.2%})")
+        if model.distribution != "beta" or model.deviation != 0.2:
+            continue
+        p = points["medians along the axes"]
+        near = np.linalg.norm(p[..., None, :] - CANDIDATES, axis=-1).argmin(-1)
+        off = has & (winner != near)
+        ahead = d[np.arange(size)[:, None], np.arange(size)[None, :], winner, near] - 0.5
+        wall = np.minimum(p, 1 - p).min(-1)
+        for low, high in ((0, 0.05), (0.05, 0.15), (0.15, 0.5)):
+            band = off & (wall >= low) & (wall < high)
+            print(f"    {low:.2f} to {high:.2f} from a wall: ahead by a median of {np.median(ahead[band]):.2%}, "
+                  f"largest {ahead[band].max():.2%}")
+        for c, e in sorted({(int(c), int(e)) for c, e in zip(winner[off], near[off])}):
+            pair = off & (winner == c) & (near == e)
+            v = CANDIDATES[e] - CANDIDATES[c]
+            slant = np.degrees(np.arctan2(abs(v[1]), abs(v[0])))
+            print(f"    {NAMES[c]} wins where {NAMES[e]} is nearest: {pair.sum()} pixels, bisector "
+                  f"{min(slant, 90 - slant):.0f} degrees from an axis, largest lead {ahead[pair].max():.2%}")
+        print(f"    D gains {(off & (winner == D)).sum() / off.sum():.0%} of these pixels")
+    print("pixels without a Condorcet winner (of 300 x 300) for three candidates on a circle of radius 0.15, "
+          "most of four turns, by the distance of its centre from the centre of the square along the diagonal")
+    for deviation in (0.2, DEVIATION):
+        model = Model("beta", deviation, SPREAD)
+        row = [max((winners("condorcet", _triangle(0.5 + shift, 0.15, turn), model, 300)[1][1:-1, 1:-1]
+                    == CYCLE).sum() for turn in (0, 30, 60, 90)) for shift in np.arange(6) * 0.05]
+        print(f"  D = {deviation}: " + ", ".join(f"{np.sqrt(2) * 0.05 * k:.2f}: {c}" for k, c in enumerate(row)))
 
 
 def fptp_edge(profiles):
@@ -884,6 +975,83 @@ def geometric_median():
     _save_figure(fig, "geometric")
     plt.close(fig)
 
+
+# the candidates of the figure of electorates on a Condorcet border: orange and light blue
+# share the border, dark blue is a third candidate far from it
+BORDER_CANDIDATES = np.array([[0.11, 0.09], [0.86, 0.58], [0.31, 0.26]])
+BORDER_COLORS = ["#1f77b4", "#7fa7d6", "#ff7f0e"]
+
+
+def _fence_voter(model, medians, normal_, threshold, steps=200_000):
+    """The average voter on the line normal_ . v = threshold, of the voters with the medians."""
+    (ax_, bx_), (ay_, by_) = ranking_cells.beta_params_at(medians, model.deviation, model.spread)
+    y = (np.arange(steps) + 0.5) / steps
+    x = (threshold - normal_[1] * y) / normal_[0]
+    inside = (x > 0) & (x < 1)
+    weight = np.where(inside, beta_dist.pdf(np.clip(x, 1e-12, 1 - 1e-12), ax_, bx_), 0) * beta_dist.pdf(y, ay_, by_)
+    height = np.sum(weight * y) / np.sum(weight)
+    return np.array([(threshold - normal_[1] * height) / normal_[0], height])
+
+
+def border_electorates(size=300, samples=3000, seed=1):
+    """Three electorates on the Condorcet border between orange and light blue, drawn at
+    their geometric medians (D = 0.3): where they are drawn, how far that is from the
+    bisector, and the average voter on the fence between the two."""
+    blue, light, orange = range(3)
+    model = Model("beta", DEVIATION, SPREAD)
+    m = grid(size, model.pixels)[1]
+    d = voters_at(frozenset({PAIRWISE}), BORDER_CANDIDATES, model, size).pairwise.astype(np.float64)
+    excess = d[..., orange, light] - 0.5  # > 0: a majority prefers orange
+    nu = BORDER_CANDIDATES[light] - BORDER_CANDIDATES[orange]
+    nu /= np.linalg.norm(nu)
+    middle = BORDER_CANDIDATES[[light, orange]].mean(axis=0)
+    threshold = middle @ nu
+
+    def border(j):  # the x median where the majority flips, in the row of the y median m[j]
+        row = excess[:, j]
+        k = np.flatnonzero(np.sign(row[:-1]) != np.sign(row[1:]))[0]
+        return m[k] + row[k] / (row[k] - row[k + 1]) * (m[k + 1] - m[k])
+
+    rows = np.arange(1, len(m) - 1)
+    pixels = np.array([[border(j), m[j]] for j in rows])
+    drawn = geometric_median_at(model, pixels)
+    side = (drawn - middle) @ nu  # across the bisector, + on light blue's side
+    crossing = int(np.flatnonzero(np.sign(side[:-1]) != np.sign(side[1:]))[0])
+    print(f"electorates on the orange|light-blue border, D = {DEVIATION}: the direction orange -> light blue is "
+          f"{np.degrees(np.arctan2(nu[1], nu[0])):.0f} degrees above the x axis; the border meets the bisector "
+          f"drawn at {np.round(drawn[crossing], 3)}")
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5.6))
+    rng = np.random.default_rng(seed)
+    for ax, (name, k) in zip(axes, (("top", len(rows) - 1), ("middle", crossing), ("bottom", 0))):
+        (ax_, bx_), (ay_, by_) = ranking_cells.beta_params_at(pixels[k], model.deviation, model.spread)
+        mean = np.array([ax_ / (ax_ + bx_), ay_ / (ay_ + by_)])
+        fence = _fence_voter(model, pixels[k], nu, threshold)
+        both = np.array([pixels[k][0], mean[1]])  # the median along x and the mean along y
+        print(f"  {name}: medians {np.round(pixels[k], 3)}, drawn at {np.round(drawn[k], 3)}, mean {np.round(mean, 3)}, "
+              f"average fence voter {np.round(fence, 3)}; across the bisector (% of the square, + light blue's side): "
+              f"medians {100 * (pixels[k] - middle) @ nu:+.1f}, drawn {100 * side[k]:+.1f}, mean "
+              f"{100 * (mean - middle) @ nu:+.1f}, (median x, mean y) {100 * (both - middle) @ nu:+.1f}")
+        voters_ = np.column_stack([rng.beta(ax_, bx_, samples), rng.beta(ay_, by_, samples)])
+        light_side = (voters_ - middle) @ nu > 0
+        for chosen, color in ((~light_side, BORDER_COLORS[orange]), (light_side, BORDER_COLORS[light])):
+            ax.scatter(*voters_[chosen].T, s=3, color=color, alpha=0.6, zorder=1)
+        xs = np.array([0.0, 1.0])
+        ax.plot(xs, (threshold - nu[0] * xs) / nu[1], "--", color="teal", lw=1.5,
+                label="bisector, the 50/50 line of these voters")
+        ax.scatter(*BORDER_CANDIDATES.T, s=120, color=BORDER_COLORS, edgecolors="black", zorder=4)
+        ax.scatter(*drawn[k], s=110, color="black", zorder=5, label="drawn at: geometric median")
+        ax.scatter(*fence, s=220, marker="*", color="red", edgecolors="black", zorder=5,
+                   label="average voter on the fence")
+        ax.axhline(drawn[k, 1], color="black", lw=0.8, ls=":")
+        ax.axhline(fence[1], color="red", lw=0.8, ls=":")
+        ax.set(xlim=(0, 1), ylim=(0, 1), aspect="equal")
+        ax.set_title(f"{name}: drawn {100 * abs(side[k]):.1f}% of the square off the bisector\n"
+                     f"height drawn {drawn[k, 1]:.2f}, of the average fence voter {fence[1]:.2f}", fontsize=10)
+    axes[0].legend(loc="lower right", fontsize=8)
+    fig.tight_layout()
+    _save_figure(fig, "border_electorates", dpi=110)
+    plt.close(fig)
+
 # ---------------------------------------------------------------- score voting
 
 # the ends and the default of the power slider of the web UI
@@ -1109,11 +1277,13 @@ if __name__ == "__main__":
     spread_densities()
     cycle_counts()
     spread_rules()
+    large_powers()
     irv_round()
     profiles = {name: profile(name) for name in ("beta", "normal")}
     beta_shapes()
     compare(profiles)
     pull_example()
+    voronoi_slivers()
     fptp_edge(profiles)
     blur_corner()
     seven_fptp()
@@ -1126,6 +1296,7 @@ if __name__ == "__main__":
     margin_fields()
     polygon_example()
     geometric_median()
+    border_electorates()
     approval()
     score_voting()
     score_against_voronoi()

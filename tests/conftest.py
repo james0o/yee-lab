@@ -1,11 +1,21 @@
 """The ranking profiles the methods are checked on (test_build.py, test_strategic.py)."""
 
+import sys
 from itertools import product
 
 import numpy as np
 import pytest
 
 from yeelab.margin.shares import Model, ranking_shares
+
+@pytest.fixture(scope="session", autouse=True)
+def _warmed_up():
+    """The web app warms its caches in a thread when it is imported (at collection, by the
+    tests of the API): tests that count cache misses must not see its computations."""
+    app = sys.modules.get("yeelab.web.app")
+    if app is not None:
+        app.WARM_UP.join()
+
 
 # voters (distribution, deviation, Beta spread) and random candidates (number, seed)
 VOTERS = [("beta", 0.1, "rms"), ("beta", 0.3, "mean_abs"), ("normal", 0.1, None), ("normal", 0.3, None)]

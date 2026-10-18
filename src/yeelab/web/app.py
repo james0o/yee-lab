@@ -378,7 +378,8 @@ def _warm_up():
     voronoi_agreement(CANDIDATES, points, winner, borders(shapes), voronoi_borders(CANDIDATES, None, 32))
 
 
-threading.Thread(target=_warm_up, daemon=True).start()
+WARM_UP = threading.Thread(target=_warm_up, daemon=True)  # tests wait for it (tests/conftest.py)
+WARM_UP.start()
 
 
 @lru_cache(maxsize=1)

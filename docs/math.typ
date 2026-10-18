@@ -2109,6 +2109,127 @@ candidates are correct winners):
 The centre candidate D gains most: the Beta electorates of the whole upper right part
 of the square are pulled towards the centre, where D is.
 
+== What a border off the Voronoi line means <sec-meaning>
+
+=== When a majority follows distance
+
+Every pairwise race is decided by the median voter along the line between the two
+candidates (@sec-normal-majority). So every Condorcet method draws the Voronoi diagram
+for every set of candidates exactly when the electorate has a point that splits every
+line through it into halves, a total median, and the election is drawn there; then the
+majority relation is the order by distance from that point, and there are no cycles. This
+is weaker than symmetry: only the direction of a voter from the point counts, not the
+distance. A quarter of the voters at each of $(1, 0)$, $(-3, 0)$, $(0, 2)$ and
+$(0, -0.5)$ have the total median $(0, 0)$, although their mean is $(-0.5, 0.375)$.
+
+Without a total median no rule of where to draw an election makes every border exact.
+Each pair needs the point drawn to lie on its own median line, one condition per
+direction, and a point has two coordinates; with two candidates one pair could be met,
+but only by a drawing that depends on the candidates. The shortcut "the candidate
+nearest to the median of the electorate wins the majority" is the median voter theorem
+of one dimension; in two it fails even where a Condorcet winner exists.
+
+Of the Beta electorates only that of the centre pixel has a total median: it is
+symmetric. Cycles are absent there and rare near it. Three candidates on a circle of
+radius $0.15$ around a point of the diagonal, the largest number of pixels without a
+Condorcet winner over four turns of them (of $300^2$):
+
+#align(center, table(
+  columns: 7,
+  align: right,
+  stroke: none,
+  table.hline(),
+  [distance of the point from the centre], [0], [0.07], [0.14], [0.21], [0.28], [0.35],
+  table.hline(stroke: 0.5pt),
+  [$D = 0.2$], [0], [4], [21], [48], [101], [189],
+  [$D = 0.3$], [0], [46], [197], [595], [1063], [1451],
+  table.hline(),
+))
+
+=== The median along a pair, the average across it
+
+For a pair whose bisector is near an axis, @sec-straight gives
+$"median"(X + epsilon Y) = "median"(X) + epsilon E[Y]$. The 50/50 line of the pair
+stands where the median along the main direction says; tilting it sweeps voters across
+it in proportion to their distance from the point it turns about, so to keep the halves
+equal it turns about the average position of the voters on it, as a seesaw balances at
+its centre of mass. The voter who decides such a race is at the median along the pair
+and at the average across it. Nothing cardinal enters: every voter still counts once, and
+the average is of where the voters on the fence stand.
+
+#figure(
+  image("figures/border_electorates.png", width: 100%),
+  caption: [Three electorates on the Condorcet border between orange $(0.31, 0.26)$ and
+    light blue $(0.86, 0.58)$, $D = 0.3$, pixels drawn at their geometric medians (dark
+    blue $(0.11, 0.09)$ is a third candidate). Dots: sampled voters, coloured by the one
+    of the two they prefer; on the border they split $50 slash 50$ exactly, and the
+    bisector is their halving line. Top and bottom are the outermost pixels.],
+) <fig-border-electorates>
+
+The line from orange to light blue rises $30 degree$, so their race is mostly one of
+left and right, and the height of the voters counts by its average. At the top
+(@fig-border-electorates) half of the voters are within $0.002$ of the wall; the
+electorate is drawn at height $0.93$, but the voters on the fence average $0.81$. It is
+lower in this race than drawn, closer to orange, and still split $50 slash 50$ although
+drawn $5 %$ of the square inside light blue's Voronoi cell. The bottom is the mirror
+image, and in the middle, where the electorate is balanced in height, all of these
+coincide. The point at the median along $x$ and the mean along $y$ lies within $1$ to
+$2 %$ of the square of the 50/50 line; the other centres are $5$ to $7 %$ off (signed
+distance across the bisector, $+$ on light blue's side, % of the square):
+
+#align(center, table(
+  columns: 5,
+  align: (left, right, right, right, right),
+  stroke: none,
+  table.hline(),
+  [electorate], [medians], [drawn (geometric median)], [mean], [median $x$, mean $y$],
+  table.hline(stroke: 0.5pt),
+  [top], [$+7.2$], [$+5.0$], [$+4.9$], [$-0.9$],
+  [bottom], [$-6.4$], [$-5.0$], [$-7.0$], [$+1.6$],
+  table.hline(),
+))
+
+The averages stay further from the walls ($0.15$ to $0.81$) than the drawn heights
+($0.06$ to $0.93$), so height matters less in this race than the drawing suggests: the
+border is the bisector turned about the middle towards a pure left–right border.
+
+=== Reading the slivers
+
+A pixel between a Voronoi line and the border next to it is an election whose Condorcet
+winner is not the candidate nearest to where it is drawn. The majority is clear there,
+but small (candidates A–E, `rms`, the 357 pixels on a Voronoi border left out):
+
+#align(center, table(
+  columns: 4,
+  align: (left, left, right, right),
+  stroke: none,
+  table.hline(),
+  [voters], [drawn at the], [winner $!=$ nearest], [its lead over the nearest: median (largest)],
+  table.hline(stroke: 0.5pt),
+  [Beta, $D = 0.2$], [medians along the axes], [5.5 %], [1.7 (9.3) points],
+  [], [geometric medians], [3.5 %], [1.1 (6.5) points],
+  [Beta, $D = 0.3$], [medians along the axes], [13.5 %], [2.7 (10.1) points],
+  [], [geometric medians], [8.7 %], [1.8 (8.2) points],
+  [normal, any $D$], [], [0], [],
+  table.hline(),
+))
+
+Elsewhere the Condorcet winner leads its closest rival by a median of $14.8$ points at
+$D = 0.2$ and $8.8$ at $0.3$. The lead grows towards the walls, where the electorates are most lopsided (at $D = 0.2$
+a median of $3.3$ points within $0.05$ of a wall, $2.4$ from $0.05$ to $0.15$, $1.2$
+further in), and with the slant of the bisector: up to $9.3$ points for the bisectors at
+$45 degree$, under $3$ for those within $11 degree$ of an axis, whose races the medians
+along the axes decide almost alone. The centre candidate D gains $68 %$ of these pixels.
+Two ideas of a fair winner part here, the candidate a majority prefers and the candidate
+nearest to the electorate's centre; for an electorate with a total median they are the
+same. In the cycles even the strongest majority is a near tie: $51.1 %$ at $D = 0.2$ and
+$52.7 %$ at $0.3$.
+
+For a Condorcet method, then, all of its disagreement with the Voronoi diagram
+(@ch-metrics) is these slivers and the cycles: it measures the electorate, not the
+method. A method is judged better by the elections that have a Condorcet winner and where
+it elects someone else.
+
 == Curved borders <sec-round-edges>
 
 Under normal voters the borders of Condorcet methods are bisectors, i.e. straight
@@ -2258,6 +2379,10 @@ $D = 0.2$ the B|E border rises by only $0.030$, like normal voters at $D = 0.3$.
   between candidates on a diagonal are decided by the skew of the distribution, which
   pulls the effective centre towards the middle of the square: Condorcet regions are
   distorted (14 % of the pixels at $D = 0.3$, 6 % at $D = 0.2$) and cycles appear.
+- A border off its Voronoi line marks electorates without a total median: their
+  Condorcet winner is not the nearest candidate, by majorities of a few points, and the
+  voter who decides a race is at the median along it and the average across it
+  (@sec-meaning). Only the symmetric centre pixel has neither such borders nor cycles.
 - A first-choice share is the candidate's Voronoi cell blurred by the voter
   distribution. Blurring keeps half-planes straight but rounds corners (radius of order
   $sigma$), so FPTP and IRV borders are curved in both models.
@@ -2458,6 +2583,48 @@ They bend as much as `rms` or more at the lowest level and less at the higher on
 absolute terms the bend of `rms` is small: at $D = 0.3$ its visible borders bend by 1.5
 pixels on average (90th percentile 3.1 pixels, the single worst border 4.9 pixels).
 
+== Large powers <sec-large-p>
+
+The web UI's _Beta spread p_ also offers $p = 4, 16, 32, 64$. A large $p$ keeps the
+farthest voters where they are at the centre pixel: away from it the voters near the far
+wall must thin out by about $(1 slash (2 max(m, 1 - m)))^p$, so the electorates narrow
+quickly with the distance from the centre (standard deviation along one axis,
+$D = 0.2$):
+
+#align(center, table(
+  columns: 8,
+  align: right,
+  stroke: none,
+  table.hline(),
+  [median], [0.5], [0.55], [0.6], [0.7], [0.8], [0.9], [0.98],
+  table.hline(stroke: 0.5pt),
+  [$p = 1$], [0.237], [0.237], [0.238], [0.241], [0.248], [0.268], [0.308],
+  [$p = 2$], [0.237], [0.237], [0.236], [0.234], [0.229], [0.219], [0.211],
+  [$p = 4$], [0.237], [0.236], [0.231], [0.217], [0.197], [0.172], [0.145],
+  [$p = 16$], [0.237], [0.220], [0.197], [0.163], [0.136], [0.107], [0.073],
+  [$p = 64$], [0.237], [0.177], [0.143], [0.107], [0.085], [0.062], [0.035],
+  table.hline(),
+))
+
+At $p = 64$ the spread halves within $0.2$ of the centre, and $D$ holds only on the
+lines $x = 1/2$ and $y = 1/2$. A diagram then compares electorates of very different
+spreads, and FPTP, which reacts to the spread most, draws those lines rather than its own
+borders: moving every candidate by $(0.1, 0.1)$ leaves its bumps on them
+(@fig-large-power). The parameters turn sharply at those lines, which the interpolation
+follows with its two grids of nodes (@sec-interpolation).
+
+#figure(
+  image("figures/large_power.png", width: 75%),
+  caption: [FPTP at $D = 0.2$ for $p = 2$ (top) and $p = 64$ (bottom), with the
+    candidates A–E (left) and all of them moved by $(0.1, 0.1)$ (right). Dashed: the
+    lines $x = 1/2$ and $y = 1/2$.],
+) <fig-large-power>
+
+Large powers also have fewer cycles (pixels without a Condorcet winner, A–E, $D = 0.2$:
+$0.06 %$ at $p = 2$, $0.04 %$ at 4, $0.01 %$ at 16, none at 64), but only because the
+voters away from the centre are narrower: $p = 2$ with $D = 0.15$ has the same $0.01 %$
+as $p = 16$. Fewer cycles are had by a smaller $D$, with the same voters everywhere.
+
 == Other ways to fix the spread
 
 - *Median absolute deviation.* For every Beta, $"median"|X - m| < min(m, 1 - m)$: the
@@ -2467,10 +2634,20 @@ pixels on average (90th percentile 3.1 pixels, the single worst border 4.9 pixel
   leave it) have neither the round IRV edge nor a strong flare (0.023), few cycles
   (0.10 %) and Schulze $!=$ Voronoi on 7.9 % of the pixels. But they put point masses
   on the edges, are not a Beta, and their deviation shrinks near the walls.
+- *The same electorate at every pixel.* Voters inside the square cannot have it: an
+  electorate next to a wall must differ from one in the middle, so every rule bends some
+  borders. It is possible if the square is a window onto a plane the voters may leave,
+  as for normal voters, or a window within the square with a margin of about $3 sigma$,
+  $3.76 D slash (1 + 7.52 D)$ of the square for a deviation $D$ relative to the window
+  ($[0.3, 0.7]^2$ for $D = 0.2$). Then every pairwise border is a straight line parallel to its
+  bisector, shifted by the electorate's skew in its direction, and the cycles are the small
+  triangles where three shifted borders miss each other, anywhere, the centre too. A
+  symmetric shape has no cycles; a lopsided one needs its asymmetry from data or
+  parameters.
 
 == Conclusion
 
-- *`rms`* is the default, and the only rule of the web UI. It fixes a quantity with a
+- *`rms`* is the default, $p = 2$ of the web UI's _Beta spread p_. It fixes a quantity with a
   clear meaning, pushes the far half of the voters out only by $sqrt(2)$ near a wall,
   has no round IRV edge, and its borders bend by 1.5 pixels on average at $D = 0.3$; of
   the rules compared, only power means slightly below $2$ bend less, and only at larger
@@ -2478,6 +2655,8 @@ pixels on average (90th percentile 3.1 pixels, the single worst border 4.9 pixel
 - *`mean_abs`* is kept to reproduce and compare results made with it. By @eq-push it
   pushes the far half of the voters out twice as far near a wall, which bends borders
   the most, adds cycles and makes the round IRV edge.
+- *Powers above 4* make the spread change from pixel to pixel faster than a diagram can
+  be read; their fewer cycles are those of narrower voters (@sec-large-p).
 
 #pagebreak()
 
