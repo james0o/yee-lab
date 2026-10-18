@@ -387,7 +387,7 @@ def _warm_up():
     regions(Burial(Compromise(MARGINS["star"], 0.5), 0.5), CANDIDATES, Model("beta", DEVIATION, SPREAD), 32)
     # the kernel of the comparison with the Voronoi diagram
     shapes, points, winner, _ = diagram(DIAGRAMS[0], CANDIDATES, Model("beta", DEVIATION, SPREAD), 32)
-    voronoi_agreement(CANDIDATES, points, winner, borders(shapes), voronoi_borders(CANDIDATES, None, 32))
+    voronoi_agreement(CANDIDATES, points, winner)
 
 
 WARM_UP = threading.Thread(target=_warm_up, daemon=True)  # tests wait for it (tests/conftest.py)
@@ -491,17 +491,15 @@ def diagram_regions(request: DiagramRequest):
         method, request.candidates, model, request.grid, request.pixel_median, request.shift
     )
     payload = {"regions": shapes, "metrics": None, "overlays": {}}
-    if request.metrics or request.overlay:
-        actual = borders(shapes)
-        # the Voronoi diagram is compared with its own borders (errors 0); the others with the
-        # exact ones, which its traced borders only miss next to a point where three meet
-        reference = actual if request.method == "voronoi" else voronoi_borders(
+    if request.metrics:
+        payload["metrics"] = voronoi_agreement(request.candidates, points, winner)
+    if request.overlay:  # [x0, y0, x1, y1] per segment
+        # the Voronoi diagram is drawn with its own borders; the others with the exact ones,
+        # which its traced borders only miss next to a point where three meet
+        reference = borders(shapes) if request.method == "voronoi" else voronoi_borders(
             request.candidates, model, request.grid, request.pixel_median, request.shift
         )
-        if request.metrics:
-            payload["metrics"] = voronoi_agreement(request.candidates, points, winner, actual, reference)
-        if request.overlay:  # [x0, y0, x1, y1] per segment
-            payload["overlays"]["voronoi_boundaries"] = np.round(np.reshape(reference[0], (-1, 4)), 6).tolist()
+        payload["overlays"]["voronoi_boundaries"] = np.round(np.reshape(reference[0], (-1, 4)), 6).tolist()
     payload["ms"] = round(1000 * (time.perf_counter() - start), 1)
     # json.dumps directly: FastAPI's encoder is slow on thousands of vertices
     return Response(json.dumps(payload, separators=(",", ":")), media_type="application/json")

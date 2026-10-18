@@ -49,22 +49,18 @@
       <div class="joint" id="joint">
         <canvas id="square" width="1000" height="1000"></canvas>
       </div>
-      <table id="metrics" title="The boundary distance is symmetric and weighted by boundary length and centrality exp(−4‖x−(0.5,0.5)‖²). Lower is better.">
+      <table id="metrics" title="Lower is better.">
         <thead><tr><th>Voronoi disagreement</th><th>Error</th><th id="compared"></th></tr></thead>
         <tbody>
-          <tr><td>Assignment error</td><td id="metric-assignment">—</td><td></td></tr>
-          <tr><td>Assignment error inside candidate hull</td><td id="metric-inside">—</td><td></td></tr>
-          <tr><td>Boundary distance</td><td id="metric-boundaries">—</td><td></td></tr>
+          <tr><td>Error relative to a random winner</td><td id="metric-assignment">—</td><td></td></tr>
         </tbody>
       </table>
       <details class="metric-help">
         <summary>How the metrics are calculated</summary>
-        <p>Let d<sub>min</sub>(x) be the nearest candidate distance, d<sub>a</sub>(x) the distance to the assigned candidate, r(x) = d<sub>a</sub>(x) − d<sub>min</sub>(x), and L the median distance between candidate pairs. The regret loss is ℓ(x) = r(x)/(r(x)+L), weighted by area and w<sub>a</sub>(x) = 1/(1+(d<sub>min</sub>(x)/L)²).</p>
-        <p>Assignment error = 100 × Σw<sub>a</sub>ℓ/Σw<sub>a</sub>. Inside hull uses the same formula, summing only over grid points inside the candidates’ convex hull.</p>
-        <p>For boundaries, each sample is projected to the nearest point on every segment of the other boundary. For segment endpoints a and b, the closest point is a + t(b−a), where t = clamp(((x−a)·(b−a))/‖b−a‖², 0, 1); distance is the minimum Euclidean distance over segments. This is measured in both directions.</p>
-        <p>The errors are computed once a candidate is dropped or a slider let go, not while dragging (—).</p>
-        <p>After switching to another method, the last column shows how many times smaller (green, ↓) or larger (red, ↑) each error is than with the method shown before, for the same candidates and voters.</p>
-        <p>Center-weighted boundary distance uses weight w<sub>b</sub>(x) = exp(−4‖x−(0.5,0.5)‖²), multiplied by represented segment length. It is the weighted mean Σwd/Σw. Distances are shown as percentages of the square’s width; lower is better.</p>
+        <p>At every point x of the diagram, let d<sub>min</sub>(x) be the distance to the nearest candidate, d<sub>a</sub>(x) the distance to the candidate the method elects, r(x) = d<sub>a</sub>(x) − d<sub>min</sub>(x), and L the median distance between two candidates. The loss is ℓ(x) = r(x)/(r(x)+L): 0 where the nearest candidate wins, near 1 where a far one does. Points where no candidate wins (a Condorcet cycle) are no result and are left out.</p>
+        <p>The error e is the mean of ℓ over the area of the diagram, and e<sub>random</sub> the same for a candidate drawn at random at every point (the mean of ℓ over the candidates). The table shows e / e<sub>random</sub>: 0% where the nearest candidate wins everywhere, 100% for no better than chance.</p>
+        <p>The error is computed once a candidate is dropped or a slider let go, not while dragging (—).</p>
+        <p>After switching to another method, the last column shows how many times smaller (green, ↓) or larger (red, ↑) the error is than with the method shown before, for the same candidates and voters.</p>
       </details>
     </div>
     <div class="controls">
@@ -104,8 +100,6 @@
     const ctx = canvas.getContext("2d");
     const message = document.getElementById("message");
     const assignmentMetric = document.getElementById("metric-assignment");
-    const insideMetric = document.getElementById("metric-inside");
-    const boundariesMetric = document.getElementById("metric-boundaries");
     const compared = document.getElementById("compared");  // the header of the ratio column
     // The errors of the last fine diagram ({key, method, errors}) and of the method it is
     // compared with, the one shown before for the same key (all but the method).
@@ -720,18 +714,16 @@
           describe(...sliders.slice(0, 5), Math.round(performance.now() - start), Math.round(answer.ms));
           let errors = null;  // a coarse drag has none, and is not compared
           if (measured) {
-            const { assignment, inside_hull, boundary_mean } = answer.metrics;
-            errors = [100 - assignment, inside_hull === null ? null : 100 - inside_hull,
-              boundary_mean === null ? null : 100 * boundary_mean];
+            errors = [answer.metrics.relative];
             if (shown?.key !== key) previous = null;
             else if (shown.method !== method) previous = shown;
             shown = { key, method, errors };
           }
           const against = measured ? previous : null;
           compared.textContent = against ? `vs ${labels[against.method]}` : "";
-          [assignmentMetric, insideMetric, boundariesMetric].forEach((cell, i) => {
+          [assignmentMetric].forEach((cell, i) => {
             if (!errors) cell.textContent = "—";
-            else cell.textContent = errors[i] === null ? "n/a" : `${errors[i].toFixed(i < 2 ? 1 : 2)}%`;
+            else cell.textContent = errors[i] === null ? "n/a" : `${errors[i].toFixed(1)}%`;
             showRatio(cell.nextElementSibling, errors?.[i] ?? null, against?.errors[i] ?? null);
           });
         }
