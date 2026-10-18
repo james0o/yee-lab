@@ -90,10 +90,13 @@
   </div>
 
   <script type="module">
-    // Matplotlib's tab20 candidate palette.
-    const COLORS = ["#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c", "#98df8a", "#d62728",
-      "#ff9896", "#9467bd", "#c5b0d5", "#8c564b", "#c49c94", "#e377c2", "#f7b6d2", "#7f7f7f",
-      "#c7c7c7", "#bcbd22", "#dbdb8d", "#17becf", "#9edae5"];
+    // Candidate colours, one per candidate (at most 8): all at OKLCH lightness 0.70, so no region
+    // looks heavier than another, with chroma at most 0.20, chosen to make the smallest
+    // perceptual (OKLab) difference between any two as large as possible, in normal vision
+    // and in simulated deuteranopia and protanopia. The first five, the most a diagram usually
+    // has, are of five colour families (orange, blue, green, purple, teal), teal last since the
+    // default fifth candidate borders only blue and purple. Black is left for Condorcet cycles.
+    const COLORS = ["#ff6a0d", "#50a0ff", "#64b644", "#d36dea", "#5ab290", "#d17fb3", "#f56b7a", "#4caccb"];
     const RADIUS = 14;  // candidate dot, in canvas pixels
 
     const canvas = document.getElementById("square");
@@ -251,19 +254,27 @@
     function drawBoundaryOverlay() {
       if (!showBoundaries.checked || !regions) return;
       if (!boundaryPath) boundaryPath = pathOfBoundaries(regions);
-      ctx.beginPath();
-      for (const [x1, y1, x2, y2] of voronoiBoundaries) {
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-      }
-      ctx.strokeStyle = "#007c91";
-      ctx.lineWidth = 1.5 / canvas.width;
-      ctx.stroke();
+      // the method's borders, solid dark
       ctx.setLineDash([]);
       ctx.strokeStyle = "#171717";
       ctx.lineWidth = 2.5 / canvas.width;
       ctx.lineJoin = "round";
       ctx.stroke(boundaryPath);
+      // the Voronoi borders over them, dashed black and white: seen on every colour, and
+      // where they run along the method's borders
+      ctx.beginPath();
+      for (const [x1, y1, x2, y2] of voronoiBoundaries) {
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+      }
+      ctx.lineWidth = 2 / canvas.width;
+      ctx.lineCap = "butt";
+      ctx.strokeStyle = "#fff";
+      ctx.stroke();
+      ctx.setLineDash([8 / canvas.width, 8 / canvas.width]);
+      ctx.strokeStyle = "#000";
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
     function convexHull(points) {
