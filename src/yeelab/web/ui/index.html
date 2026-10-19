@@ -90,13 +90,15 @@
   </div>
 
   <script type="module">
-    // Candidate colours, one per candidate (at most 8): all at OKLCH lightness 0.70, so no region
-    // looks heavier than another, with chroma at most 0.20, chosen to make the smallest
-    // perceptual (OKLab) difference between any two as large as possible, in normal vision
-    // and in simulated deuteranopia and protanopia. The first five, the most a diagram usually
-    // has, are of five colour families (orange, blue, green, purple, teal), teal last since the
-    // default fifth candidate borders only blue and purple. Black is left for Condorcet cycles.
-    const COLORS = ["#ff6a0d", "#50a0ff", "#64b644", "#d36dea", "#5ab290", "#d17fb3", "#f56b7a", "#4caccb"];
+    // Candidate colours, one per candidate (at most 8), in OKLCH lightness 0.60 to 0.85 and
+    // chroma at most 0.20, chosen to make the smallest perceptual (OKLab) difference between any
+    // two as large as possible: in normal vision, and in simulated deuteranopia and protanopia
+    // where it counts 2.5 times as much. Lightness varies on purpose: at one lightness, five
+    // colours cannot be told apart (green, teal and blue came out almost the same). Colours are
+    // ordered so that any first k are good among themselves; the first five, the most a diagram
+    // usually has, have a smallest difference of 0.28 (0.13 colour-blind). Black is left for
+    // Condorcet cycles.
+    const COLORS = ["#fcaa2b", "#0c7cf4", "#dd4ba1", "#219a2c", "#23e3fa", "#b8a1f5", "#1cda73", "#b18872"];
     const RADIUS = 14;  // candidate dot, in canvas pixels
 
     const canvas = document.getElementById("square");
@@ -225,6 +227,101 @@
       });
     }
 
+    // The palette colour of every candidate (an index into COLORS). It belongs to the candidate and
+    // stays while it is dragged. Colours are given again only when a candidate is added or
+    // removed (colorCandidates), so that neighbours look different.
+    let colorOf = [];
+
+    // How different two palette colours look, [a][b]: the OKLab distance in normal vision, or in
+    // simulated deuteranopia or protanopia (Machado et al. 2009, in linear sRGB) divided by
+    // COLORBLIND, whichever is smallest. The palette was chosen by the same measure.
+    const COLORBLIND = 0.4;
+    const COLOR_DISTANCE = (() => {
+      const TO_LMS = [[0.4122214708, 0.5363325363, 0.0514459929], [0.2119034982, 0.6806995451, 0.1073969566],
+        [0.0883024619, 0.2817188376, 0.6299787005]];
+      const TO_LAB = [[0.2104542553, 0.7936177850, -0.0040720468], [1.9779984951, -2.4285922050, 0.4505937099],
+        [0.0259040371, 0.7827717662, -0.8086757660]];
+      const DEUTERANOPIA = [[0.367322, 0.860646, -0.227968], [0.280085, 0.672501, 0.047413],
+        [-0.011820, 0.042940, 0.968881]];
+      const PROTANOPIA = [[0.152286, 1.052583, -0.204868], [0.114503, 0.786281, 0.099216],
+        [-0.003882, -0.048116, 1.051998]];
+      const times = (matrix, v) => matrix.map(row => row[0] * v[0] + row[1] * v[1] + row[2] * v[2]);
+      const labs = COLORS.map(hex => {
+        const rgb = [1, 3, 5].map(k => {
+          const c = parseInt(hex.slice(k, k + 2), 16) / 255;
+          return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+        });
+        return [rgb, times(DEUTERANOPIA, rgb), times(PROTANOPIA, rgb)]  // normal, deuteranopia, protanopia
+          .map(seen => times(TO_LAB, times(TO_LMS, seen.map(clamp)).map(Math.cbrt)));
+      });
+      return labs.map(a => labs.map(b => Math.min(...a.map((lab, view) =>
+        Math.hypot(...lab.map((v, k) => v - b[view][k])) / (view === 0 ? 1 : COLORBLIND)))));
+    })();
+
+    // The candidates whose Voronoi cells share an edge with that of candidate i, in the unit square.
+    function voronoiNeighbours(points, i) {
+      const p = points[i], near = new Set();
+      points.forEach((q, j) => {
+        if (j === i) return;
+        // The edge lies on the bisector of p and q, the points m + t d for t from lo to hi: those
+        // inside the square and no farther from p than from any other candidate.
+        const m = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2], d = [p[1] - q[1], q[0] - p[0]];
+        let lo = -Infinity, hi = Infinity;
+        const keep = (a, b) => {  // only the t with a t <= b
+          if (a > 0) hi = Math.min(hi, b / a);
+          else if (a < 0) lo = Math.max(lo, b / a);
+          else if (b < 0) [lo, hi] = [Infinity, -Infinity];
+        };
+        for (const k of [0, 1]) {
+          keep(d[k], 1 - m[k]);
+          keep(-d[k], m[k]);
+        }
+        points.forEach((r, h) => {
+          if (h === i || h === j) return;
+          const e = [r[0] - p[0], r[1] - p[1]];  // |x - p|² <= |x - r|² is 2 x·e <= |r|² - |p|²
+          keep(2 * (d[0] * e[0] + d[1] * e[1]),
+            r[0] ** 2 + r[1] ** 2 - p[0] ** 2 - p[1] ** 2 - 2 * (m[0] * e[0] + m[1] * e[1]));
+        });
+        if ((hi - lo) * Math.hypot(...d) > 1e-6) near.add(j);
+      });
+      return near;
+    }
+
+    // Colours of candidates whose cells do not touch count as this many times as far apart. They
+    // still count, as the regions of a method do not follow the cells exactly.
+    const NOT_NEIGHBOURS = 2;
+    // A difference between neighbours beyond GOOD is not worth changing a colour for, and each
+    // candidate that changes colour costs CHANGE_COST of it.
+    const GOOD = 0.25, CHANGE_COST = 0.015;
+
+    // Gives every candidate a different palette colour (colorOf) so that the smallest difference
+    // between neighbours is as large as it can be (up to GOOD), changing as few as possible of the
+    // colours they have. Tries them all, with the colours in the palette's order first.
+    function colorCandidates() {
+      const n = candidates.length;
+      const near = candidates.map((_, i) => voronoiNeighbours(candidates, i));
+      const colors = [];  // of the candidates tried so far
+      let best = -Infinity, bestColors = null;
+      const search = (smallest, changed) => {
+        const value = Math.min(smallest, GOOD) - CHANGE_COST * changed;  // only falls as colors grows
+        if (value <= best) return;
+        const i = colors.length;
+        if (i === n) {
+          [best, bestColors] = [value, [...colors]];
+          return;
+        }
+        for (let color = 0; color < COLORS.length; color++) {
+          if (colors.includes(color)) continue;
+          const apart = colors.map((other, j) => COLOR_DISTANCE[color][other] * (near[i].has(j) ? 1 : NOT_NEIGHBOURS));
+          colors.push(color);
+          search(Math.min(smallest, ...apart), changed + (colorOf[i] !== undefined && colorOf[i] !== color ? 1 : 0));
+          colors.pop();
+        }
+      };
+      search(Infinity, 0);
+      colorOf = bestColors;
+    }
+
     function pathOfBoundaries(regions) {
       const path = new Path2D();
       const segments = new Map();
@@ -305,7 +402,7 @@
         ctx.lineWidth = 1.5 / canvas.width;
         ctx.lineJoin = "round";
         for (const { winner, path } of regions) {
-          ctx.fillStyle = ctx.strokeStyle = COLORS[winner] ?? "#000";  // winner -1: Condorcet cycle
+          ctx.fillStyle = ctx.strokeStyle = COLORS[colorOf[winner]] ?? "#000";  // winner -1: Condorcet cycle
           ctx.fill(path, "evenodd");  // holes are further rings; even-odd ignores their orientation
           ctx.stroke(path);
         }
@@ -347,7 +444,7 @@
         const [x, y] = toCanvas(candidate);
         ctx.beginPath();
         ctx.arc(x, y, RADIUS, 0, 2 * Math.PI);
-        ctx.fillStyle = COLORS[i];
+        ctx.fillStyle = COLORS[colorOf[i]];
         ctx.fill();
         ctx.lineWidth = 2;
         ctx.strokeStyle = "#000";
@@ -812,6 +909,7 @@
           return;
         }
         candidates.push(confine(point));
+        colorCandidates();
         dragged = candidates.length - 1;
       }
       canvas.setPointerCapture(event.pointerId);  // keep getting moves outside the canvas
@@ -847,7 +945,9 @@
       const i = candidateAt(toUnit(event));
       if (i === -1) return;
       candidates.splice(i, 1);
-      regions = null;  // colours follow the index, which just shifted
+      colorOf.splice(i, 1);
+      colorCandidates();
+      regions = null;  // their winners are indices, which just shifted
       boundaryPath = null;
       draw();
       compute();
@@ -906,6 +1006,7 @@
     // Start: default candidates, distributions and methods (names, tooltips) come from the backend.
     const config = await (await fetch("/api/config")).json();
     candidates = config.candidates;
+    colorCandidates();
     maxCandidates = config.max_candidates;
     pixels = config.pixels;
     dragGrid = config.drag_grid;
