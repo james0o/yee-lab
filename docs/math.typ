@@ -1493,6 +1493,65 @@ at 33% with three levels and at 8% with eleven. D wins 19% of the square against
 under Score, A 30% against 26%; 8% of the square has another winner than under Score, and
 the part not won by the nearest candidate is 5%, as under Score.
 
+*Next to the Voronoi diagram.* A score is a nondecreasing function of the part of the way
+$t_i$ (@eq-range), and the median of a nondecreasing function is the function of the
+median. So as $L$ grows, majority judgment elects the candidate with the highest median
+$t_i$ among the voters of the pixel, whatever $p$: the power only moves where the rounding
+falls. (Candidates A–D at $(0.30, 0.79)$, $(0.72, 0.71)$, $(0.50, 0.50)$ and
+$(0.78, 0.37)$, Beta voters, $D = 0.2$, geometric medians, the error $e$ of @ch-metrics: at
+$L = 16$, the most `score.py` allows, the powers $1$, $1.5$ and $2$ give $0.039$, $0.037$
+and $0.038 %$, at $L = 6$ $0.050$, $0.064$ and $0.044 %$.) The median is a statistic of one candidate alone, so the
+error of majority judgment is not that of a Condorcet method, which is the electorate's
+(@sec-meaning), nor that of Score, whose mean $t_i$ is highest for a candidate in the
+middle of the others.
+
+Majority judgment shortchanges that candidate. A candidate inside the convex hull of the
+others is never the farthest from a voter (the farthest is a corner of the hull) and
+rarely the nearest, so its $t_i$ stays in the middle of the scale whoever the voter is,
+with a median of $0.71$ to $0.74$ at the pixels sampled. It wins only where no rival has
+a higher median, and a rival gets one as soon as about half of the voters have it among the
+closest, which for voters as spread as these happens before the point where the pixel is
+drawn has crossed the Voronoi border. At the pixel drawn at $(0.28, 0.24)$ of the layout
+below with C at $(0.61, 0.61)$, C is the nearest candidate to that point
+($0.499$ against $0.521$ for D) and has the highest mean $t_i$ ($0.741$ against $0.634$),
+but its median is $0.731$ against $0.862$ for D, which a share of $43 %$ of the voters have
+nearest. Majority judgment elects D. A Condorcet method errs the other way, towards the
+candidate in the middle (@sec-meaning). C moves along the diagonal, A, B and D stay;
+$L = 16$, $p = 1.5$, $G = 96$; "gain" is the area C wins minus the area it is nearest to,
+in % of the square:
+
+#align(center, table(
+  columns: 6,
+  align: (left, left, right, right, right, right),
+  stroke: none,
+  table.hline(),
+  [C at], [inside ABD], [MJ $e$ (%)], [MJ gain], [Condorcet $e$ (%)], [Condorcet gain],
+  table.hline(stroke: 0.5pt),
+  [$(0.40, 0.40)$], [no], [$0.028$], [$+0.68$], [$0.019$], [$+0.28$],
+  [$(0.45, 0.45)$], [no], [$0.014$], [$+0.16$], [$0.041$], [$+1.00$],
+  [$(0.50, 0.50)$], [no], [$0.041$], [$-0.79$], [$0.079$], [$+2.11$],
+  [$(0.56, 0.56)$], [no], [$0.161$], [$-2.85$], [$0.104$], [$+3.21$],
+  [$(0.58, 0.58)$], [yes], [$0.362$], [$-6.26$], [$0.089$], [$+3.00$],
+  [$(0.61, 0.61)$], [yes], [$0.586$], [$-8.92$], [$0.092$], [$+0.91$],
+  table.hline(),
+))
+
+The gain of C under majority judgment changes sign near $(0.47, 0.47)$, just outside the
+triangle of the others, and the error is smallest there: a third of that of a Condorcet
+method at $(0.45, 0.45)$. Condorcet's error is the slivers of the electorate, $0.07$ to
+$0.08 %$ at the median of random layouts; inside the triangle majority judgment does not
+reach it. Over $60$ layouts of four
+candidates drawn uniformly from $[0.1, 0.9]^2$ (same settings), the $22$ with a candidate
+inside the triangle of the others have a median $e$ of $0.43 %$ for majority judgment
+against $0.083 %$ for a Condorcet method, and majority judgment is below it in none; the
+shortchanged candidate wins $5.3$ points of the square less than it is nearest to, where
+a Condorcet method gives it $0.6$ more. In the $38$ without one the medians are $0.23 %$
+and $0.074 %$ and majority judgment is below in $2$. A layout where majority judgment
+follows the Voronoi diagram closely is one where no candidate is enclosed and the one
+nearest to the middle sits just outside the triangle of the others. That is a property of
+the layout, not of the method: at $L = 6$ dragging one candidate by $0.1$ changes $e$
+between $0.02$ and $0.21 %$.
+
 *Shares.* $w_i (k)$ comes from the ballot table of @sec-score: `tabulate` with `GRADES`
 gives the share of the voters of every rectangle at each score of each candidate, which
 is weighed with the voters of each pixel as in @eq-grid-share, at the points where the
