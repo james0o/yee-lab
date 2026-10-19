@@ -3816,15 +3816,15 @@ depends on the candidates only, not on the method or the voters, and it is posit
 two candidates or more: at every point at least one of them is not the nearest. The UI
 shows
 
-$ e slash e_"random" , $
+$ sqrt(e slash e_"random") , $
 
 $0 %$ where the nearest candidate wins everywhere and $100 %$ for no better than chance.
 Dividing by $e_"random"$ puts layouts of different difficulty on one scale (more
 candidates, or candidates far apart, make both errors larger); for the same candidates it
 divides every method by the same number, so the ratio of two methods is that of their
-errors $e$. On the default candidates A–E at $D = 0.2$: Condorcet $0.6 %$, IRV $2.0 %$,
+errors $e$ (the square of the ratio of the numbers shown, which the UI squares back). On the default candidates A–E at $D = 0.2$: Condorcet $0.6 %$, IRV $2.0 %$,
 FPTP $5.6 %$ (grid $G = 64$).
 
-The API returns all three, $100 e$, $100 e_"random"$ and $100 e slash e_"random"$, in
+The API returns all three, $100 e$, $100 e_"random"$ and $100 sqrt(e slash e_"random")$, in
 percent, and `null` where nothing is decided.
 

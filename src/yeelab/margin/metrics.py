@@ -50,12 +50,12 @@ def borders(cells):
 
 def voronoi_agreement(candidates, points, winner):
     """The disagreement of the winners `winner` at the `points` with the nearest candidate:
-    {"error": e, "random": e_random, "relative": e / e_random}, e the mean loss of the winners
+    {"error": e, "random": e_random, "relative": sqrt(e / e_random)}, e the mean loss of the winners
     over the area (_losses) and e_random that of a candidate drawn at random at every point,
     both over the decided points only: a cycle (Undecided) is no result, so its points are
     left out of the diagram, as if they were not part of it. None where nothing is decided.
-    relative is 0 where the nearest candidate wins everywhere and 1 for no better than chance;
-    it depends on the candidates less than e does, and e_random > 0 for two candidates or more.
+    relative is 0 where the nearest candidate wins everywhere and 1 for no better than chance,
+    the square root stretching the small errors; it depends on the candidates less than e does, and e_random > 0 for two candidates or more.
     All three in percent."""
     candidates = np.asarray(candidates, dtype=np.float64)
     pairwise = np.linalg.norm(candidates[:, None] - candidates[None, :], axis=-1)
@@ -69,4 +69,4 @@ def voronoi_agreement(candidates, points, winner):
         return {"error": None, "random": None, "relative": None}
     error, chance = np.average(loss[decided], weights=area), np.average(random[decided], weights=area)
     return {"error": float(100 * error), "random": float(100 * chance),
-            "relative": float(100 * error / chance) if chance > 0 else None}
+            "relative": float(100 * np.sqrt(error / chance)) if chance > 0 else None}

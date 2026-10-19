@@ -58,9 +58,9 @@
       <details class="metric-help">
         <summary>How the metrics are calculated</summary>
         <p>At every point x of the diagram, let d<sub>min</sub>(x) be the distance to the nearest candidate, d<sub>a</sub>(x) the distance to the candidate the method elects, r(x) = d<sub>a</sub>(x) − d<sub>min</sub>(x), and L the median distance between two candidates. The loss is ℓ(x) = r(x)/(r(x)+L): 0 where the nearest candidate wins, near 1 where a far one does. Points where no candidate wins (a Condorcet cycle) are no result and are left out.</p>
-        <p>The error e is the mean of ℓ over the area of the diagram, and e<sub>random</sub> the same for a candidate drawn at random at every point (the mean of ℓ over the candidates). The table shows e / e<sub>random</sub>: 0% where the nearest candidate wins everywhere, 100% for no better than chance.</p>
+        <p>The error e is the mean of ℓ over the area of the diagram, and e<sub>random</sub> the same for a candidate drawn at random at every point (the mean of ℓ over the candidates). The table shows √(e / e<sub>random</sub>): 0% where the nearest candidate wins everywhere, 100% for no better than chance.</p>
         <p>The error is computed once a candidate is dropped or a slider let go, not while dragging (—).</p>
-        <p>After switching to another method, the last column shows how many times smaller (green, ↓) or larger (red, ↑) the error is than with the method shown before, for the same candidates and voters.</p>
+        <p>After switching to another method, the last column shows how many times smaller (green, ↓) or larger (red, ↑) the error e is than with the method shown before, for the same candidates and voters.</p>
       </details>
     </div>
     <div class="controls">
@@ -745,7 +745,7 @@
           cell.textContent = "";
           if (error === null || before === null) return;
           const smaller = error < before;
-          const ratio = smaller ? before / error : error / before;
+          const ratio = (smaller ? before / error : error / before) ** 2;  // the table shows a square root of the error
           if (!(ratio >= 1.005)) {  // also both zero (NaN)
             cell.textContent = "=";
             return;

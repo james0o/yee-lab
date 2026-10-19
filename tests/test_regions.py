@@ -184,14 +184,14 @@ def test_loss_is_the_regret_over_regret_plus_the_median_gap():
 
 def test_random_winner_is_the_mean_over_the_candidates():
     """The error of a random winner is the mean of the errors of giving every point to one
-    candidate, whatever the method; relative is the error over it."""
+    candidate, whatever the method; relative is the square root of the error over it."""
     points = _grid_points(50)
     every = [voronoi_agreement(CANDIDATES, points, np.full(points.shape[:2], c))["error"]
              for c in range(len(CANDIDATES))]
     winner = (nearest(CANDIDATES, points)[0] + 1) % len(CANDIDATES)
     result = voronoi_agreement(CANDIDATES, points, winner)
     assert result["random"] == pytest.approx(np.mean(every))
-    assert result["relative"] == pytest.approx(100 * result["error"] / result["random"])
+    assert result["relative"] == pytest.approx(100 * np.sqrt(result["error"] / result["random"]))
 
 
 def test_cycles_are_left_out():
