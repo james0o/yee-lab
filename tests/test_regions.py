@@ -11,10 +11,12 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from matplotlib.path import Path as MplPath
+from scipy.spatial import Voronoi
 
 from yeelab.build import (D21, AntiPlurality, Conditional, Highest, Mix, Plurality, Score, ScoreAvg, ScoreCluster,
                           ScoreComparisons, ScoreDH, ScoreHybrid, Tally, Unbeaten)
-from yeelab.margin.metrics import borders, voronoi_agreement
+from yeelab.margin.metrics import (FOCUS_REACH, FOCUS_ROUND, OUTLINE_STEPS, borders, convex_hull, focus_hull,
+                                   focus_outline, hull_distance, voronoi_agreement)
 from yeelab.margin.regions import MARGINS, grid, nearest, regions, voronoi_borders, winners
 from yeelab.margin.shares import Model, first_choice_shares, ranking_shares, score_comparison_shares, unscored_shares
 from yeelab.voting import CYCLE, irv_rounds
@@ -164,9 +166,9 @@ def _grid_points(size):
 
 def test_metric_is_zero_for_the_voronoi_diagram():
     points = _grid_points(100)
-    result = voronoi_agreement(CANDIDATES, points, nearest(CANDIDATES, points)[0])
-    assert result["error"] == pytest.approx(0) and result["relative"] == pytest.approx(0)
-    assert result["random"] > 0
+    for result in voronoi_agreement(CANDIDATES, points, nearest(CANDIDATES, points)[0], 0.2).values():
+        assert result["error"] == pytest.approx(0) and result["relative"] == pytest.approx(0)
+        assert result["random"] > 0
 
 
 def test_loss_is_the_regret_over_regret_plus_the_median_gap():
@@ -178,7 +180,7 @@ def test_loss_is_the_regret_over_regret_plus_the_median_gap():
     points = _grid_points(60)
     distances = np.linalg.norm(points[..., None, :] - candidates, axis=-1)
     regret = distances[..., 0] - distances.min(axis=-1)
-    result = voronoi_agreement(candidates, points, np.zeros(points.shape[:2], dtype=int))
+    result = voronoi_agreement(candidates, points, np.zeros(points.shape[:2], dtype=int), 0.2)["diagram"]
     assert result["error"] == pytest.approx(100 * np.average(regret / (regret + 0.4), weights=_area_weights(points)))
 
 
@@ -186,10 +188,10 @@ def test_random_winner_is_the_mean_over_the_candidates():
     """The error of a random winner is the mean of the errors of giving every point to one
     candidate, whatever the method; relative is the square root of the error over it."""
     points = _grid_points(50)
-    every = [voronoi_agreement(CANDIDATES, points, np.full(points.shape[:2], c))["error"]
+    every = [voronoi_agreement(CANDIDATES, points, np.full(points.shape[:2], c), 0.2)["diagram"]["error"]
              for c in range(len(CANDIDATES))]
     winner = (nearest(CANDIDATES, points)[0] + 1) % len(CANDIDATES)
-    result = voronoi_agreement(CANDIDATES, points, winner)
+    result = voronoi_agreement(CANDIDATES, points, winner, 0.2)["diagram"]
     assert result["random"] == pytest.approx(np.mean(every))
     assert result["relative"] == pytest.approx(100 * np.sqrt(result["error"] / result["random"]))
 
@@ -208,10 +210,10 @@ def test_cycles_are_left_out():
     loss = regret / (regret + np.median(gaps[np.triu_indices(len(CANDIDATES), 1)]))
     decided, area = winner >= 0, _area_weights(points)
     chosen = np.take_along_axis(loss, np.maximum(winner, 0)[..., None], -1)[..., 0]
-    result = voronoi_agreement(CANDIDATES, points, winner)
+    result = voronoi_agreement(CANDIDATES, points, winner, 0.2)["diagram"]
     assert result["error"] == pytest.approx(100 * np.average(chosen[decided], weights=area[decided]))
     assert result["random"] == pytest.approx(100 * np.average(loss.mean(-1)[decided], weights=area[decided]))
-    assert voronoi_agreement(CANDIDATES, points, np.full(points.shape[:2], CYCLE))["relative"] is None
+    assert voronoi_agreement(CANDIDATES, points, np.full(points.shape[:2], CYCLE), 0.2)["diagram"]["relative"] is None
 
 
 def _to_segments(points, segments):
@@ -384,6 +386,93 @@ def test_d21_takes_the_power_slider_but_not_the_categories():
     assert _score_ballots(ordinal) == [] and _score_ballot_settings(ordinal, 2, 2) == ordinal
 
 
+def test_hull_distance_is_zero_inside_and_the_distance_to_the_border_outside():
+    square = convex_hull(np.array([[0, 0], [1, 0], [1, 1], [0, 1], [0.5, 0.5]], dtype=float))
+    assert len(square) == 4
+    points = np.array([[0.5, 0.5], [0.0, 0.3], [1.5, 0.5], [2.0, 2.0], [0.5, -0.25]])
+    np.testing.assert_allclose(hull_distance(points, square), [0, 0, 0.5, np.sqrt(2), 0.25], atol=1e-12)
+    segment = convex_hull(np.array([[0.2, 0.2], [0.6, 0.2], [0.4, 0.2]]))
+    assert len(segment) == 2
+    np.testing.assert_allclose(hull_distance(np.array([[0.4, 0.5], [0.0, 0.2], [0.8, 0.6]]), segment),
+                               [0.3, 0.2, np.hypot(0.2, 0.4)], atol=1e-12)
+    np.testing.assert_allclose(hull_distance(np.array([[0.5, 0.6]]), convex_hull(np.array([[0.2, 0.2]]))), [0.5])
+
+
+def test_focus_hull_takes_in_the_voronoi_vertices_near_the_candidates():
+    """Four candidates with one inside the triangle of the others: the three Voronoi vertices
+    around it lie outside the hull of the candidates, near it, and are added to it."""
+    candidates = np.array([[0.562, 0.704], [0.297, 0.561], [0.567, 0.399], [0.472, 0.552]])
+    hull = focus_hull(candidates, 0.2)
+    assert len(convex_hull(candidates)) == 3 and len(hull) == 6
+    assert (hull_distance(candidates, hull) == 0).all()
+    assert hull_distance(np.array([[0.2, 0.2]]), hull)[0] > 0
+
+
+def test_focus_hull_leaves_out_far_vertices_and_those_outside_the_square():
+    flat = np.array([[0.2, 0.5], [0.5, 0.59], [0.8, 0.5]])  # one vertex, (0.5, 0.045), 0.455 below them
+    np.testing.assert_array_equal(focus_hull(flat, 0.2), convex_hull(flat))
+    assert len(focus_hull(flat, 0.25)) == 4
+    flatter = np.array([[0.2, 0.5], [0.5, 0.51], [0.8, 0.5]])  # its vertex is below the square
+    assert len(focus_hull(flatter, 100.0)) == 3
+    triangle = np.array([[0.3, 0.3], [0.7, 0.3], [0.5, 0.65]])  # acute: its vertex is inside the hull
+    np.testing.assert_array_equal(focus_hull(triangle, 0.2), convex_hull(triangle))
+    # no vertices: two candidates, or all on one line
+    for line in (np.array([[0.2, 0.2], [0.6, 0.7]]), np.array([[0.1, 0.1], [0.4, 0.4], [0.8, 0.8]])):
+        assert len(focus_hull(line, 0.2)) == 2
+
+
+def test_focus_hull_catches_a_vertex_a_deviation_and_a_third_away():
+    """Three candidates whose Voronoi vertex, (0.437, 0.725), is 0.263 from their hull: 1.3
+    deviations at D = 0.2, within the reach, so the region takes it in."""
+    candidates = np.array([[0.212, 0.406], [0.774, 0.530], [0.425, 0.336]])
+    hull = focus_hull(candidates, 0.2)
+    assert len(hull) == 4
+    assert hull_distance(np.array([[0.437, 0.725]]), hull)[0] == pytest.approx(0, abs=1e-3)
+
+
+def test_focus_hull_reach_is_in_deviations():
+    """A vertex farther than FOCUS_REACH deviations from the hull is left out, a nearer one kept."""
+    candidates = np.array([[0.3, 0.5], [0.7, 0.5], [0.5, 0.6]])
+    vertex = Voronoi(candidates).vertices[0]
+    away = hull_distance(vertex[None], convex_hull(candidates))[0]
+    assert away > 0
+    assert len(focus_hull(candidates, away / FOCUS_REACH * 1.01)) == 4
+    assert len(focus_hull(candidates, away / FOCUS_REACH * 0.99)) == 3
+
+
+def test_focus_outline_is_the_focus_hull_rounded_by_a_quarter_of_the_deviation():
+    candidates = np.array([[0.3, 0.3], [0.7, 0.35], [0.5, 0.7], [0.45, 0.45]])
+    deviation = 0.2
+    outline, hull = focus_outline(candidates, deviation), focus_hull(candidates, deviation)
+    radius = FOCUS_ROUND * deviation
+    assert (hull_distance(hull, outline) == 0).all()  # the hull is inside the outline
+    distances = hull_distance(outline, hull)
+    assert distances.max() == pytest.approx(radius) and distances.min() > radius * np.cos(np.pi / OUTLINE_STEPS) - 1e-12
+
+
+def test_one_metric_averages_over_the_focus_region_the_other_over_the_diagram():
+    """Two candidates, the right one winning everywhere above y = 0.8, far from both: with
+    deviation 0.2 (the region is within 0.05 of the segment) that error is not in the metric of
+    the region, but in that of the diagram. With a region that covers the diagram, the two are
+    the same: one formula."""
+    candidates = np.array([[0.3, 0.5], [0.7, 0.5]])
+    points = _grid_points(100)
+    winner = nearest(candidates, points)[0].copy()
+    winner[points[..., 1] > 0.8] = 1
+    near = voronoi_agreement(candidates, points, winner, 0.2)
+    assert near["region"]["error"] == pytest.approx(0)
+    assert near["diagram"]["error"] > 0
+    assert voronoi_agreement(candidates, points, winner, 1.5)["region"]["error"] > 0  # it reaches y = 0.875
+    assert voronoi_agreement(candidates, points, winner, 10.0)["region"] == near["diagram"]
+
+
+def test_metric_is_none_when_the_region_has_no_decided_point():
+    points = _grid_points(40)
+    winner = np.full(points.shape[:2], CYCLE)
+    nothing = {"error": None, "random": None, "relative": None}
+    assert voronoi_agreement(CANDIDATES, points, winner, 0.2) == {"diagram": nothing, "region": nothing}
+
+
 @pytest.mark.parametrize("distribution", ["beta", "normal"])
 @pytest.mark.parametrize("method", [name for name in DIAGRAMS if name in TESTED_METHODS or name not in MARGINS])
 def test_api_returns_regions(distribution, method):
@@ -396,9 +485,10 @@ def test_api_returns_regions(distribution, method):
     payload = response.json()
     shapes = payload["regions"]
     assert shapes and all(region["polygons"] for region in shapes)
-    metrics = payload["metrics"]
-    assert {"error", "random", "relative"} == set(metrics)
-    assert 0 <= metrics["error"] <= 100 and 0 < metrics["random"] <= 100 and metrics["relative"] >= 0
+    assert {"diagram", "region"} == set(payload["metrics"])
+    for metrics in payload["metrics"].values():
+        assert {"error", "random", "relative"} == set(metrics)
+        assert 0 <= metrics["error"] <= 100 and 0 < metrics["random"] <= 100 and metrics["relative"] >= 0
     overlays = payload["overlays"]
     assert overlays["voronoi_boundaries"]
     assert all(len(segment) == 4
@@ -411,8 +501,8 @@ def test_api_reports_perfect_metrics_for_voronoi():
     })
 
     assert response.status_code == 200
-    metrics = response.json()["metrics"]
-    assert metrics["error"] == pytest.approx(0) and metrics["relative"] == pytest.approx(0)
+    for metrics in response.json()["metrics"].values():
+        assert metrics["error"] == pytest.approx(0) and metrics["relative"] == pytest.approx(0)
 
 
 @pytest.mark.parametrize("pixel_median", ["marginal", "geometric"])
@@ -425,7 +515,8 @@ def test_api_compares_with_voronoi_only_when_asked(pixel_median):
     overlay = client.post("/api/regions", json={**request, "metrics": False}).json()
 
     assert bare["regions"] == overlay["regions"] == full["regions"]
-    assert bare["metrics"] is None and bare["overlays"] == {}
+    assert bare["metrics"] is None and set(bare["overlays"]) == {"focus"}
+    assert bare["overlays"]["focus"] == full["overlays"]["focus"]
     assert overlay["metrics"] is None
     assert overlay["overlays"]["voronoi_boundaries"] == full["overlays"]["voronoi_boundaries"]
     assert client.post("/api/regions", json={**request, "overlay": False}).json()["metrics"] == full["metrics"]

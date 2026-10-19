@@ -52,13 +52,14 @@
       <table id="metrics" title="Lower is better.">
         <thead><tr><th>Voronoi disagreement</th><th>Error</th><th id="compared"></th></tr></thead>
         <tbody>
-          <tr><td>Error relative to a random winner</td><td id="metric-assignment">—</td><td></td></tr>
+          <tr><td>Error relative to a random winner, whole diagram</td><td id="metric-diagram">—</td><td></td></tr>
+          <tr><td>Error relative to a random winner, around the candidates</td><td id="metric-region">—</td><td></td></tr>
         </tbody>
       </table>
       <details class="metric-help">
         <summary>How the metrics are calculated</summary>
         <p>At every point x of the diagram, let d<sub>min</sub>(x) be the distance to the nearest candidate, d<sub>a</sub>(x) the distance to the candidate the method elects, r(x) = d<sub>a</sub>(x) − d<sub>min</sub>(x), and L the median distance between two candidates. The loss is ℓ(x) = r(x)/(r(x)+L): 0 where the nearest candidate wins, near 1 where a far one does. Points where no candidate wins (a Condorcet cycle) are no result and are left out.</p>
-        <p>The error e is the mean of ℓ over the area of the diagram, and e<sub>random</sub> the same for a candidate drawn at random at every point (the mean of ℓ over the candidates). The table shows √(e / e<sub>random</sub>): 0% where the nearest candidate wins everywhere, 100% for no better than chance.</p>
+        <p>The error e is the mean of ℓ over an area, and e<sub>random</sub> the same for a candidate drawn at random at every point (the mean of ℓ over the candidates). The table shows √(e / e<sub>random</sub>): 0% where the nearest candidate wins everywhere, 100% for no better than chance. It does so twice, with the same formula over two areas: the whole diagram, and the region around the candidates (dashed outline, “metrics region” under “Show on diagram”): the convex hull of the candidates and of the Voronoi vertices near them (where three cells or more meet), with a margin of a quarter of the deviation around it. Far from every candidate all methods agree, and those points dilute the whole-diagram error.</p>
         <p>The error is computed once a candidate is dropped or a slider let go, not while dragging (—).</p>
         <p>After switching to another method, the last column shows how many times smaller (green, ↓) or larger (red, ↑) the error e is than with the method shown before, for the same candidates and voters.</p>
       </details>
@@ -71,7 +72,7 @@
       </div>
       <div class="choices"><span>Show on diagram:</span>
         <label><input type="checkbox" id="showBoundaries">diagram + Voronoi boundaries</label>
-        <label><input type="checkbox" id="showHull">candidate convex hull</label>
+        <label title="The second metric averages over this region: the candidates and the Voronoi vertices near them, enclosed by their convex hull, and a margin of a quarter of the deviation around it."><input type="checkbox" id="showFocus">metrics region</label>
       </div>
       <div class="choices"><span>Deviation:</span><input type="range" id="deviation"><output id="deviationValue"></output></div>
       <div class="choices" id="spreadPowerRow"><span>Beta spread p:</span><input type="range" id="spreadPower"><output id="spreadPowerValue"></output></div>
@@ -104,7 +105,7 @@
     const canvas = document.getElementById("square");
     const ctx = canvas.getContext("2d");
     const message = document.getElementById("message");
-    const assignmentMetric = document.getElementById("metric-assignment");
+    const metricCells = ["metric-diagram", "metric-region"].map(id => document.getElementById(id));
     const compared = document.getElementById("compared");  // the header of the ratio column
     // The errors of the last fine diagram ({key, method, errors}) and of the method it is
     // compared with, the one shown before for the same key (all but the method).
@@ -130,7 +131,7 @@
     const showMarginal = document.getElementById("showMarginal");  // the strip above the square
     const showJoint = document.getElementById("showJoint");        // the shade over it while hovering
     const showBoundaries = document.getElementById("showBoundaries");
-    const showHull = document.getElementById("showHull");
+    const showFocus = document.getElementById("showFocus");
     // each curve is scaled so its peak sits at 1 / HEADROOM of the strip, whatever its height
     const HEADROOM = 1.1;
     const SAMPLES = 500;    // points per density curve
@@ -204,6 +205,7 @@
     let regions = null;   // last computed win regions [{winner, path}], path a Path2D in the unit square
     let boundaryPath = null;
     let voronoiBoundaries = [];
+    let focusOutline = [];  // border of the region the metrics average over, [x0, y0, x1, y1, ...]
     let dragged = -1;     // index of the candidate being dragged
     let dragGrid = 0, finalGrid = 0;  // grid the backend traces regions on: while dragging, after
     let inFlight = false; // a request is on its way; at most one is, so a drag never queues up
@@ -374,25 +376,6 @@
       ctx.setLineDash([]);
     }
 
-    function convexHull(points) {
-      const sorted = [...new Map(points.map(point => [point.join(","), point])).values()]
-        .sort(([ax, ay], [bx, by]) => ax - bx || ay - by);
-      if (sorted.length < 2) return sorted;
-      const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-      const half = values => {
-        const result = [];
-        for (const point of values) {
-          while (result.length > 1 && cross(result[result.length - 2], result[result.length - 1], point) <= 0) {
-            result.pop();
-          }
-          result.push(point);
-        }
-        return result;
-      };
-      const lower = half(sorted), upper = half([...sorted].reverse());
-      return lower.slice(0, -1).concat(upper.slice(0, -1));
-    }
-
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (regions) {
@@ -415,28 +398,24 @@
         ctx.drawImage(densityCanvas, DENSITY_EDGE, DENSITY_EDGE, DENSITY_GRID, DENSITY_GRID,
           0, 0, canvas.width, canvas.height);
       }
-      if ((showBoundaries.checked && regions) || (showHull.checked && candidates.length)) {
+      if ((showBoundaries.checked && regions) || (showFocus.checked && focusOutline.length)) {
         ctx.save();
         ctx.setTransform(canvas.width, 0, 0, -canvas.height, 0, canvas.height);
         drawBoundaryOverlay();
-        if (showHull.checked && candidates.length) {
-          const hull = convexHull(candidates);
-          if (hull.length) {
-            const hullPath = new Path2D();
-            hullPath.moveTo(...hull[0]);
-            for (const point of hull.slice(1)) hullPath.lineTo(...point);
-            if (hull.length >= 3) hullPath.closePath();
-            ctx.lineJoin = "round";
-            ctx.strokeStyle = "#111";
-            ctx.lineWidth = 4 / canvas.width;
-            ctx.setLineDash([8 / canvas.width, 5 / canvas.width]);
-            ctx.stroke(hullPath);
-            ctx.strokeStyle = "#00e5ff";
-            ctx.lineWidth = 2 / canvas.width;
-            ctx.setLineDash([8 / canvas.width, 5 / canvas.width]);
-            ctx.stroke(hullPath);
-            ctx.setLineDash([]);
-          }
+        if (showFocus.checked && focusOutline.length) {
+          const focusPath = new Path2D();
+          focusPath.moveTo(focusOutline[0], focusOutline[1]);
+          for (let i = 2; i < focusOutline.length; i += 2) focusPath.lineTo(focusOutline[i], focusOutline[i + 1]);
+          focusPath.closePath();
+          ctx.lineJoin = "round";
+          ctx.strokeStyle = "#111";
+          ctx.lineWidth = 4 / canvas.width;
+          ctx.setLineDash([8 / canvas.width, 5 / canvas.width]);
+          ctx.stroke(focusPath);
+          ctx.strokeStyle = "#00e5ff";
+          ctx.lineWidth = 2 / canvas.width;
+          ctx.stroke(focusPath);
+          ctx.setLineDash([]);
         }
         ctx.restore();
       }
@@ -743,7 +722,7 @@
       draw();
     });
     showBoundaries.addEventListener("change", draw);
-    showHull.addEventListener("change", draw);
+    showFocus.addEventListener("change", draw);
 
     // Win regions as a Path2D: every ring of every polygon, [x0, y0, x1, y1, ...] in the unit square.
     function toPath(polygons) {
@@ -817,19 +796,20 @@
             winner, polygons, path: toPath(polygons),
           }));
           voronoiBoundaries = answer.overlays.voronoi_boundaries ?? [];
+          focusOutline = answer.overlays.focus;
           boundaryPath = null;
           draw();
           describe(...sliders.slice(0, 5), Math.round(performance.now() - start), Math.round(answer.ms));
           let errors = null;  // a coarse drag has none, and is not compared
           if (measured) {
-            errors = [answer.metrics.relative];
+            errors = [answer.metrics.diagram.relative, answer.metrics.region.relative];
             if (shown?.key !== key) previous = null;
             else if (shown.method !== method) previous = shown;
             shown = { key, method, errors };
           }
           const against = measured ? previous : null;
           compared.textContent = against ? `vs ${labels[against.method]}` : "";
-          [assignmentMetric].forEach((cell, i) => {
+          metricCells.forEach((cell, i) => {
             if (!errors) cell.textContent = "—";
             else cell.textContent = errors[i] === null ? "n/a" : `${errors[i].toFixed(1)}%`;
             showRatio(cell.nextElementSibling, errors?.[i] ?? null, against?.errors[i] ?? null);

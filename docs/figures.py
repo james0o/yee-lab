@@ -17,7 +17,7 @@ from matplotlib.colors import LinearSegmentedColormap, LogNorm
 from matplotlib.patches import PathPatch
 from matplotlib.path import Path as MplPath
 from scipy import ndimage
-from scipy.spatial import ConvexHull
+from scipy.spatial import ConvexHull, Voronoi
 from scipy.special import betainc, ndtr, ndtri
 from scipy.stats import beta as beta_dist
 
@@ -27,6 +27,7 @@ from yeelab.build import (PAIRWISE, Bullet, Burial, Compromise, Graded, Highest,
 from yeelab.build.judgment import majority_grades, majority_totals
 from yeelab.build.methods import METHODS as BUILD_METHODS
 from yeelab.margin.geometric import geometric_median_at, geometric_medians
+from yeelab.margin.metrics import FOCUS_REACH, convex_hull, focus_outline, hull_distance
 from yeelab.margin.regions import MARGINS, grid, nearest, regions, winners
 from yeelab.margin.regions import voters as voters_at
 from yeelab.margin.shares import Model, pairwise_shares, ranking_shares
@@ -1156,6 +1157,49 @@ def score_against_voronoi(layouts=60, size=64):
             print(f"  {levels} levels, {name:12s} {np.mean(wrong):.1%}  {np.mean(lost):.2f}")
 
 
+def metric_region():
+    """The region the metrics average over (margin/metrics.py) for four layouts, over their
+    Voronoi diagrams, D = 0.2: the hull of the candidates (grey), the Voronoi vertices
+    inside the square and within FOCUS_REACH * D of it (diamonds) and those left out (crosses),
+    and the border of the region, the hull of both rounded by D / 4."""
+    layouts = [
+        ("two candidates", [[0.614, 0.792], [0.245, 0.336]]),
+        ("a candidate in the middle", [[0.562, 0.704], [0.297, 0.561], [0.567, 0.399], [0.472, 0.552]]),
+        ("cluster and outlier", [[0.42, 0.45], [0.50, 0.52], [0.53, 0.42], [0.86, 0.82]]),
+        ("nearly in line: a far vertex", [[0.2, 0.5], [0.5, 0.59], [0.8, 0.5]]),
+    ]
+    fig, axes = plt.subplots(1, len(layouts), figsize=(14, 3.9), layout="constrained")
+    for ax, (title, points) in zip(axes, layouts):
+        candidates = np.array(points)
+        coords = (np.arange(400) + 0.5) / 400
+        cells = nearest(candidates, np.stack(np.meshgrid(coords, coords, indexing="xy"), axis=-1))[0]
+        ax.imshow(np.array([matplotlib.colors.to_rgb(color) for color in PALETTE])[cells], origin="lower",
+                  extent=(0, 1, 0, 1), alpha=0.45)
+        ax.scatter(*candidates.T, c=PALETTE[:len(candidates)], s=45, edgecolors="k", linewidths=1, zorder=5)
+        for name, (x, y) in zip(NAMES, candidates):
+            ax.annotate(name, (x + 0.015, y + 0.015), weight="bold", fontsize=9, zorder=5)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_title(title, fontsize=10)
+        hull = convex_hull(candidates)
+        ax.plot(*np.vstack([hull, hull[:1]]).T, color="0.35", lw=1, ls="--", zorder=2)
+        try:
+            vertices = Voronoi(candidates).vertices
+        except Exception:  # fewer than three candidates
+            vertices = np.empty((0, 2))
+        inside = ((vertices >= 0) & (vertices <= 1)).all(axis=1)
+        kept = inside & (hull_distance(vertices, hull) <= FOCUS_REACH * UI_DEVIATION)
+        ax.scatter(*vertices[kept].T, marker="D", s=40, c="w", edgecolors="k", linewidths=1.2, zorder=4)
+        ax.scatter(*vertices[inside & ~kept].T, marker="x", s=40, c="k", linewidths=1.5, zorder=4)
+        outline = focus_outline(candidates, UI_DEVIATION)
+        ax.plot(*np.vstack([outline, outline[:1]]).T, color="k", lw=2, zorder=3)
+        ax.set_aspect("equal")
+        ax.set_xticks([])
+        ax.set_yticks([])
+    _save_figure(fig, "metric_region")
+    plt.close(fig)
+
+
 # the shares of bullet voters in the figure, and those the text quotes for every method
 def _judgment(levels, power):
     return Highest(Tally(Score(levels, power=power), statistic="median"))
@@ -1300,6 +1344,7 @@ if __name__ == "__main__":
     approval()
     score_voting()
     score_against_voronoi()
+    metric_region()
     majority_judgment()
     bullet()
     burial()

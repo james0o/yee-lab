@@ -22,7 +22,7 @@ from yeelab.build import (D21, Bullet, Burial, Compromise, Score, ScoreCompariso
 from yeelab.build.methods import SCORE_POWER
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
-from yeelab.margin.metrics import borders, voronoi_agreement
+from yeelab.margin.metrics import borders, focus_outline, voronoi_agreement
 from yeelab.margin.regions import MARGINS, diagram, regions, voronoi_borders
 from yeelab.margin.shares import PIXELS, Model
 from yeelab.normal import sigma_from_deviation
@@ -387,7 +387,7 @@ def _warm_up():
     regions(Burial(Compromise(MARGINS["star"], 0.5), 0.5), CANDIDATES, Model("beta", DEVIATION, SPREAD), 32)
     # the kernel of the comparison with the Voronoi diagram
     shapes, points, winner, _ = diagram(DIAGRAMS[0], CANDIDATES, Model("beta", DEVIATION, SPREAD), 32)
-    voronoi_agreement(CANDIDATES, points, winner)
+    voronoi_agreement(CANDIDATES, points, winner, DEVIATION)
 
 
 WARM_UP = threading.Thread(target=_warm_up, daemon=True)  # tests wait for it (tests/conftest.py)
@@ -470,12 +470,13 @@ def config():
 @app.post("/api/regions")
 def diagram_regions(request: DiagramRequest):
     """Win region of every winner as polygons in the unit square (y up):
-    {"regions": [{"winner": c, "polygons": [[outer, hole, ...], ...]}], "metrics": ...,
-    "overlays": {"voronoi_boundaries": ...}, "ms": ...}, rings flat [x0, y0, x1, y1, ...],
+    {"regions": [{"winner": c, "polygons": [[outer, hole, ...], ...]}], "metrics": {"diagram": ..., "region": ...},
+    "overlays": {"focus": ..., "voronoi_boundaries": ...}, "ms": ...}, rings flat [x0, y0, x1, y1, ...],
     outer rings counter-clockwise and holes clockwise. winner is -1 (voting.CYCLE) for a
     Condorcet cycle. `bullet` of the voters bullet vote, and of the others `burial` bury and
     `compromise` compromise (strategic). metrics is null unless `metrics`, and the
-    overlays have no voronoi_boundaries unless `overlay`."""
+    overlays have no voronoi_boundaries unless `overlay`. focus is always there: the border
+    of the region that the metrics of "region" average over, [x0, y0, x1, y1, ...] counter-clockwise."""
     start = time.perf_counter()
     spread = _spread_rule(request.spread_power) if request.distribution == "beta" else None
     model = Model(request.distribution, request.deviation, spread)
@@ -490,9 +491,11 @@ def diagram_regions(request: DiagramRequest):
     shapes, points, winner, _ = diagram(
         method, request.candidates, model, request.grid, request.pixel_median, request.shift
     )
-    payload = {"regions": shapes, "metrics": None, "overlays": {}}
+    focus = focus_outline(request.candidates, request.deviation)
+    payload = {"regions": shapes, "metrics": None,
+               "overlays": {"focus": np.round(focus, 5).ravel().tolist()}}
     if request.metrics:
-        payload["metrics"] = voronoi_agreement(request.candidates, points, winner)
+        payload["metrics"] = voronoi_agreement(request.candidates, points, winner, request.deviation)
     if request.overlay:  # [x0, y0, x1, y1] per segment
         # the Voronoi diagram is drawn with its own borders; the others with the exact ones,
         # which its traced borders only miss next to a point where three meet

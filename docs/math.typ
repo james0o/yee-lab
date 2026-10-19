@@ -3827,19 +3827,21 @@ there when the pixels go back to their medians along the axes.
 = Comparing a diagram with Voronoi <ch-metrics>
 
 The web UI scores a method's diagram against the Voronoi diagram of the same candidates:
-how far, at each point, the elected candidate is from the nearest one. Each metric has a
-section of its own below; there is one so far, and others can be added next to it.
+how far, at each point, the elected candidate is from the nearest one. The region the
+metrics average over has a section of its own, and so has each metric; there is one so
+far, and others can be added next to it.
 
 What all metrics share:
 
 - *When.* The UI computes them only for the diagram on the fine grid ($G = 320$,
   @sec-tracing), once a candidate is dropped or a slider let go. While a candidate is
   dragged it shows none: the comparison takes longer than most methods themselves.
-- *Where.* A metric is an average over the area of the diagram: every grid point counts
-  with the area it represents (the trapezoidal weights of the grid, which follow the moved
-  grid when pixels are at geometric medians, @ch-geometric). Points where no candidate wins,
-  a Condorcet cycle or `Undecided()`, are no result and are left out, as if they were not
-  part of the diagram.
+- *Where.* A metric is an average over an area, and the UI shows each metric twice, with
+  the same formula: over the whole diagram, and over the region $R$ around the candidates
+  (@sec-metric-region). Every grid point of the area counts with the area it represents (the trapezoidal weights of the grid, which follow the moved grid when pixels
+  are at geometric medians, @ch-geometric). Points where no candidate wins, a Condorcet
+  cycle or `Undecided()`, are no result and are left out, as if they were not part of the
+  diagram.
 - *Comparing methods.* The errors have a true zero, so two methods are compared by their
   ratio: an error of 2 % against 6 % is three times smaller. After switching methods the UI
   shows that ratio for the same candidates and voters. Errors near zero are dominated by
@@ -3848,6 +3850,47 @@ What all metrics share:
   as one voter at its point. For a Condorcet method the whole error is the slivers of
   @sec-meaning, where a majority prefers a candidate other than the nearest: the error
   measures the electorate there, not the method.
+
+== Where the metrics average (`margin/metrics.py`) <sec-metric-region>
+
+Far from every candidate the electorate sits next to one of them, and every method elects
+it: those points all agree with the Voronoi diagram, and averaging over them would only
+dilute the error by an amount that depends on how much of the square the candidates leave
+empty. So next to the metric over the whole diagram there is the same metric over the
+region $R$ around the candidates, an average taken where a method has something to
+decide; where the candidates leave much of the square empty the two differ most. $R$ is
+built from the candidates
+$c_1, dots, c_C$ and the Voronoi vertices (the points where three cells or more meet, where
+an electorate is most divided between candidates) in three steps, with $D$ the deviation
+of the voters:
+
++ Let $H_0$ be the convex hull of the candidates, and $V$ the Voronoi vertices that lie in
+  the unit square at a distance of at most $2D$ from $H_0$. A vertex farther away is left
+  out: nearly collinear candidates put a vertex far from all of them, and a single one
+  would stretch the region over the diagram (the far vertex of the last panel of
+  @fig-metric-region). Vertices beyond the square are left out too, and two candidates, or
+  candidates on a line, have none.
++ Let $H$ be the convex hull of the candidates and $V$.
++ $R$ is the set of points at a distance of at most $D slash 4$ from $H$, the hull with a
+  disc of that radius rolled around it.
+
+$ R = { x : op("dist")(x, H) <= D slash 4 } . $
+
+#figure(
+  image("figures/metric_region.png", width: 100%),
+  caption: [The region of the metrics (black) for four layouts at $D = 0.2$, over their
+    Voronoi diagrams. Dashed: the hull of the candidates; diamonds: the Voronoi vertices
+    added to it; cross: a vertex left out as too far.],
+) <fig-metric-region>
+
+$R$ is convex, so it is one piece without holes, with an inner part for any number of
+candidates: a stadium for two. The distance to a convex polygon is the distance to its
+nearest edge, and $0$ inside (`hull_distance`); the UI draws the border of $R$ (the
+checkbox _metrics region_) as the polygon of the hull's vertices with a circle of 64
+corners around each (`focus_outline`), with the metrics themselves using the exact
+distance. The radius $D slash 4$ and the reach $2D$ are in units of the deviation, so the
+region grows with the spread of the voters, which is how far from the candidates an
+electorate can be and still be torn between them.
 
 == Error relative to a random winner (`margin/metrics.py`)
 
@@ -3865,7 +3908,7 @@ $ ell_c (x) = (r_c (x)) / (r_c (x) + L) , $
 $0$ for the nearest candidate and approaching $1$ for a far one; for small regrets
 $ell approx r slash L$, the extra distance in typical gaps between candidates. With $a(x)$
 the elected candidate and $A(x)$ the area of the grid point, over the decided points
-$Omega$:
+$Omega$ of an area, the whole diagram or the region $R$:
 
 $ e = (sum_(x in Omega) A(x) ell_(a(x)) (x)) / (sum_(x in Omega) A(x)) , quad
   e_"random" = (sum_(x in Omega) A(x) 1/C sum_c ell_c (x)) / (sum_(x in Omega) A(x)) . $
@@ -3881,9 +3924,14 @@ $0 %$ where the nearest candidate wins everywhere and $100 %$ for no better than
 Dividing by $e_"random"$ puts layouts of different difficulty on one scale (more
 candidates, or candidates far apart, make both errors larger); for the same candidates it
 divides every method by the same number, so the ratio of two methods is that of their
-errors $e$ (the square of the ratio of the numbers shown, which the UI squares back). On the default candidates A–E at $D = 0.2$: Condorcet $0.6 %$, IRV $2.0 %$,
-FPTP $5.6 %$ (grid $G = 64$).
+errors $e$ (the square of the ratio of the numbers shown, which the UI squares back). On the default candidates A–E at $D = 0.2$ (grid $G = 64$), the error $e$ over the
+whole diagram is $0.21 %$ for Condorcet, $0.68 %$ for IRV and $1.9 %$ for FPTP, and
+over $R$ it is $0.23 %$, $3.6 %$ and $9.2 %$: the nearest candidate wins most of the
+square, far from the candidates, for every method. The UI shows the square roots over
+$e_"random"$: $8 %$, $14 %$ and $24 %$ over the whole diagram, $9 %$, $35 %$ and
+$56 %$ over $R$.
 
 The API returns all three, $100 e$, $100 e_"random"$ and $100 sqrt(e slash e_"random")$, in
-percent, and `null` where nothing is decided.
+percent, for both areas (`metrics.diagram` and `metrics.region`), and `null` where nothing
+is decided in the area; with them the border of $R$ (`overlays.focus`) for the UI to draw.
 

@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(uv run *)"
+      "Bash(uv run *)",
+      "Bash(sed -i *",
+      "Bash(time uv run python *)",
+      "Bash(python3 -)",
+      "Bash(uv run python -c ' *)",
+      "Bash(time uv run python /tmp/shapes/preview3.py)",
+      "Bash(git stash *)",
+      "Bash(pdftotext docs/math.pdf -)",
+      "Bash(pdftoppm -f 68 -l 68 -r 70 -png docs/math.pdf /tmp/shapes/page)"
     ]
   }
 }
