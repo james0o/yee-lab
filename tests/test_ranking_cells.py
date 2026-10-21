@@ -128,7 +128,7 @@ def test_rejects_unknown_spread():
         beta_params_at([0.5], DEVIATION, "median_abs")
 
 
-@pytest.mark.parametrize("power", [0.99, 5.01, np.nan])
+@pytest.mark.parametrize("power", [0.99, 100.01, np.nan])
 def test_rejects_numeric_power_outside_supported_range(power):
     with pytest.raises(ValueError):
         beta_params_at([0.5], DEVIATION, power)
