@@ -2,9 +2,9 @@
 
     from yeelab.build import (AntiPlurality, BordaCount, Bullet, Burial, Compromise, D21, DescendingCoalitions,
                               Conditional, Eliminate,
-                              Highest, Margins, Mix, Pairwise, Plurality, Score,
+                              Highest, Lead, Margins, Mix, Pairwise, Plurality, Score,
                               ScoreAvg, ScoreCluster, ScoreComparisons, ScoreDH, ScoreHybrid,
-                              StrongestPaths, Tally, Unbeaten, Weakest)
+                              Smith, StrongestPaths, Tally, Top, Unbeaten, Weakest)
 
     borda   = Highest(Tally(BordaCount()))
     fptp    = Highest(Tally(Plurality()))   # = Eliminate(Tally(Plurality()), how="all")
@@ -22,6 +22,16 @@
     koth    = Unbeaten(M, against=fptp, order=Tally(Plurality()))  # king of the hill
     # the two finalists head to head; a tie is a draw (no one, voting.CYCLE)
     two_round = Unbeaten(M, among=Highest(Tally(Plurality()), n=2))
+    # FPTP where someone has 55% of the first choices, else the two-round system; Borda
+    # where its winner leads by 2% of the C - 1 points, else Schulze (totals from 0 to 1)
+    Conditional(Top(Tally(Plurality())) > 0.55, fptp, two_round)
+    Conditional(Lead(Tally(BordaCount())) > 0.02, borda, schulze)
+    # instant runoff in the Smith set, the smallest set of candidates who each beat every
+    # candidate outside it
+    smith_irv = Eliminate(Tally(Plurality()), how="min", among=Smith(M))
+    # the same where a candidate beats another only with 55% of the voters: IRV decides
+    # among all who are not beaten so
+    Eliminate(Tally(Plurality()), how="min", among=Smith(M, majority=0.55))
 
     # the highest mean score of 0 to 5, each voter's by where the distance is between the
     # closest and the farthest candidate, that part of the way to the power 1.5
@@ -30,6 +40,7 @@
     # majority judgment: the highest median score, ties by Balinski and Laraki's tie-break
     mj    = Highest(Tally(ballot, statistic="median"))
     star  = Unbeaten(ScoreComparisons(ballot), among=Highest(Tally(ballot), n=2))
+    smith_score = Highest(Tally(ballot), among=Smith(M))  # the highest mean score in the Smith set
     # any of them where 30% of the voters bullet vote: their first choice first and all
     # other candidates equal below it
     Bullet(borda, share=0.3)
@@ -48,7 +59,7 @@
     chosen, margin = Highest(Tally(ballot), n=2).select(voters)  # several candidates: a mask
 
     blocks      the blocks, their types (Ballot, CandidateTotals, PairDiffs, PairShares,
-                Winner) and how each computes
+                Winner, Measure, Condition) and how each computes
     judgment    the majority judgment of a score ballot, compiled: the order and the
                 totals of Tally(ballot, statistic="median")
     strategic   the methods where some of the voters vote strategically: Bullet, Burial,
@@ -68,7 +79,9 @@ from yeelab.build.blocks import (
     Eliminate,
     Conditional,
     Highest,
+    Lead,
     Margins,
+    Measure,
     Mix,
     PairDiffs,
     PairShares,
@@ -80,8 +93,10 @@ from yeelab.build.blocks import (
     ScoreCluster,
     ScoreDH,
     ScoreHybrid,
+    Smith,
     StrongestPaths,
     Tally,
+    Top,
     Unbeaten,
     Undecided,
     Union,
@@ -95,8 +110,9 @@ from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Ballots, Graded, Score
 __all__ = [
     "AntiPlurality", "Ballot", "Ballots", "BordaCount", "Bullet", "Burial", "CandidateTotals", "Compromise",
     "D21", "DescendingCoalitions",
-    "Conditional", "Eliminate", "Highest", "Margins", "Mix", "PairDiffs", "PairShares", "Pairwise",
-    "Plurality", "Score", "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH",
-    "ScoreHybrid", "StrongestPaths", "Tally", "Unbeaten", "Undecided", "Union", "Weakest", "Winner", "METHODS",
+    "Conditional", "Eliminate", "Highest", "Lead", "Margins", "Measure", "Mix", "PairDiffs", "PairShares",
+    "Pairwise", "Plurality", "Score", "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH",
+    "ScoreHybrid", "Smith", "StrongestPaths", "Tally", "Top", "Unbeaten", "Undecided", "Union", "Weakest",
+    "Winner", "METHODS",
     "FIRST", "PAIRWISE", "PROFILE", "Graded", "Scored", "ScoredPairwise", "Share", "Voters",
 ]

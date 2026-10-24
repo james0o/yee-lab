@@ -24,7 +24,12 @@ Every block has one type of output:
                      DescendingCoalitions(),
                      Unbeaten(diffs, among=...),
                      Unbeaten(diffs, against=winner, order=totals),
+                     Smith(diffs, majority=...),
                      Conditional(condition, when_true, when_false), Undecided(), first | second
+    Measure          Top(totals), Lead(totals)          a number from 0 to 1 at every point
+    Condition        winner == winner, winner != winner,  true or false at every point,
+                     measure > t, measure < t,          for Conditional
+                     condition & condition, condition | condition
 
 A ranked ballot gives weight(k, C) points to the candidate at position k (0 = closest)
 of C; both count only the remaining candidates, and a higher total is better. A score
@@ -82,7 +87,24 @@ one. A tie is exact, so it is only ever on a border, where the margin is 0. STAR
 
 the finalist more voters score higher. first | second (Union) chooses the candidates either one does: the winners of two
 methods as the finalists of a runoff. Highest(totals, among=finalists) is the highest
-total among them, a Tally counted again among them.
+total among them, a Tally counted again among them. Smith(diffs) chooses the Smith set,
+the smallest set of candidates who each beat every candidate outside it; Smith//IRV is
+
+    Eliminate(Tally(Plurality()), how="min", among=Smith(Margins(Pairwise())))
+
+With majority=0.55 a candidate beats another only with 55% of the voters, and the set
+grows to the candidates who are not beaten so.
+
+Conditional(condition, when_true, when_false) chooses by a Condition: two winners
+compared, winner == winner, or a Measure against a threshold t from 0 to 1. Top(totals)
+is the highest total and Lead(totals) its lead over the second, of a Tally of the mean,
+normalised by its ballot to 0 to 1 (Ballot.bounds: Borda over C - 1, a score ballot
+plus 1), so that a threshold means the same for any ballot and number of candidates:
+
+    Conditional(Top(Tally(Plurality())) > 0.55, fptp, two_round)
+
+is FPTP where someone has 55 % of the first choices, else the two-round system. & and |
+combine conditions.
 
 DescendingCoalitions() is descending acquiescing coalitions (DAC): every set of
 candidates scores the share of the voters who rank all of it above all others, and from
@@ -154,16 +176,41 @@ def _off_diagonal(diffs: np.ndarray, fill: float) -> np.ndarray:
     return np.where(np.eye(diffs.shape[-1], dtype=bool), fill, diffs)
 
 
-def _paths(diffs: np.ndarray) -> np.ndarray:
-    """p - p^T for diffs s (..., C, C), where p[c, e] is the strength of the strongest
-    path from c to e over the diffs max(s, 0): the largest, over the paths, of the
+def _strengths(diffs: np.ndarray) -> np.ndarray:
+    """p (..., C, C) for diffs s (..., C, C): p[c, e] is the strength of the strongest
+    path from c to e over the diffs max(s, 0), the largest, over the paths, of the
     smallest diff along it (Floyd-Warshall)."""
     p = np.maximum(diffs, 0.0)
     through = np.empty_like(p)
     for k in range(p.shape[-1]):  # in place: row and column k do not change in step k (p[k, k] = 0)
         np.minimum(p[..., :, k, None], p[..., None, k, :], out=through)
         np.maximum(p, through, out=p)
+    return p
+
+
+def _paths(diffs: np.ndarray) -> np.ndarray:
+    """p - p^T for diffs s (..., C, C), with p the strengths of the strongest paths
+    (_strengths)."""
+    p = _strengths(diffs)
     return p - np.swapaxes(p, -1, -2)
+
+
+def _smith(diffs: np.ndarray, by: float = 0.0) -> Result:
+    """(chosen (..., C), margin) of Smith for diffs s (..., C, C), where c beats e if
+    s[c, e] > by (see there)."""
+    n = diffs.shape[-1]
+    reach = diffs >= -by  # e does not beat c, c itself too: s[c, c] = 0
+    for k in range(n):  # in place, as in _strengths: row and column k do not change in step k
+        reach |= reach[..., :, k, None] & reach[..., None, k, :]
+    smith = reach.all(axis=-1)
+    across = smith[..., :, None] & ~smith[..., None, :]
+    margin = np.where(across, diffs - by, np.inf).min(axis=(-2, -1))
+    several = smith.sum(axis=-1) > 1  # the paths inside, only where there are two or more
+    if several.any():
+        inside = smith[several][..., :, None] & smith[several][..., None, :] & ~np.eye(n, dtype=bool)
+        strengths = _strengths(_off_diagonal(diffs[several] + by, 0.0))
+        margin[several] = np.minimum(margin[several], np.where(inside, strengths, np.inf).min(axis=(-2, -1)))
+    return smith, margin
 
 
 def _unbeaten(diffs: np.ndarray, transitive: bool, running: np.ndarray | None = None) -> Result:
@@ -232,6 +279,11 @@ class Ballot(Block):
         which counts down from 1: Score.tally)."""
         raise NotImplementedError
 
+    def bounds(self, n: int) -> tuple[float, float]:
+        """The lowest and the highest total tally() gives a candidate of n: Top and
+        Lead normalise the totals to 0 to 1 by them."""
+        raise NotImplementedError
+
     def eliminate(self, voters: Voters, how: str) -> Result | None:
         """Eliminate(Tally(self), how) down to one by a formula of the ballot's own, or
         None to tally the remaining candidates again in every round."""
@@ -280,6 +332,10 @@ class Plurality(Ballot):
         split = out / np.maximum(alive.sum(axis=-1, keepdims=True), 1)
         return votes + np.where(alive, voters.bullet + split, 0.0)
 
+    def bounds(self, n: int) -> tuple[float, float]:
+        """A share of the voters."""
+        return 0.0, 1.0
+
     def eliminate(self, voters: Voters, how: str) -> Result | None:
         """Instant runoff (how="min") by the compiled rounds of voting.irv_rounds, which
         move only the ballots of the eliminated candidate."""
@@ -319,6 +375,10 @@ class AntiPlurality(Ballot):
             totals = totals + bullet
         return np.where(alive, totals, 0.0)
 
+    def bounds(self, n: int) -> tuple[float, float]:
+        """A share of the voters."""
+        return 0.0, 1.0
+
 
 @dataclass(frozen=True)
 class BordaCount(Ballot):
@@ -337,6 +397,10 @@ class BordaCount(Ballot):
             return d.sum(axis=-1)
         weights = alive.astype(d.dtype)
         return np.einsum("...ce,...e->...c", d, weights) * weights
+
+    def bounds(self, n: int) -> tuple[float, float]:
+        """From no point to a point for each of the n - 1 others."""
+        return 0.0, float(max(n - 1, 1))
 
 
 @dataclass(frozen=True)
@@ -390,6 +454,10 @@ class Score(Ballot):
         their totals; the others get -1, as if no one gave them a point."""
         totals = -voters.unscored[self.scored]
         return totals if alive is None else np.where(alive, totals, -1.0)
+
+    def bounds(self, n: int) -> tuple[float, float]:
+        """From 0 (-1) to the top score (0) of every voter."""
+        return -1.0, 0.0
 
     @property
     def needs_graded(self) -> frozenset[Share]:
@@ -627,6 +695,16 @@ class Mix(Ballot):
             return tallies[0]
         return (1 - self.share) * tallies[0] + self.share * tallies[1]
 
+    def bounds(self, n: int) -> tuple[float, float]:
+        """The same mix of the bounds of the two ballots: the lowest and the highest
+        totals are those of a candidate both kinds of voters give the least, or the
+        most."""
+        bounds = [ballot.bounds(n) for ballot in self.marked]
+        if len(bounds) == 1:
+            return bounds[0]
+        (low, high), (second_low, second_high) = bounds
+        return (1 - self.share) * low + self.share * second_low, (1 - self.share) * high + self.share * second_high
+
     @property
     def needs_graded(self) -> frozenset[Share]:
         """Those of both ballots, which must have the same scores: the voters of a point
@@ -851,6 +929,82 @@ class Weakest(CandidateTotals):
     def __repr__(self):
         return f"Weakest({self.diffs!r})"
 
+# ---------------------------------------------------------------- Measure
+
+
+class Measure(Block):
+    """A number from 0 to 1 at every point, continuous in the shares. Against a
+    threshold it is a Condition (Threshold): measure > t is true where it is above t,
+    measure < t where it is below."""
+
+    kind = "a Measure"
+    needs: frozenset[Share]
+
+    def evaluate(self, voters: Voters) -> np.ndarray:
+        """The measure (...)."""
+        raise NotImplementedError
+
+    def __gt__(self, threshold):
+        return Threshold(self, threshold, above=True)
+
+    def __lt__(self, threshold):
+        return Threshold(self, threshold, above=False)
+
+
+@dataclass(frozen=True)
+class _Normalised(Measure):
+    """A measure of the totals of a Tally of the mean, normalised by its ballot to 0 to
+    1 (Ballot.bounds): a share of the voters for Plurality, the Borda count over C - 1,
+    the mean part of the top score for a score ballot. So a threshold means the same for
+    any ballot and number of candidates. The totals of a median are only an order."""
+
+    totals: Tally
+
+    def __post_init__(self):
+        _expect(self, self.totals, Tally, "a Tally (its totals are normalised by its ballot)")
+        if self.totals.statistic == "median":
+            raise ValueError(f"{type(self).__name__} normalises the totals of a mean, and those of a median are "
+                             f"only an order: {self.totals!r}")
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return self.totals.needs
+
+    def _range(self, totals: np.ndarray) -> tuple[float, float]:
+        """(lowest total, highest minus lowest) of the ballot among the candidates of totals."""
+        low, high = self.totals.ballot.bounds(totals.shape[-1])
+        return low, high - low
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.totals!r})"
+
+
+@dataclass(frozen=True, repr=False)  # the fields and repr of _Normalised, with this name
+class Top(_Normalised):
+    """The highest total, normalised (_Normalised): Top(Tally(Plurality())) > 0.5 is a
+    majority of the first choices,
+
+        Conditional(Top(Tally(Plurality())) > 0.55, fptp, two_round)
+
+    FPTP where someone has 55 % of them, else the two-round system."""
+
+    def evaluate(self, voters: Voters) -> np.ndarray:
+        totals = self.totals.evaluate(voters)
+        low, span = self._range(totals)
+        return (totals.max(axis=-1) - low) / span
+
+
+@dataclass(frozen=True, repr=False)
+class Lead(_Normalised):
+    """The lead of the highest total over the second, normalised (_Normalised):
+    Lead(Tally(BordaCount())) > 0.02 is a Borda winner 2 % of the C - 1 points ahead.
+    The lead is taken before normalising, so it stays between candidates nearly all
+    voters give the top score (Score.tally)."""
+
+    def evaluate(self, voters: Voters) -> np.ndarray:
+        totals = self.totals.evaluate(voters)
+        return _top_two(totals)[1] / self._range(totals)[1]
+
 # ---------------------------------------------------------------- Winner
 
 
@@ -940,7 +1094,12 @@ class Undecided(Winner):
 
 
 class Condition(Block):
-    """A deferred boolean expression composed from voting-method results."""
+    """A deferred boolean expression for Conditional: voting-method results compared
+    (winner == winner, winner != winner), a Measure against a threshold (measure > t,
+    measure < t), and those combined with & and |. evaluate() gives it at every point
+    with its margin, 0 where it flips."""
+
+    kind = "a Condition"
 
     def evaluate(self, voters: Voters) -> tuple[np.ndarray, np.ndarray]:
         raise NotImplementedError
@@ -1014,6 +1173,41 @@ class CombinedCondition(Condition):
     def __repr__(self):
         operator = "&" if self.operator == "and" else "|"
         return f"({self.first!r} {operator} {self.second!r})"
+
+
+@dataclass(frozen=True)
+class Threshold(Condition):
+    """measure > threshold (above) or measure < threshold: true where the measure is
+    above, or below, the threshold, a number from 0 to 1. The measure is continuous in
+    the shares, so the condition flips only where it crosses the threshold, and its
+    margin is |measure - threshold|. Build it with > or <: Top(totals) > 0.55."""
+
+    measure: Measure
+    threshold: float
+    above: bool = True
+
+    def __post_init__(self):
+        _expect(self, self.measure, Measure, "a Measure")
+        t = self.threshold
+        if isinstance(t, bool) or not isinstance(t, int | float) or not 0 <= t <= 1:
+            raise ValueError(f"the threshold of {self.measure!r} must be a number from 0 to 1, got {t!r}")
+        if not isinstance(self.above, bool):
+            raise TypeError(f"Threshold above must be a bool, got {self.above!r}")
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return self.measure.needs
+
+    def evaluate(self, voters: Voters) -> tuple[np.ndarray, np.ndarray]:
+        value = self.measure.evaluate(voters)
+        condition = value > self.threshold if self.above else value < self.threshold
+        return condition, np.abs(value - self.threshold)
+
+    def __bool__(self):
+        raise TypeError("A threshold condition must be evaluated by Conditional")
+
+    def __repr__(self):
+        return f"({self.measure!r} {'>' if self.above else '<'} {self.threshold!r})"
 
 
 def _highest(totals: np.ndarray, n: int) -> Result:
@@ -1325,12 +1519,84 @@ class Unbeaten(Winner):
 
 
 @dataclass(frozen=True, eq=False)
+class Smith(Winner):
+    """The Smith set: the smallest set of candidates who each beat every candidate
+    outside it, the Condorcet winner alone where there is one. A candidate is in it if
+    it reaches every other one along the diffs, each candidate beating or tying the
+    next, so a tie between a candidate in it and one outside brings that one in. As
+    `among` it makes a method elect from the top cycle, a Condorcet method:
+
+        Highest(Tally(ballot), among=Smith(Margins(Pairwise())))                 Smith//Score
+        Eliminate(Tally(Plurality()), how="min", among=Smith(Margins(Pairwise())))  Smith//IRV
+
+    With majority=q a candidate beats another only with q of the voters, from 0.5 (the
+    default, a majority) to 1: where the diff is above by = 2 q - 1, the margin of q of the
+    voters over the rest on Margins, and the same lead on ScoreComparisons, whose voters
+    with equal scores abstain. A pair that neither one wins so counts as a tie, and the
+    set grows as q does: Smith(Margins(Pairwise()), majority=0.55) keeps a Condorcet
+    winner alone only where it beats everyone with 55% of the voters; elsewhere also the
+    candidates it beats with less, and those they do not lose to so, for the method to
+    choose from. A method among them is no longer a Condorcet method. Below 0.5 two
+    candidates could each beat all others, and there would be no smallest set.
+
+    The set changes only where a candidate outside starts to beat one inside, or where
+    the candidates inside stop reaching each other. The margin is the smallest change of
+    the diffs, each by at most that much, that changes the set, the smaller of
+
+        min s[c, e] - by over c inside, e outside   the weakest win over a candidate outside
+        min p[c, e] over c != e inside              the weakest strongest path inside, of
+                                                    strengths p as in StrongestPaths over
+                                                    the diffs s + by
+
+    A smaller change keeps all of them positive, and so the set. A larger one can undo
+    that win, or let the candidates c does not reach by paths stronger than p[c, e], e
+    among them, beat every one it does, so the set shrinks. As a distance the margin is
+    continuous, also where a diff inside flips but the set stays, and it is 0 wherever
+    the set changes.
+
+    The diffs must be able to form a cycle: the Smith set of transitive ones is only the
+    candidates no one beats (Unbeaten), and strongest paths tie on whole areas, where the
+    margin would be 0."""
+
+    diffs: PairDiffs
+    majority: float = field(default=0.5, kw_only=True)
+    seats = None  # the number differs from point to point; not a field
+
+    def __post_init__(self):
+        _expect(self, self.diffs, PairDiffs, "PairDiffs")
+        if self.diffs.transitive:
+            raise ValueError(f"Smith expects PairDiffs that can form a cycle, got transitive ones, of which it is "
+                             f"only the candidates no one beats (Unbeaten): {self.diffs!r}")
+        q = self.majority
+        if isinstance(q, bool) or not isinstance(q, int | float) or not 0.5 <= q <= 1:
+            raise ValueError(f"Smith majority must be a number from 0.5 to 1, got {q!r}: below 0.5 two candidates "
+                             f"could each beat all others")
+
+    @property
+    def by(self) -> float:
+        """How much a diff must exceed for a candidate to beat another: 2 majority - 1."""
+        return 2 * self.majority - 1
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return self.diffs.needs
+
+    def select(self, voters: Voters) -> Result:
+        return _smith(self.diffs.evaluate(voters), self.by)
+
+    def __repr__(self):
+        majority = f", majority={self.majority!r}" if self.majority != 0.5 else ""
+        return f"Smith({self.diffs!r}{majority})"
+
+
+@dataclass(frozen=True, eq=False)
 class Conditional(Winner):
     """Choose `when_true` or `when_false` according to `condition`.
 
     A Winner used as the condition is true wherever it elects a candidate. A Condition
-    compares methods' results and combines those comparisons with `&` and `|`. The result
-    margin is the smallest of the condition and chosen branch gaps.
+    compares methods' results, or a Measure with a threshold, and combines those with
+    `&` and `|`. The result margin is the smallest of the condition and chosen branch
+    gaps.
     """
 
     condition: Winner | Condition
