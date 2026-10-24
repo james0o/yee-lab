@@ -5,9 +5,9 @@
       "Bash(time uv run *)",
       "Bash(python3 *)",
       "Bash(git stash *)",
+      "Bash(typst compile *)",
       "Bash(pdftotext *)",
-      "Bash(pdftoppm *)",
-      "Skill(update-config)"
+      "Bash(pdftoppm *)"
     ],
     "deny": [
       "Bash(git pull *)",
