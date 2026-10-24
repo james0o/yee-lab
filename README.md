@@ -94,7 +94,7 @@ shares against analytical and Monte Carlo references.
 
 ```python
 from yeelab.build import Tally, BordaCount, Plurality, Highest, Eliminate
-from yeelab.build import Pairwise, Margins, StrongestPaths, Weakest, Unbeaten, Conditional
+from yeelab.build import Pairwise, Margins, StrongestPaths, Weakest, Unbeaten, Smith, Conditional
 
 borda   = Highest(Tally(BordaCount()))
 fptp    = Highest(Tally(Plurality()))
@@ -108,6 +108,7 @@ condorcet = Unbeaten(margins)
 minimax = Highest(Weakest(margins))
 black   = Conditional(condorcet, when_true=condorcet, when_false=borda)
 two_round = Unbeaten(margins, among=Highest(Tally(Plurality()), n=2))
+smith_irv = Eliminate(Tally(Plurality()), how="min", among=Smith(margins))  # IRV within the Smith set
 
 from yeelab.build import Score, ScoreComparisons
 
@@ -124,6 +125,12 @@ finalists = Conditional(
 )
 star_finalists = Unbeaten(ScoreComparisons(ballot), among=finalists)
 
+from yeelab.build import Top, Lead
+
+# or a threshold: the highest total, or its lead over the second, from 0 to 1
+Conditional(Top(Tally(Plurality())) > 0.55, when_true=fptp, when_false=two_round)
+Conditional(Lead(Tally(BordaCount())) > 0.02, when_true=borda, when_false=schulze)
+
 from yeelab.build import Bullet, Burial, Compromise
 
 Bullet(borda, share=0.3)                  # Borda where 30% of the voters bullet vote
@@ -133,7 +140,7 @@ Bullet(Burial(Compromise(borda, share=0.4), share=0.2), share=0.3)
 # 30% bullet vote; of the others 20% bury, 40% compromise
 ```
 
-A **ballot** gives each candidate points, [`Tally`](src/yeelab/build/blocks.py#L639) averages them over the voters of a pixel (with `statistic="median"`, it takes a score ballot's majority judgment instead), and a **winner** block ([`Highest`](src/yeelab/build/blocks.py#L866), [`Eliminate`](src/yeelab/build/blocks.py#L739), [`Unbeaten`](src/yeelab/build/blocks.py#L967), [`Conditional`](src/yeelab/build/blocks.py)) picks the winner. **Condorcet methods** start from [`Pairwise()`](src/yeelab/build/blocks.py#L513). [`Score`](src/yeelab/build/blocks.py#L298) ballots give scores from 0 to `levels - 1` by distance; `power` sets how sparingly the top scores are given. A block checks its input when it is built, and `repr` gives back the expression.
+A **ballot** gives each candidate points, [`Tally`](src/yeelab/build/blocks.py#L868) averages them over the voters of a pixel (with `statistic="median"`, it takes a score ballot's majority judgment instead), and a **winner** block ([`Highest`](src/yeelab/build/blocks.py#L1380), [`Eliminate`](src/yeelab/build/blocks.py#L1225), [`Unbeaten`](src/yeelab/build/blocks.py#L1428), [`Conditional`](src/yeelab/build/blocks.py#L1567)) picks the winner. **Condorcet methods** start from [`Pairwise()`](src/yeelab/build/blocks.py#L737); [`Smith`](src/yeelab/build/blocks.py#L1518) chooses the Smith set, the smallest set of candidates who each beat every candidate outside it, for another method to choose from. [`Top`](src/yeelab/build/blocks.py#L979) and [`Lead`](src/yeelab/build/blocks.py#L994) compare a tally, scaled to 0–1 for any ballot, with a threshold. [`Score`](src/yeelab/build/blocks.py#L403) ballots give scores from 0 to `levels - 1` by distance; `power` sets how sparingly the top scores are given. A block checks its input when it is built, and `repr` gives back the expression.
 
 `method.evaluate(voters)` returns the **winner** and the **margin**. Each method computes only the shares it needs; the details are in [docs/math.pdf](docs/math.pdf).
 

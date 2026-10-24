@@ -7,14 +7,19 @@ in a cycle; minimax; Black, the Condorcet winner, else Borda; king of the hill, 
 Unbeaten against a cycle. A runoff, Unbeaten(diffs, among=first | second), is checked
 against its duel between the built finalists, a method against itself and swapped
 finalists, and the two-round system and STAR, whose finalists are Highest(totals, n=2),
-likewise; Unbeaten among everyone is Unbeaten itself.
+likewise; Unbeaten among everyone is Unbeaten itself. The Smith set is checked against
+its definition, and its margin against the smallest change of the diffs that changes
+it, which keeps it continuous.
 
 The methods of the whole profile are checked on the ranking shares of the profiles
 (conftest.py): every elimination, down to one and to two candidates (Highest is
 Eliminate(totals, how="all")); Highest(totals, among=finalists), the highest total among
-the finalists; IRV among finalists; and DAC, whose margin also bounds how much the shares
-must change to change the winner. The references are those of references.py and those below.
+the finalists, the Smith set too; IRV among finalists; and DAC, whose margin also bounds
+how much the shares must change to change the winner. The references are those of
+references.py and those below.
 """
+
+from itertools import product
 
 import numpy as np
 import pytest
@@ -29,8 +34,10 @@ from yeelab.build import (
     Pairwise,
     Plurality,
     Score,
+    ScoreComparisons,
     Scored,
     ScoredPairwise,
+    Smith,
     StrongestPaths,
     Tally,
     Unbeaten,
@@ -126,6 +133,42 @@ def _tournaments(n, count=500, seed=0):
 
 
 TOURNAMENTS = [_tournaments(n) for n in (2, 3, 4, 5, 8)]
+
+
+def _smith_reference(s, by=0.0):
+    """The Smith set point by point from its definition, for diffs s (..., C, C): the
+    smallest set of candidates who each beat every candidate outside it, s[c, e] > by.
+    Such sets are nested, so the smallest is the one of the fewest candidates."""
+    n = s.shape[-1]
+    smith = np.zeros(s.shape[:-1], dtype=bool)
+    found = np.zeros(s.shape[:-2], dtype=bool)
+    for mask in sorted(range(1, 1 << n), key=lambda mask: bin(mask).count("1")):
+        inside = ((mask >> np.arange(n)) & 1).astype(bool)
+        dominant = (s[..., inside, :][..., :, ~inside] > by).all(axis=(-2, -1)) & ~found
+        smith[dominant] = inside
+        found |= dominant
+    return smith
+
+
+def _smith_distance(s, smith, by=0.0):
+    """The smallest change of the diffs s (..., C, C), each pair by at most that much,
+    that changes the Smith set from `smith`, where c beats e if s[c, e] > by. Every pair
+    is in one of the states 1 (the first beats the second), -1 (the second the first)
+    and, with by > 0, 0 (neither, as a tie at by = 0): over every state of every pair,
+    the largest change a pair needs to get into its state, where the set of those states
+    differs."""
+    n = s.shape[-1]
+    pairs = [(c, e) for c in range(n) for e in range(c + 1, n)]
+    states = np.array(list(product((1.0, -1.0) if by == 0 else (1.0, 0.0, -1.0), repeat=len(pairs))))
+    tournaments = np.zeros((len(states), n, n))
+    for k, (c, e) in enumerate(pairs):
+        tournaments[:, c, e], tournaments[:, e, c] = states[:, k], -states[:, k]
+    sets = _smith_reference(tournaments, 0.5)
+    diffs = np.stack([s[..., c, e] for c, e in pairs], axis=-1)[..., None, :]
+    change = np.where(states == 1, np.maximum(by - diffs, 0.0),
+                      np.where(states == -1, np.maximum(diffs + by, 0.0), np.maximum(np.abs(diffs) - by, 0.0)))
+    changed = (sets != smith[..., None, :]).any(axis=-1)
+    return np.where(changed, change.max(axis=-1), np.inf).min(axis=-1)
 
 
 def _first_choices(n, count=500, seed=0):
@@ -403,6 +446,81 @@ def test_unbeaten_among(d):
         np.testing.assert_array_equal(margin, expected_margin)
 
 
+@pytest.mark.parametrize("d", TOURNAMENTS, ids=lambda d: f"{d.shape[-1]}-candidates")
+def test_smith_set_matches_reference(d):
+    """On random pairwise shares, with many cycles and ties: the Smith set of its
+    definition, the Condorcet winner alone where there is one, with its margin, and two
+    candidates or more where there is none. The margin is the smallest change of the
+    diffs that changes the set, exactly, ties included (up to five candidates, of 2^10
+    signs of the pairs)."""
+    voters = Voters(pairwise=d)
+    s = Margins(Pairwise()).evaluate(voters)
+    chosen, margin = Smith(Margins(Pairwise())).select(voters)
+    np.testing.assert_array_equal(chosen, _smith_reference(s))
+    winner, condorcet_margin = METHODS["condorcet"].evaluate(voters)
+    decided = winner != CYCLE
+    np.testing.assert_array_equal(chosen[decided], winner[decided, None] == np.arange(d.shape[-1]))
+    np.testing.assert_array_equal(margin[decided], condorcet_margin[decided])
+    assert (chosen[~decided].sum(axis=-1) > 1).all() and (~decided).any() and decided.any()  # not vacuous
+    if d.shape[-1] <= 5:
+        np.testing.assert_array_equal(margin, _smith_distance(s, chosen))
+
+
+@pytest.mark.parametrize("d", TOURNAMENTS, ids=lambda d: f"{d.shape[-1]}-candidates")
+@pytest.mark.parametrize("majority", [0.55, 0.75])
+def test_smith_with_a_larger_majority(d, majority):
+    """A candidate beats another only with `majority` of the voters, where the diff is
+    above 2 majority - 1: the set of that definition, which holds the Smith set of a
+    majority and grows with `majority`, to all candidates at 1. The margin is again the
+    smallest change of the diffs that changes the set, a pair neither one wins so being
+    a state of its own (up to four candidates, of 3^6 states)."""
+    voters, margins = Voters(pairwise=d), Margins(Pairwise())
+    s, by = margins.evaluate(voters), 2 * majority - 1
+    chosen, margin = Smith(margins, majority=majority).select(voters)
+    np.testing.assert_array_equal(chosen, _smith_reference(s, by))
+    smaller = Smith(margins, majority=(0.5 + majority) / 2).select(voters)[0]
+    assert (chosen >= smaller).all() and (smaller >= Smith(margins).select(voters)[0]).all()
+    assert (chosen.sum(axis=-1) > smaller.sum(axis=-1)).any()  # not vacuous
+    assert Smith(margins, majority=1).select(voters)[0].all()
+    if d.shape[-1] <= 4:
+        np.testing.assert_array_equal(margin, _smith_distance(s, chosen, by))
+
+
+@pytest.mark.parametrize("n", [3, 5, 8])
+@pytest.mark.parametrize("majority", [0.5, 0.6])
+def test_smith_margin_is_continuous(n, majority):
+    """As a distance in the diffs the margin changes by at most as much as they do, also
+    where a pair inside the set changes who wins it and the set stays; where the set
+    changes, it is at most the step along the way."""
+    d = _tournaments(n).astype(np.float64)
+    t = np.linspace(0, 1, 401)[:, None, None, None]
+    path = (1 - t) * d[:100] + t * d[100:200]
+    chosen, margin = Smith(Margins(Pairwise()), majority=majority).select(Voters(pairwise=path))
+    s, by = path - np.swapaxes(path, -1, -2), 2 * majority - 1
+    step = np.abs(np.diff(s, axis=0)).max(axis=(-2, -1))
+    assert (np.abs(np.diff(margin, axis=0)) <= step + 1e-12).all()
+    change = (chosen[1:] != chosen[:-1]).any(axis=-1)
+    assert change.sum() > 5  # not vacuous: with 8 candidates and 60% the set is nearly always all of them
+    assert (np.maximum(margin[1:], margin[:-1]) <= step + 1e-12)[change].all()
+    inside = chosen[..., :, None] & chosen[..., None, :]
+    state = (s > by).astype(int) - (s < -by)  # who wins the pair: 1, -1, or 0 neither
+    flips = ((state[1:] != state[:-1]) & inside[1:] & inside[:-1]).any(axis=(-2, -1)) & ~change
+    assert flips.any() or n < 5  # not vacuous: the set stays where a pair inside it changes
+
+
+def test_smith_of_score_comparisons():
+    """Of any diffs that can form a cycle: the runoff comparisons of a score ballot too."""
+    ballot, n = Score(6), 5
+    above = np.random.default_rng(0).random((400, n, n))
+    diffs = above - np.swapaxes(above, -1, -2)
+    voters = Voters(scored_pairwise={ScoredPairwise(ballot.scored): diffs})
+    smith = Smith(ScoreComparisons(ballot))
+    assert smith.needs == {ScoredPairwise(ballot.scored)}
+    chosen, margin = smith.select(voters)
+    np.testing.assert_array_equal(chosen, _smith_reference(diffs))
+    np.testing.assert_array_equal(margin, _smith_distance(diffs, chosen))
+
+
 @pytest.mark.parametrize("method", ELIMINATIONS, ids=repr)
 def test_eliminations_match_reference(profile, method):
     """Both the method (for irv the compiled voting.irv_rounds) and its rounds with
@@ -440,7 +558,8 @@ def test_highest_among_the_finalists(profile):
     rankings, probs = profile
     voters = voters_of(rankings, probs)
     weakest = Weakest(Margins(Pairwise()))
-    for among in (METHODS["fptp"] | METHODS["irv"], Highest(Tally(BordaCount()), n=3), METHODS["koth"]):
+    for among in (METHODS["fptp"] | METHODS["irv"], Highest(Tally(BordaCount()), n=3), METHODS["koth"],
+                  Smith(Margins(Pairwise()))):
         chosen, gap = among.select(voters)
         for totals, counted in ((Tally(BordaCount()), BordaCount().tally(voters, chosen)),
                                 (weakest, weakest.evaluate(voters))):
@@ -459,13 +578,14 @@ def test_highest_among_the_finalists(profile):
     np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-5)
 
 
-def test_irv_among_top_three_matches_reference(profile):
-    """Top-three plurality finalists seed the IRV rounds and contribute their gap."""
+@pytest.mark.parametrize("among", [Highest(Tally(Plurality()), n=3), Smith(Margins(Pairwise()))], ids=repr)
+def test_irv_among_finalists_matches_reference(profile, among):
+    """The finalists, the top three of the first choices or the Smith set (Smith//IRV),
+    seed the IRV rounds and contribute their gap."""
     rankings, probs = profile
     voters = voters_of(rankings, probs)
-    top3 = Highest(Tally(Plurality()), n=3)
-    method = Eliminate(Tally(Plurality()), how="min", among=top3)
-    finalists, finalist_margin = top3.select(voters)
+    method = Eliminate(Tally(Plurality()), how="min", among=among)
+    finalists, finalist_margin = among.select(voters)
     expected = np.zeros_like(finalists)
     expected_margin = finalist_margin.copy()
 

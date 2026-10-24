@@ -3207,7 +3207,7 @@ All methods are built from blocks (`yeelab.build`), and the margin is never put 
 by hand: every block that decides computes the gap of its decision, and the margin is the
 smallest of them. `Highest` has the lead of the top score (with `among`, among the
 candidates chosen, and their margin), `Eliminate` the gap of each round, `DescendingCoalitions` that of every round,
-`Unbeaten` the gaps below and `Conditional` those of the condition and selected method. Baldwin and
+`Unbeaten` and `Smith` the gaps below and `Conditional` those of the condition and selected method. Baldwin and
 Nanson are in @sec-baldwin-nanson, Minimax and Black in @sec-minimax-black, DAC in
 @sec-dac and the score methods in @sec-score.
 
@@ -3280,6 +3280,75 @@ $ mu = cases(mu_"first" & "where" "first" "elects someone", min(mu_"first", mu_"
 In a cycle $mu_"first"$ is how far the point is from having a Condorcet winner, so it
 vanishes on the border of the cycle, where `second` hands over to `first`, and
 $mu_"second"$ on the borders `second` draws inside the cycle.
+
+*Thresholds.* A condition can also compare a number with a threshold $t in [0, 1]$:
+`Top(totals) > t` is true where the highest total is above $t$, `Lead(totals) > t`
+where its lead over the second is, and `<` the other way round. Both read the totals
+$T_i$ of a ballot's mean, `Tally(ballot)`, scaled by the range $[T_min, T_max]$ the
+ballot can give a candidate:
+
+$ "top" = (T_((1)) - T_min) / (T_max - T_min), quad
+  "lead" = (T_((1)) - T_((2))) / (T_max - T_min), $
+
+with $T_((1)) >= T_((2))$ the two highest totals. The range is $[0, 1]$ for a share of
+the voters (FPTP, anti-plurality), $[0, C - 1]$ for Borda and $[-1, 0]$ for a score
+ballot, whose total is $q_i - 1$ (@sec-score), so "top" is the largest mean part of the
+top score; a mix of two ballots has the same mix of their ranges. A threshold therefore
+means the same for any ballot and number of candidates: `Top(Tally(Plurality())) > 0.5`
+is a majority of the first choices, `Lead(Tally(BordaCount())) > 0.02` a Borda winner
+ahead by 2% of the $C - 1$ points. The totals of majority judgment are only an order
+(@sec-mj) and have no such range. The lead is taken before the scaling, so it keeps the
+lead between two candidates nearly all voters give the top score. Both numbers are
+continuous in the shares, so the condition flips only where its number crosses $t$, and
+its gap is
+
+$ mu = abs("top" - t) quad "or" quad mu = abs("lead" - t) . $
+
+`Conditional(Top(Tally(Plurality())) > 0.55, fptp, two_round)` elects the FPTP winner
+where someone has 55% of the first choices and the two-round winner elsewhere, with the
+smaller of $abs("top" - 0.55)$ and the margin of the method it elects.
+
+*Smith set.* `Smith(Margins(Pairwise()))` chooses the Smith set $S$: the smallest set of
+candidates who each beat every candidate outside it, the Condorcet winner alone where
+there is one. A candidate is in $S$ if it reaches every other one along links
+$ell >= 0$, each candidate beating or tying the next, so a tie with a candidate outside
+brings that one in; Warshall's algorithm finds who reaches whom. It chooses a number of
+candidates, for another method to choose from: with `M = Margins(Pairwise())`,
+Smith\/\/IRV is `Eliminate(Tally(Plurality()), how="min", among=Smith(M))` and
+Smith\/\/Score is `Highest(Tally(ballot), among=Smith(M))`. Both are Condorcet methods.
+
+*A larger majority.* `Smith(M, majority=q)`, with $q$ from $1/2$ (the default) to $1$,
+lets $c_i$ beat $c_j$ only with $q$ of the voters, $pi_(i j) > q$, that is
+$ell_(i j) > delta = 2 q - 1$. On `ScoreComparisons`, whose voters with equal scores
+abstain, it is the same lead $delta$. A pair with $abs(ell_(i j)) <= delta$, which
+neither candidate wins so, counts as a tie: a candidate is in $S$ if it reaches every
+other one along links $ell >= -delta$. So $S$ grows with $q$, to all candidates at
+$q = 1$; with $q = 0.55$ a Condorcet winner is alone in $S$ only where it beats everyone
+with $55%$ of the voters, and elsewhere the method among $S$ decides between it and the
+candidates it beats more narrowly. That method is then no longer a Condorcet method.
+Below $q = 1/2$ two candidates could each beat all others, and there would be no
+smallest such set.
+
+$S$ changes where a candidate outside it starts to beat one inside, or where the
+candidates inside stop reaching each other. Its margin is
+
+$ mu = min(min_(i in S, j in.not S) (ell_(i j) - delta), min_(i != j in S) p_(i j)), $ <eq-smith>
+
+with $p_(i j)$ the strength of the strongest path from $c_i$ to $c_j$ over the links
+$max(ell + delta, 0)$, as for Schulze at $delta = 0$. It is the smallest change of the
+links, each by at most $mu$, that changes $S$. A smaller change keeps every link out of
+$S$ above $delta$ and a path from every candidate of $S$ to every other, so $S$ stays. A
+change by a little more than $ell_(i j) - delta$ lets $c_j$ tie with $c_i$, which brings
+it in. One by a little more than $p_(i j)$ can lower below $-delta$ every link out of the
+candidates $X$ that $c_i$ reaches by paths stronger than $p_(i j)$: $c_j$ is not in $X$,
+the rest of $S$ then beats all of $X$, and $S$ shrinks. As a distance, $mu$ is continuous
+in the links. The smallest $abs(ell_(i j))$ of the single links whose reversal changes
+$S$ would not be: where a link inside $S$ reverses and $S$ stays, another link can start
+or stop being one of them, and that margin would jump. For a Condorcet winner $w$ and
+$q = 1/2$, $S = {w}$ and $mu = min_(j != w) ell_(w j)$, the margin of the Condorcet
+winner. `Smith` takes only links that can form a cycle: the Smith set of strongest paths
+is just the candidates no one beats, and they tie on whole areas, where $mu$ would be
+$0$.
 
 === Example: margins at two medians <sec-margin-example>
 

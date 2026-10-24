@@ -7,7 +7,9 @@ choose sets. The score ballots tally the parts of the top score not given, which
 test_score.py checks; here the highest mean score must win (with two levels: the most
 approved candidate), with its lead as the margin, also between candidates nearly all
 voters give the top score. A Mix of two ballots must tally the mix of their voters, and
-be the one ballot itself where all voters mark it. Ties go to the lowest index.
+be the one ballot itself where all voters mark it. Ties go to the lowest index. Top and
+Lead normalise the totals to 0 to 1 by the bounds of the ballot, and a threshold of
+either is a Condition, true on one side of it with the distance to it as its margin.
 
 METHODS are the built expressions, every block prints as the expression that builds
 it, needs the shares it reads, and fails when built from wrong blocks or arguments. The
@@ -35,6 +37,7 @@ from yeelab.build import (
     Eliminate,
     Graded,
     Highest,
+    Lead,
     Margins,
     Mix,
     Pairwise,
@@ -47,8 +50,10 @@ from yeelab.build import (
     ScoreHybrid,
     Scored,
     ScoredPairwise,
+    Smith,
     StrongestPaths,
     Tally,
+    Top,
     Unbeaten,
     Undecided,
     Union,
@@ -115,13 +120,14 @@ def test_highest_chooses_the_n_highest_totals():
 def test_a_method_chooses_one_candidate():
     """Blocks that choose several candidates only select(); evaluate() is for a winner.
     A Conditional of two such blocks chooses as many, a Union a number that varies."""
-    two, irv = Highest(Tally(Plurality()), n=2), METHODS["irv"]
+    two, irv, smith = Highest(Tally(Plurality()), n=2), METHODS["irv"], Smith(MARGINS)
     assert [block.seats for block in (two, irv, two | irv, Conditional(two, two, two),
-                                      Conditional(irv, two, irv))] \
-        == [2, 1, None, 2, None]
+                                      Conditional(irv, two, irv), smith)] \
+        == [2, 1, None, 2, None, None]
     assert all(method.seats == 1 for method in TESTED_METHODS.values())
     for block, chooses in ((two, "2 candidates"), (two | irv, "a number of candidates"),
-                           (Eliminate(Tally(Plurality()), how="min", until=3), "3 candidates")):
+                           (Eliminate(Tally(Plurality()), how="min", until=3), "3 candidates"),
+                           (smith, "a number of candidates")):
         with pytest.raises(ValueError, match=re.escape(f"{block!r} chooses {chooses}, not a winner")):
             block.evaluate(Voters(first=np.full((2, 4), 0.25)))
 
@@ -154,6 +160,73 @@ def test_union_and_conditional_choose_sets(profile):
 
 def test_conditional_method_repr_is_rebuildable():
     assert eval(repr(METHODS["black"])) == METHODS["black"]
+
+
+def test_top_and_lead_normalise_the_totals(profile):
+    """Top is the highest total and Lead its lead over the second, as parts of the range
+    of the ballot's totals (Ballot.bounds): shares of the voters as they are, Borda over
+    C - 1, a Mix by the same mix of those. Both are from 0 to 1 (up to the rounding of
+    the shares, which add up to 1), the lead at most the top."""
+    rankings, probs = profile
+    voters, n = voters_of(rankings, probs), rankings.shape[1]
+    for ballot, bounds in ((Plurality(), (0, 1)), (AntiPlurality(), (0, 1)), (BordaCount(), (0, n - 1)),
+                           (Mix(Plurality(), BordaCount(), share=0.25), (0, 0.75 + 0.25 * (n - 1)))):
+        assert ballot.bounds(n) == bounds
+        (low, high), totals = bounds, np.sort(ballot.tally(voters, None), axis=-1)
+        top, lead = Top(Tally(ballot)).evaluate(voters), Lead(Tally(ballot)).evaluate(voters)
+        np.testing.assert_array_equal(top, (totals[..., -1] - low) / (high - low))
+        np.testing.assert_array_equal(lead, (totals[..., -1] - totals[..., -2]) / (high - low))
+        assert ((0 <= lead) & (lead <= top) & (top <= 1 + 1e-12)).all()
+
+
+def test_top_and_lead_of_a_score_ballot():
+    """A score ballot's total plus 1, the mean part of the top score: 1 for a candidate
+    every voter gives it. The lead is taken before that, so it stays between candidates
+    nearly all voters give the top score."""
+    voters = _scoring_voters()
+    for ballot in (Score(6), ScoreAvg(2), ScoreCluster(6), Mix(BY_GAP, BY_MEAN, share=0.25)):
+        assert ballot.bounds(5) == (-1, 0)
+        totals = np.sort(ballot.tally(voters, None), axis=-1)
+        np.testing.assert_array_equal(Top(Tally(ballot)).evaluate(voters), totals[..., -1] + 1)
+        np.testing.assert_array_equal(Lead(Tally(ballot)).evaluate(voters), totals[..., -1] - totals[..., -2])
+    ballot = D21()
+    unscored = np.array([[0.0, 0.5, 1.0], [3e-30, 1e-30, 0.4]])
+    voters = Voters(unscored={ballot.scored: unscored})
+    np.testing.assert_array_equal(Top(Tally(ballot)).evaluate(voters), [1, 1])
+    np.testing.assert_allclose(Lead(Tally(ballot)).evaluate(voters), [0.5, 2e-30], rtol=1e-12, atol=0)
+
+
+def test_a_threshold_is_a_condition(profile):
+    """measure > t is true where the measure is above t, measure < t where below, both
+    with the margin |measure - t|, and t < measure is measure > t. Conditional takes the
+    branch it gives, with the smaller margin of the two; & and | combine it with other
+    conditions."""
+    voters = voters_of(*profile)
+    fptp, two_round, borda = METHODS["fptp"], METHODS["two_round"], METHODS["borda"]
+    top, lead = Top(Tally(Plurality())), Lead(Tally(BordaCount()))
+    value = top.evaluate(voters)
+    t = round(float(np.median(value)), 3)
+    assert (value > t).any() and (value < t).any()  # not vacuous
+    for condition, expected in ((top > t, value > t), (top < t, value < t), (t < top, value > t)):
+        result, margin = condition.evaluate(voters)
+        np.testing.assert_array_equal(result, expected)
+        np.testing.assert_array_equal(margin, np.abs(value - t))
+    assert (t < top) == (top > t) and (top > t) != (top < t) and (top > t) != (top > t / 2)
+
+    winner, margin = Conditional(top > t, fptp, two_round).evaluate(voters)
+    (a, margin_a), (b, margin_b) = fptp.evaluate(voters), two_round.evaluate(voters)
+    np.testing.assert_array_equal(winner, np.where(value > t, a, b))
+    np.testing.assert_array_equal(margin, np.minimum(np.abs(value - t), np.where(value > t, margin_a, margin_b)))
+
+    led = lead.evaluate(voters)
+    both, gap = ((top > t) & (lead < 0.1)).evaluate(voters)
+    np.testing.assert_array_equal(both, (value > t) & (led < 0.1))
+    np.testing.assert_array_equal(gap, np.minimum(np.abs(value - t), np.abs(led - 0.1)))
+    either, gap = ((top > t) | (fptp != borda)).evaluate(voters)
+    np.testing.assert_array_equal(either, (value > t) | (a != borda.evaluate(voters)[0]))
+    np.testing.assert_array_equal(gap, np.minimum(np.abs(value - t), np.minimum(margin_a, borda.evaluate(voters)[1])))
+    with pytest.raises(TypeError, match="A threshold condition must be evaluated by Conditional"):
+        bool(top > t)
 
 
 # the shares of the score ballots below: two and six levels, by every rule
@@ -490,9 +563,23 @@ def test_methods_are_the_expressions_they_print_as():
               Conditional(Highest(Tally(BY_MEAN), n=3), fptp, irv),
               Eliminate(Tally(BordaCount()), how="min", until=2), Highest(Tally(Plurality()), n=2),
               Highest(Weakest(margins), among=fptp | irv),
-              Mix(BY_GAP, BY_MEAN, share=0.25)]
+              Mix(BY_GAP, BY_MEAN, share=0.25),
+              Smith(margins), Smith(ScoreComparisons(Score(6), tie_weight=0.5)), Smith(margins, majority=0.55),
+              Smith(margins, majority=1),
+              Highest(Tally(BY_MEAN), among=Smith(margins)), Eliminate(Tally(Plurality()), how="min", among=Smith(margins)),
+              Top(Tally(Score(6))), Lead(Tally(Mix(BY_GAP, BY_MEAN, share=0.25))), Top(Tally(Plurality())) < 1,
+              Conditional(Top(Tally(Plurality())) > 0.55, fptp, expected["two_round"]),
+              Conditional((Lead(Tally(BordaCount())) < 0.02) & (fptp != borda), fptp, borda)]
     for block in blocks:
         assert eval(repr(block)) == block
+        assert hash(eval(repr(block))) == hash(block)
+    assert repr(Top(Tally(Plurality())) > 0.55) == "(Top(Tally(Plurality())) > 0.55)"
+    assert repr(0.55 < Lead(Tally(Score(6)))) == "(Lead(Tally(Score(6))) > 0.55)"
+    assert repr(Smith(margins)) == repr(Smith(margins, majority=0.5)) == "Smith(Margins(Pairwise()))"
+    assert repr(Smith(margins, majority=0.55)) == "Smith(Margins(Pairwise()), majority=0.55)"
+    assert Top(Tally(Plurality())) != Lead(Tally(Plurality())) and Smith(margins).same_as(Smith(Margins(Pairwise())))
+    assert Smith(margins).same_as(Smith(margins, majority=0.5)) and not Smith(margins).same_as(Smith(margins, majority=0.6))
+    assert Smith(margins).by == 0 and Smith(margins, majority=0.75).by == 0.5 and Smith(margins, majority=1).by == 1
 
 
 def test_blocks_are_frozen_and_hashable():
@@ -541,6 +628,14 @@ def test_needs():
         == {FIRST, Scored(6, power=1.5)}
     assert Unbeaten(margins, against=METHODS["irv"], order=Tally(Plurality())).needs == {PAIRWISE, PROFILE, FIRST}
     assert Unbeaten(margins, against=METHODS["borda"], order=Weakest(margins)).needs == {PAIRWISE}
+    # the Smith set those of its diffs, a measure those of its totals, and a threshold its measure's
+    assert Smith(margins).needs == {PAIRWISE}
+    assert Highest(Tally(Plurality()), among=Smith(margins)).needs == {PROFILE, PAIRWISE}
+    assert Top(Tally(Plurality())).needs == (Top(Tally(Plurality())) > 0.5).needs == {FIRST}
+    assert Lead(Tally(Score(6))).needs == {Scored(6)}
+    assert Conditional(Top(Tally(Plurality())) > 0.55, METHODS["fptp"], METHODS["two_round"]).needs == {FIRST, PAIRWISE}
+    assert Conditional((Lead(Tally(BordaCount())) > 0.02) | (Top(Tally(BY_MEAN)) < 0.5), METHODS["fptp"],
+                       METHODS["fptp"]).needs == {PAIRWISE, Scored(2, "avg"), FIRST}
 
 
 def test_score_comparisons_can_weight_ordinal_preferences_on_ties():
@@ -693,6 +788,37 @@ MARGINS = Margins(Pairwise())
     (lambda: Eliminate(Tally(Score(6), statistic="median"), how="mean"), ValueError,
      'Eliminate how="mean" takes the mean of the totals, and those of a median are only an order: '
      'Tally(Score(6), statistic="median")'),
+    # Top and Lead of the totals of a Tally of the mean, against a threshold from 0 to 1
+    (lambda: Top(BordaCount()), TypeError,
+     "Top expects a Tally (its totals are normalised by its ballot), got a Ballot: BordaCount()"),
+    (lambda: Lead(Weakest(MARGINS)), TypeError,
+     "Lead expects a Tally (its totals are normalised by its ballot), got CandidateTotals: Weakest(Margins(Pairwise()))"),
+    (lambda: Top(Tally(Score(6), statistic="median")), ValueError,
+     'Top normalises the totals of a mean, and those of a median are only an order: Tally(Score(6), statistic="median")'),
+    (lambda: Top(Tally(Plurality())) > 1.5, ValueError,
+     "the threshold of Top(Tally(Plurality())) must be a number from 0 to 1, got 1.5"),
+    (lambda: Lead(Tally(Plurality())) < -0.1, ValueError, "must be a number from 0 to 1, got -0.1"),
+    (lambda: Top(Tally(Plurality())) > float("nan"), ValueError, "must be a number from 0 to 1, got nan"),
+    (lambda: Top(Tally(Plurality())) > True, ValueError, "must be a number from 0 to 1, got True"),
+    (lambda: Top(Tally(Plurality())) > "0.5", ValueError, "must be a number from 0 to 1, got '0.5'"),
+    (lambda: Top(Tally(Plurality())) > Top(Tally(BordaCount())), ValueError,
+     "must be a number from 0 to 1, got Top(Tally(BordaCount()))"),
+    (lambda: Top(Tally(Plurality())) >= 0.5, TypeError, "'>=' not supported"),
+    (lambda: Conditional(Top(Tally(Plurality())), METHODS["fptp"], METHODS["borda"]), TypeError,
+     "Conditional expects a Winner or Condition, got Top Top(Tally(Plurality()))"),
+    # the Smith set of diffs that can form a cycle
+    (lambda: Smith(Pairwise()), TypeError, "Smith expects PairDiffs, got PairShares: Pairwise()"),
+    (lambda: Smith(StrongestPaths(MARGINS)), ValueError,
+     "Smith expects PairDiffs that can form a cycle, got transitive ones, of which it is only the candidates "
+     "no one beats (Unbeaten): StrongestPaths(Margins(Pairwise()))"),
+    # with a majority of a half or more, by keyword
+    (lambda: Smith(MARGINS, majority=0.45), ValueError,
+     "Smith majority must be a number from 0.5 to 1, got 0.45: below 0.5 two candidates could each beat all others"),
+    (lambda: Smith(MARGINS, majority=1.5), ValueError, "Smith majority must be a number from 0.5 to 1, got 1.5"),
+    (lambda: Smith(MARGINS, majority=float("nan")), ValueError, "from 0.5 to 1, got nan"),
+    (lambda: Smith(MARGINS, majority=True), ValueError, "from 0.5 to 1, got True"),
+    (lambda: Smith(MARGINS, majority="0.55"), ValueError, "from 0.5 to 1, got '0.55'"),
+    (lambda: Smith(MARGINS, 0.55), TypeError, "positional argument"),
 ])
 def test_wrong_blocks_and_arguments_fail_when_built(build, error, message):
     with pytest.raises(error, match=re.escape(message)):
