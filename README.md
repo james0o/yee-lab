@@ -64,6 +64,7 @@ Then open http://127.0.0.1:8000. [yeelab/web/app.py](src/yeelab/web/app.py) serv
   - **Bullet voters** rank their first choice first and all other candidates equal below it.
   - **Burying voters**, a share of the others, rank last the frontrunner they like less (on a score ballot: 0).
   - **Compromising voters**, a share of the others, rank first the frontrunner they like more if neither is their first choice (on a score ballot: the top score). Some voters bury and compromise both.
+  - **More strategic to the left:** the shares above are those at the centre; left of it more voters vote strategically, right of it fewer. 0 is the same share everywhere.
 - **Voters:** Beta, or normal for the original Yee model.
 - **Deviation:** $D$ from $0.05$ to $0.4$.
 - **Hover** over the square to see the voters of that pixel: their 2D density over the square and their distribution along $x$ above it.
@@ -138,6 +139,7 @@ Burial(borda, share=0.3)                  # Borda where 30% of the voters bury a
 Compromise(fptp, share=0.3)               # FPTP where 30% of the voters compromise on a frontrunner
 Bullet(Burial(Compromise(borda, share=0.4), share=0.2), share=0.3)  
 # 30% bullet vote; of the others 20% bury, 40% compromise
+Burial(borda, share=0.3, tilt=(-2, 0))    # 30% at the centre bury, more to the left, fewer to the right
 ```
 
 A **ballot** gives each candidate points, [`Tally`](src/yeelab/build/blocks.py#L868) averages them over the voters of a pixel (with `statistic="median"`, it takes a score ballot's majority judgment instead), and a **winner** block ([`Highest`](src/yeelab/build/blocks.py#L1380), [`Eliminate`](src/yeelab/build/blocks.py#L1225), [`Unbeaten`](src/yeelab/build/blocks.py#L1428), [`Conditional`](src/yeelab/build/blocks.py#L1567)) picks the winner. **Condorcet methods** start from [`Pairwise()`](src/yeelab/build/blocks.py#L737); [`Smith`](src/yeelab/build/blocks.py#L1518) chooses the Smith set, the smallest set of candidates who each beat every candidate outside it, for another method to choose from. [`Top`](src/yeelab/build/blocks.py#L979) and [`Lead`](src/yeelab/build/blocks.py#L994) compare a tally, scaled to 0–1 for any ballot, with a threshold. [`Score`](src/yeelab/build/blocks.py#L403) ballots give scores from 0 to `levels - 1` by distance; `power` sets how sparingly the top scores are given. A block checks its input when it is built, and `repr` gives back the expression.

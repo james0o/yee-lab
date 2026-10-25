@@ -1315,6 +1315,43 @@ def compromise():
         print(f"compromise, {name}: D sincere {(sincere == D).mean():.3f}; " + "; ".join(parts))
 
 
+TILT = 3.0  # of the tilted figures: the odds of the left and the right wall differ e^3 = 20 times
+TILT_SHARE = 0.5
+
+
+def tilt():
+    """Borda, the Condorcet winner and Score where half of the voters at the centre bury,
+    as many everywhere, more of them to the left and more to the right (the voters of the
+    UI), and for every method the part of the square where they give the pixel another
+    winner than sincere voters, and where its winner is a dark horse or there is none."""
+    rows = [("Borda", BUILD_METHODS["borda"]), ("Condorcet winner", BUILD_METHODS["condorcet"]),
+            ("Score", BUILD_METHODS["score"])]
+    tilts = [("as many everywhere", (0.0, 0.0)), ("more to the left", (-TILT, 0.0)),
+             ("more to the right", (TILT, 0.0))]
+    fig, axes = plt.subplots(len(rows), len(tilts), figsize=(10, 10.2), layout="constrained")
+    for row, (label, method) in enumerate(rows):
+        for col, (where, direction) in enumerate(tilts):
+            show(axes[row, col], Burial(method, TILT_SHARE, tilt=direction), UI_MODEL, f"{label}, burying {where}")
+    _save_figure(fig, "tilt")
+    plt.close(fig)
+    medians = grid(FINAL_GRID, PIXELS)[1]
+    first = ranking_cells.interpolate_to(
+        first_choice_shares_at(CANDIDATES, UI_MODEL), UI_MODEL.medians, medians, UI_MODEL.transform,
+        UI_MODEL.split)[1:-1, 1:-1]
+    frontrunners = np.argsort(-first, axis=-1, kind="stable")[..., :2]
+    for name, method in BUILD_METHODS.items():
+        if name in UNSUPPORTED["burial"]:
+            continue
+        sincere = winners(method, CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+        parts = []
+        for where, direction in tilts:
+            winner = winners(Burial(method, TILT_SHARE, tilt=direction), CANDIDATES, UI_MODEL, FINAL_GRID)[1][1:-1, 1:-1]
+            dark = (winner[..., None] != frontrunners).all(axis=-1) & (winner != CYCLE)
+            parts.append(f"{where}: another winner {(winner != sincere).mean():.3f}, dark horse {dark.mean():.3f}, "
+                         f"no winner {(winner == CYCLE).mean():.3f}")
+        print(f"tilted burial, {name}: " + "; ".join(parts))
+
+
 if __name__ == "__main__":
     FIGURES.mkdir(exist_ok=True)
     spread_shapes()
@@ -1349,3 +1386,4 @@ if __name__ == "__main__":
     bullet()
     burial()
     compromise()
+    tilt()

@@ -1670,7 +1670,7 @@ score them by distance. A strategy changes the ballots of some of the voters, no
 method. `Bullet(method, share)`, `Burial(method, share)` and `Compromise(method, share)`
 (`build/strategic.py`) evaluate any method of @ch-methods on voters of whom a share vote strategically at every
 pixel, the same share among the voters of every first choice, while the others vote
-sincerely. Every share a method reads is a sum over the voters, so the shares of these
+sincerely; or, tilted, a share that changes with where the voter is (@sec-tilt). Every share a method reads is a sum over the voters, so the shares of these
 voters are those of the sincere voters and of the strategic ones, weighted by their
 shares. The three combine: `Bullet(Burial(Compromise(method, y), q), b)` is the method
 where $b$ of the voters bullet vote, and of the others $q$ bury and $y$ compromise, each
@@ -1678,6 +1678,7 @@ whatever the other does. A voter who bullet votes would gain nothing by either: 
 ballot ranks the frontrunner they like less among the last already, and their first
 choice alone first. The web UI has a slider for each, _Bullet voters_ for $b$, _Burying
 voters_ for $q$ and _Compromising voters_ for $y$, all at 0 at first: every voter sincere.
+_More strategic to the left_ tilts all three (@sec-tilt).
 
 Bullet voting depends on the voter alone, so its shares are as smooth in the median as
 before, and the margins and borders are traced the same way (@sec-zero-sets). Burial and
@@ -1990,6 +1991,112 @@ voters, 26% at $q = 0.5$ and 28% at $q = 1$. Compromise hardly changes STAR, 0.7
 square at $y = 0.5$: it gives the frontrunner a voter likes more the top score, which
 moves it up in the totals, but where the two frontrunners meet in the runoff that voter
 preferred it already.
+
+== Tilted strategies (`tilt=`) <sec-tilt>
+
+*The share.* With the same share everywhere, the supporters of both frontrunners bury
+each other alike, and their burials partly cancel. A tilt makes one camp vote
+strategically more than the other. With `tilt` $= u$, the share of the voters at $x$
+who vote by a strategy of share $p$ is
+
+$ p(x) = sigma(logit p + u dot (x - c)), quad c = (1 slash 2, 1 slash 2), quad
+  sigma(z) = 1 / (1 + e^(-z)) : $ <eq-tilt>
+
+$p$ at the centre of the square, more of the voters in the direction of $u$ and fewer
+opposite it, as many across it. For $0 < p < 1$ it is never 0 or 1, and $u = 0$ is the
+same share everywhere. Along $u = (l, 0)$ the odds $p(x) slash (1 - p(x))$ of the right
+wall are $e^l$ times those of the left one; for a small $p$ so are nearly the shares,
+$l = ln 16$ gives about $4 p$ at the right wall and $p slash 4$ at the left. A share
+linear in $x$, $p (1 + t dot (x - c))$, would pass 1 for a large $p$. All three
+strategies take a tilt: `Bullet(method, b, tilt=u)`, `Burial(method, q, tilt=u)`,
+`Compromise(method, y, tilt=u)`.
+
+*Strips.* A share that changes with the voter is not a sum of edge terms
+(@sec-edges): those integrate the density of the voters alone. So the voters are cut
+into $K = 8$ strips across $u$ (`Striped`, `STRIPS` in `build/voters.py`). With
+$hat(u) = u slash abs(u)$ and $t = hat(u) dot (x - c)$, which runs over the square from
+$-h$ to $h$, $h = (abs(hat(u)_1) + abs(hat(u)_2)) slash 2$, the strips cut $[-h, h]$
+into equal parts $[t_k, t_(k + 1)]$; the first and the last reach on beyond the square,
+for normal voters. Strip $k$ has the mean of @eq-tilt over its $t$, with $l = u dot
+hat(u)$:
+
+$ p_k = 1 / (t_(k + 1) - t_k) integral_(t_k)^(t_(k + 1)) sigma(logit p + l t) dif t
+  = (op("softplus")(logit p + l t_(k + 1)) - op("softplus")(logit p + l t_k))
+    / (l (t_(k + 1) - t_k)) , $
+
+with $op("softplus")(z) = ln(1 + e^z)$. Every share a method reads is a sum over the voters, and the strategy of a voter
+depends on their own ballot only, so each strip is moved by its own share as all voters
+are by one in @sec-bullet, @sec-burial and @sec-compromise, and the method reads the
+sums over the strips (`Voters.strips`). In the pairwise shares of bullet voters
+(@eq-bullet-pairwise) the 1 is the share $m_k$ of the voters in the strip:
+$pi'^k_(i j) = (1 - b_k) pi^k_(i j) + b_k (m_k + s^k_i - s^k_j) slash 2$. STAR's
+comparisons are moved strip by strip, each with its own $q_k$ and $y_k$
+(@sec-star-strategy). The strategies of one method are tilted along one direction, or
+not at all: they read the same strips, and an untilted strategy among them moves every
+strip by its $p$. Parallel and opposite tilts cut the same strips.
+
+*The shares of a strip.* The polygons (the Voronoi cells, the half-planes of the pairs
+and the ranking cells, @sec-needs) are cut by the strips and integrated as before. A
+ranking cell is small and in one or two strips, 1.4 on average for eight random
+candidates, so each strip keeps only the rankings of its cells, with their rows in the
+profile of all voters. An edge cut in pieces is integrated piece by piece, and for the
+narrowest voters at a corner the pieces add up to the whole edge only to about
+$2 dot 10^(-4)$, the error of the quadrature there (@sec-edges). The shares of the
+strips are therefore scaled to add up to those of the whole polygons exactly: then a
+tilt of all but 0 is the strategy itself to rounding, and the tests check that it
+moves no winner. The score shares come from the rectangles of the voter grid
+(@sec-score), which the strips split among them by their centres: a rectangle that a
+border of the strips crosses counts whole in one strip. Those add up to the whole
+exactly.
+
+*Cost.* At the final grid of the UI ($320$), with all three strategies tilted, a
+diagram takes 5–7 times as long as with the same strategies untilted: IRV with four
+candidates 1.5 s against 0.3 s, majority judgment with six 7 s against 1.1 s. With eight
+candidates IRV takes about 2 GB, against 0.8 GB untilted.
+
+*The web UI.* The slider _More strategic to the left_ tilts every strategy to the left,
+$u = (-l, 0)$, with $l$ from 0, as many everywhere, to 5, where the odds of the left
+wall are $e^5 approx 150$ times those of the right one. The direction is fixed; the
+slider sets only the strength, and applies once some voters vote strategically.
+
+#figure(
+  image("figures/tilt.png", width: 100%),
+  caption: [Borda count, the Condorcet winner and Score (six levels, $p = 1.5$) with
+    half the voters burying at the centre of the square: as many everywhere, more to
+    the left ($u = (-3, 0)$) and more to the right ($u = (3, 0)$), where the odds of the
+    two walls differ $e^3 = 20$ times (candidates A–E, Beta voters, `rms`, $D = 0.2$).
+    Black: no Condorcet winner.],
+) <fig-tilt>
+
+*The default candidates.* B, C and E stand left of the centre, A and D right of it, so
+a tilt to the left makes the voters on the left, mostly supporters of B, C and E, bury
+more and those on the right less, and a tilt to the right the other way round; at the centre half of the voters bury in
+all three (@fig-tilt). Burying more to the left nearly doubles the change of the
+Condorcet methods: a dark horse wins 10% of the square instead of 7%, and the Condorcet
+winner is missing on 1.8% instead of 0.6%. Burying more to the right changes them
+slightly less than burying as many everywhere. Score goes the other way and changes most
+where more voters bury to the right. The part of the square with another winner than
+with sincere voters, at $q = 0.5$ at the centre:
+
+#align(center, table(
+  columns: 4,
+  align: (left, right, right, right),
+  stroke: none,
+  table.hline(),
+  [method], [as many everywhere], [more to the left], [more to the right],
+  table.hline(stroke: 0.5pt),
+  [FPTP, Two-round], [0], [0], [0],
+  [IRV], [1.4%], [2.1%], [1.0%],
+  [KOTH], [3.4%], [6.5%], [2.8%],
+  [STAR], [3.7%], [5.0%], [3.0%],
+  [Majority judgment], [5.0%], [5.3%], [5.6%],
+  [Baldwin, Nanson, Schulze, Minimax], [5.5–5.6%], [9.3–9.5%], [5.1–5.2%],
+  [Condorcet, Black], [5.9%], [9.9–10.2%], [5.5–5.6%],
+  [DAC], [6.2%], [8.1%], [6.4%],
+  [Score], [6.3%], [6.6%], [7.3%],
+  [Borda], [17%], [23%], [16%],
+  table.hline(),
+))
 
 #pagebreak()
 
