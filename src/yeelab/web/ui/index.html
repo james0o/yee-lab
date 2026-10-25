@@ -196,6 +196,8 @@
     let strategyOf = {};     // strategy name -> the strategy whose voters it leaves out, if any
     let unsupported = {};    // strategy name -> the methods it cannot do
     let strategySliders = {}; // strategy name -> its slider
+    let tilt = 0;            // strength of the tilt of every strategy to the left: 0 is as many everywhere
+    let tiltSlider = null;
     let voters = {};      // deviation/power -> {sigma, beta_params} from the backend, where
                           // beta_params is [a, b] along one axis, per pixel
     let voterRequest = 0;
@@ -774,8 +776,9 @@
       const measured = grid === finalGrid;
       const part = shift();
       const asked = settings(), sliders = [deviation, levels, power, tieWeight, applied(), spreadPower];
+      const leaning = tilt;
       const key = JSON.stringify([candidates, distribution, deviation, spreadPower, levels, power,
-                                  tieWeight, shares, part]);
+                                  tieWeight, shares, leaning, part]);
       if (grid === finalGrid) message.textContent = `Computing ${labels[method]}…`;
       const start = performance.now();
       try {
@@ -784,7 +787,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             candidates, method, distribution, deviation, spread_power: spreadPower, levels, power,
-            tie_weight: tieWeight, ...sliders[4], grid,
+            tie_weight: tieWeight, ...sliders[4], tilt: leaning, grid,
             pixel_median: part > 0 ? "geometric" : "marginal", shift: part,
             metrics: measured, overlay: measured || showBoundaries.checked,
           }),
@@ -799,7 +802,7 @@
           focusOutline = answer.overlays.focus;
           boundaryPath = null;
           draw();
-          describe(...sliders.slice(0, 5), Math.round(performance.now() - start), Math.round(answer.ms));
+          describe(...sliders.slice(0, 5), Math.round(performance.now() - start), Math.round(answer.ms), leaning);
           let errors = null;  // a coarse drag has none, and is not compared
           if (measured) {
             errors = [answer.metrics.diagram.relative, answer.metrics.region.relative];
@@ -845,7 +848,7 @@
     }
 
     // What the diagram shows, and how long it took (round trip, and computing it on the backend).
-    function describe(deviation, levels, power, tieWeight, applies, total, server) {
+    function describe(deviation, levels, power, tieWeight, applies, total, server, leaning) {
       const tail = ` · ${candidates.length} candidates · ${total} ms (${server} ms computing)`;
       let name = labels[method];
       if (scorePowerMethods.includes(method)) {
@@ -860,6 +863,8 @@
         const others = applies[strategyOf[strategy]] > 0 ? "of the others " : "";
         if (share > 0) name += ` · ${Math.round(100 * share)}% ${others}${strategyPhrases[strategy]}`;
       }
+      if (leaning > 0 && Object.values(applies).some(share => share > 0))
+        name += ` · more to the left, l = ${leaning.toFixed(2)}`;
       if (method === "voronoi") {  // nearest candidate, no voters involved but for where it is drawn
         const where = geometric() ? " · only where voters have their geometric median" : "";
         message.textContent = `${name}${where}${tail}`;
@@ -980,6 +985,8 @@
     function updateStrategies() {
       for (const [name, slider] of Object.entries(strategySliders))
         slider.disabled = method === "voronoi" || (unsupported[name] ?? []).includes(method);
+      // the tilt only where some voters vote strategically
+      if (tiltSlider) tiltSlider.disabled = !Object.values(applied()).some(share => share > 0);
     }
 
 
@@ -1099,12 +1106,34 @@
       const pick = () => {
         shares[name] = Number(slider.valueAsNumber.toFixed(2));  // the step is 0.05
         value.textContent = `${Math.round(100 * shares[name])}%`;
+        updateStrategies();
       };
       slider.addEventListener("input", () => { pick(); compute(dragGrid); });
       slider.addEventListener("change", () => compute());
       strategies.append(row);
       strategySliders[name] = slider;
       pick();
+    }
+    // The strength of the tilt of every strategy to the left, 0 at first: as many everywhere.
+    {
+      const row = document.createElement("div");
+      const value = document.createElement("output");
+      tiltSlider = document.createElement("input");
+      row.className = "choices";
+      row.append(Object.assign(document.createElement("span"), { textContent: `${config.tilt.label}:` }),
+                 tiltSlider, value);
+      Object.assign(tiltSlider, { type: "range", min: 0, max: config.tilt.max, step: config.tilt.step, value: 0,
+                                  title: config.tilt.description });
+      const pick = () => {
+        tilt = Number(tiltSlider.valueAsNumber.toFixed(2));
+        // the odds of the left wall against the right one
+        value.textContent = tilt > 0 ? `l = ${tilt.toFixed(2)} (×${Math.round(Math.exp(tilt))})` : "off";
+      };
+      tiltSlider.addEventListener("input", () => { pick(); compute(dragGrid); });
+      tiltSlider.addEventListener("change", () => compute());
+      strategies.append(row);
+      pick();
+      updateStrategies();
     }
     choices(pixelMedians, config.pixel_medians, name => {
       const from = shift();  // where the diagram is now, also in the middle of a move

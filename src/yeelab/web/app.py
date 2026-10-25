@@ -160,16 +160,27 @@ STRATEGIES = {
 BLOCKS = {"bullet": Bullet, "burial": Burial, "compromise": Compromise}  # the block of each strategy
 assert list(BLOCKS) == list(STRATEGIES)
 STRATEGIC_STEP = 0.05
+# The tilt of every strategy (build.strategic): always to the left, the voters left of the
+# centre voting strategically more and those right of it less; a slider sets its strength l,
+# tilt=(-l, 0), from 0 (as many everywhere) by TILT_STEP. The odds of the left wall are e^l
+# times those of the right one: at MAX_TILT about 150 times.
+TILT = {"label": "More strategic to the left", "description": "Tilt of every strategy: its share is "
+        "that of the voters at the centre of the square, and more of the voters left of it and fewer right "
+        "of it vote by it, sigma(logit share - l (x - 1/2)). The odds of the left wall are e^l times those "
+        "of the right one; 0 is the same share everywhere."}
+TILT_STEP = 0.25
+MAX_TILT = 5.0
 
 
-def strategic(method: Winner, shares: dict[str, float]) -> Winner:
+def strategic(method: Winner, shares: dict[str, float], tilt: float = 0.0) -> Winner:
     """The method where shares[name] of the voters vote by each strategy of STRATEGIES,
     the first outermost: Bullet(Burial(Compromise(method, c), q), b). b of the voters
     bullet vote, and of the others q bury and c compromise, each whatever the other does.
-    Compromise is innermost so that every poll reads the sincere first choices."""
+    Compromise is innermost so that every poll reads the sincere first choices. With
+    `tilt` l, every strategy is tilted to the left by it, tilt=(-l, 0) (TILT)."""
     for name in reversed(BLOCKS):
         if shares.get(name, 0) > 0:
-            method = BLOCKS[name](method, shares[name])
+            method = BLOCKS[name](method, shares[name], tilt=(-tilt, 0.0))
     return method
 
 
@@ -348,6 +359,7 @@ class DiagramRequest(BaseModel):
     bullet: float = Field(0.0, ge=0, le=1)
     burial: float = Field(0.0, ge=0, le=1)
     compromise: float = Field(0.0, ge=0, le=1)
+    tilt: float = Field(0.0, ge=0, le=MAX_TILT)  # of every strategy, to the left (TILT)
     grid: int = Field(FINAL_GRID, ge=32, le=512)
     # The comparison with the Voronoi diagram: the metrics, and its borders to draw over the
     # diagram (overlay). The UI asks for neither while a candidate is dragged (the borders only
@@ -462,6 +474,7 @@ def config():
         "strategies": [{"name": name, **info} for name, info in STRATEGIES.items()],
         "unsupported": UNSUPPORTED,
         "strategic_step": STRATEGIC_STEP,
+        "tilt": {**TILT, "max": MAX_TILT, "step": TILT_STEP},
         # for the voter distribution plots of the hovered pixel
         "voters": _voters(),
     }
@@ -474,7 +487,7 @@ def diagram_regions(request: DiagramRequest):
     "overlays": {"focus": ..., "voronoi_boundaries": ...}, "ms": ...}, rings flat [x0, y0, x1, y1, ...],
     outer rings counter-clockwise and holes clockwise. winner is -1 (voting.CYCLE) for a
     Condorcet cycle. `bullet` of the voters bullet vote, and of the others `burial` bury and
-    `compromise` compromise (strategic). metrics is null unless `metrics`, and the
+    `compromise` compromise (strategic), more of them to the left by `tilt`. metrics is null unless `metrics`, and the
     overlays have no voronoi_boundaries unless `overlay`. focus is always there: the border
     of the region that the metrics of "region" average over, [x0, y0, x1, y1, ...] counter-clockwise."""
     start = time.perf_counter()
@@ -487,7 +500,7 @@ def diagram_regions(request: DiagramRequest):
         method = request.method
     shares = {name: getattr(request, name) for name in STRATEGIES}
     if method != "voronoi" and any(shares.values()):
-        method = strategic(MARGINS[method] if isinstance(method, str) else method, shares)
+        method = strategic(MARGINS[method] if isinstance(method, str) else method, shares, request.tilt)
     shapes, points, winner, _ = diagram(
         method, request.candidates, model, request.grid, request.pixel_median, request.shift
     )
