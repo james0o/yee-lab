@@ -13,14 +13,14 @@ from fastapi.testclient import TestClient
 from matplotlib.path import Path as MplPath
 from scipy.spatial import Voronoi
 
-from yeelab.build import (D21, AntiPlurality, Conditional, Highest, Mix, Plurality, Score, ScoreAvg, ScoreCluster,
-                          ScoreComparisons, ScoreDH, ScoreHybrid, Tally, Unbeaten)
+from yeelab.build import (D21, METHODS, AntiPlurality, Bullet, Burial, Conditional, Highest, Mix, Plurality, Score,
+                          ScoreAvg, ScoreCluster, ScoreComparisons, ScoreDH, ScoreHybrid, Tally, Unbeaten)
 from yeelab.margin.metrics import (FOCUS_REACH, FOCUS_ROUND, OUTLINE_STEPS, borders, convex_hull, focus_hull,
                                    focus_outline, hull_distance, voronoi_agreement)
 from yeelab.margin.regions import MARGINS, grid, nearest, regions, voronoi_borders, winners
 from yeelab.margin.shares import Model, first_choice_shares, ranking_shares, score_comparison_shares, unscored_shares
 from yeelab.voting import CYCLE, irv_rounds
-from yeelab.web.app import DIAGRAMS, _score_ballot_settings, _score_ballots, app
+from yeelab.web.app import DIAGRAMS, MAX_TILT, TILT_STEP, _score_ballot_settings, _score_ballots, app
 
 from references import TESTED_METHODS
 
@@ -695,3 +695,27 @@ def test_api_offers_deviations_from_005():
     request = {"candidates": CANDIDATES.tolist(), "method": "score", "grid": 64}
     assert client.post("/api/regions", json={**request, "deviation": 0.05}).status_code == 200
     assert client.post("/api/regions", json={**request, "deviation": 0}).status_code == 422
+
+
+def test_api_tilts_every_strategy_to_the_left():
+    """The tilt slider tilts every strategy to the left by its strength, tilt=(-l, 0): the
+    regions of the method built so; 0 is the strategies as they are, and without strategic
+    voters it changes nothing. Its strength runs from 0 to MAX_TILT."""
+    client = TestClient(app)
+
+    def shapes(method="borda", **settings):
+        request = {"candidates": CANDIDATES.tolist(), "method": method, "grid": 32, **settings}
+        response = client.post("/api/regions", json=request)
+        assert response.status_code == 200
+        return response.json()["regions"]
+
+    config = client.get("/api/config").json()["tilt"]
+    assert config["max"] == MAX_TILT and config["step"] == TILT_STEP and config["label"]
+    built = Bullet(Burial(METHODS["borda"], 0.5, tilt=(-3.0, 0.0)), 0.2, tilt=(-3.0, 0.0))
+    assert shapes(burial=0.5, bullet=0.2, tilt=3) == json.loads(json.dumps(regions(built, CANDIDATES.tolist(),
+                                                                                   MODELS[0], 32)))
+    assert shapes(burial=0.5, tilt=3) != shapes(burial=0.5) == shapes(burial=0.5, tilt=0)
+    assert shapes(tilt=3) == shapes()
+    for tilt in (-0.5, MAX_TILT + 0.5, "x"):
+        request = {"candidates": CANDIDATES.tolist(), "method": "borda", "burial": 0.5, "tilt": tilt}
+        assert client.post("/api/regions", json=request).status_code == 422, tilt

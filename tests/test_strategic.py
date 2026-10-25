@@ -43,11 +43,15 @@ from yeelab.build import (
     ScoreComparisons,  # for eval(repr(...))
     Scored,
     ScoredPairwise,
+    Striped,
     Tally,
     Unbeaten,  # for eval(repr(...))
     Voters,
 )
 from yeelab.build.strategic import POLL, bulleted, burying, compromising
+from yeelab.build.voters import STRIPS
+from yeelab.margin import regions
+from yeelab.margin.shares import Model, strip_masks
 from yeelab.voting import irv_rounds
 
 from references import (TESTED_METHODS, TOLERANCE, dac_reference, elimination_reference, levels_of,
@@ -631,3 +635,286 @@ def test_star_with_all_strategies_together(profile, bullet, bury, compromise):
     assert set(grid.calls) == (noted if bury or compromise else set())  # once per pair, both shares together
     np.testing.assert_array_equal(winner, expected)
     np.testing.assert_allclose(margin, np.minimum(expected_margin, gap), rtol=0, atol=1e-12)
+
+# ---------------------------------------------------------------- Tilted strategies
+
+
+class _PartGrid:
+    """The part `weight` (..., ) of a _Grid at every point: the ballots of the voters of a
+    strip, of whom that part of the voters of each point are."""
+
+    def __init__(self, grid, weight):
+        self.grid, self.weight = grid, weight
+
+    def _at(self, cells):
+        return self.weight[cells[:, 0], cells[:, 1]]
+
+    def taken(self, a, b, cells):
+        return self.grid.taken(a, b, cells) * self._at(cells)[:, None]
+
+    def added(self, a, b, cells):
+        return self.grid.added(a, b, cells) * self._at(cells)[:, None]
+
+    def moved_grades(self, a, b, cells):
+        return self.grid.moved_grades(a, b, cells) * self._at(cells)[None, :, None, None]
+
+    def moved(self, a, b, bury, compromise, cells):
+        return self.grid.moved(a, b, bury, compromise, cells) * self._at(cells)[:, None, None]
+
+
+def _cut(voters, striped, seed=0):
+    """The voters cut into the strips of `striped`: every ranking in one to three strips,
+    at random, with random parts of its voters at every point; the score shares and the
+    ballots (_PartGrid) split by random parts at every point too."""
+    rng = np.random.default_rng(seed)
+    rankings, probs, k = voters.rankings, voters.probs.astype(np.float64), STRIPS
+    inside = np.zeros((k, len(rankings)), dtype=bool)
+    for r in range(len(rankings)):
+        inside[rng.choice(k, size=rng.integers(1, 4), replace=False), r] = True
+    inside[np.arange(k), np.arange(k) % len(rankings)] = True  # no strip without voters
+    weights = rng.random((k, *probs.shape)) * inside[:, None, None, :]
+    weights /= weights.sum(axis=0)
+    split = rng.dirichlet(np.ones(k), size=voters.shape)  # (..., K) of the score shares
+    parts = []
+    for strip in range(k):
+        index = np.flatnonzero(inside[strip])
+        part = voters_of(rankings[index], (weights[strip] * probs)[..., index])
+        w = split[..., strip]
+
+        def scaled(shares, extra):
+            return {key: value * w.reshape(w.shape + (1,) * extra) for key, value in shares.items()}
+
+        parts.append(replace(part, index=index, mass=(weights[strip] * probs).sum(axis=-1),
+                             unscored=scaled(voters.unscored, 1), scored_pairwise=scaled(voters.scored_pairwise, 2),
+                             graded=scaled(voters.graded, 2), cells=voters.cells,
+                             ballots={key: _PartGrid(grid, w) for key, grid in voters.ballots.items()}))
+    whole = replace(voters, **{name: getattr(voters_of(rankings, probs), name) for name in ("first", "pairwise")})
+    return replace(whole, probs=probs, strips=tuple(parts), striped=striped)
+
+
+def _scattered(part_probs, parts, rows):
+    """The shares (..., rows) of the rankings of all voters from those of each strip."""
+    out = np.zeros((*part_probs[0].shape[:-1], rows))
+    for values, part in zip(part_probs, parts):
+        out[..., part.index] += values
+    return out
+
+
+TILT = (1.5, -0.8)
+
+
+def test_tilted_strategies_are_blocks():
+    """A tilt prints, takes two finite numbers and needs the voters cut into strips across
+    it, the same strips for parallel tilts and for opposite ones; untilted strategies
+    inside or around a tilted one read the same strips, and tilts in two directions
+    cannot be read at once. A tilt of share 0 is the method itself."""
+    borda, irv = METHODS["borda"], METHODS["irv"]
+    built = [Bullet(irv, 0.3, tilt=(1.0, 0.0)), Burial(borda, 0.5, tilt=TILT),
+             Compromise(irv, 0.2, tilt=(0, 2), poll=Highest(Tally(BordaCount()), n=2)),
+             Bullet(Burial(Compromise(irv, 0.3, tilt=TILT), 0.2), 0.1, tilt=(-3.0, 1.6))]
+    assert repr(built[0]) == 'Bullet(Eliminate(Tally(Plurality()), how="min"), share=0.3, tilt=(1.0, 0.0))'
+    assert repr(built[1]) == "Burial(Highest(Tally(BordaCount())), share=0.5, tilt=(1.5, -0.8))"
+    for block in built:
+        assert eval(repr(block)) == block
+    assert repr(Burial(borda, 0.5, tilt=(0, 0))) == repr(Burial(borda, 0.5))
+    assert Burial(borda, 0.5, tilt=(0, 0)) == Burial(borda, 0.5)
+    for strategy in STRATEGIES:
+        name = strategy.__name__
+        for tilt in ((1.0,), (1, 2, 3), (float("nan"), 0), (float("inf"), 0), "ab", 3):
+            with pytest.raises(ValueError, match=re.escape(f"{name} tilt must be two finite numbers, got {tilt!r}")):
+                strategy(irv, 0.5, tilt=tilt)
+        assert strategy(borda, 0.5, tilt=TILT).needs == strategy(borda, 0.5).needs | {Striped.of(TILT)}
+        assert strategy(borda, 0, tilt=TILT).needs == borda.needs
+    assert Striped.of((2, 1)) == Striped.of((-4, -2)) == Striped.of((1, 0.5))
+    assert Striped.of((1, 0)) == Striped.of((-1, 0)) and Striped.of((1, 0)).angle == 0.0
+    assert Striped.of(TILT) in Bullet(Burial(irv, 0.2, tilt=TILT), 0.3, tilt=(-3.0, 1.6)).needs
+    with pytest.raises(ValueError, match="strategies tilted in different directions at once"):
+        Bullet(Burial(irv, 0.2, tilt=TILT), 0.3, tilt=(1, 1))
+
+
+def test_the_shares_of_the_strips():
+    """The mean of sigma(logit share + l t) over the t of each strip, l the tilt along the
+    strips: share itself without a tilt or at 0 and 1, more of the voters in the direction
+    of the tilt and fewer opposite it, mirrored for the opposite tilt, and the share at
+    the centre, where two strips meet, between theirs. Across the square t runs from -h
+    to h, its extent along the direction."""
+    striped = Striped.of(TILT)
+    u = striped.direction
+    h = (abs(u[0]) + abs(u[1])) / 2
+    np.testing.assert_allclose(striped.bounds[[0, -1]], [-h, h])
+    along = float(np.dot(TILT, u))
+    for share in (0.05, 0.3, 0.9):
+        shares = striped.shares(share, TILT)
+        assert len(shares) == STRIPS and ((0 < shares) & (shares < 1)).all()
+        assert (np.diff(shares) > 0).all() == (along > 0)
+        np.testing.assert_allclose(striped.shares(share, (-TILT[0], -TILT[1])), shares[::-1], rtol=1e-12)
+        assert min(shares[STRIPS // 2 - 1 : STRIPS // 2 + 1]) < share < max(shares[STRIPS // 2 - 1 : STRIPS // 2 + 1])
+        t = np.linspace(striped.bounds[:-1], striped.bounds[1:], 20001)  # (points, strips)
+        logistic = 1 / (1 + np.exp(-(np.log(share / (1 - share)) + along * t)))
+        np.testing.assert_allclose(shares, np.trapezoid(logistic, t, axis=0) / np.diff(striped.bounds), rtol=1e-8)
+        np.testing.assert_array_equal(striped.shares(share, (0, 0)), np.full(STRIPS, share))
+    for share in (0, 1):
+        np.testing.assert_array_equal(striped.shares(share, TILT), np.full(STRIPS, share))
+    with pytest.raises(ValueError, match="is not along the strips"):
+        striped.shares(0.3, (1, 1))
+
+
+def test_untilted_strategies_on_voters_cut_into_strips(profile):
+    """Each strip moved by the same share and added up: the strategies of the voters
+    themselves, bullet voting with the strip's share of the voters for the 1 of the
+    pairwise shares, and the comparisons moved strip by strip."""
+    rankings, probs = profile
+    voters = _strategy_shares(rankings, probs)
+    cut = _cut(voters, Striped.of(TILT))
+    for name, method in TESTED_METHODS.items():
+        for strategic in (Bullet(method, BULLET), Burial(method, BURIAL), Compromise(method, COMPROMISE),
+                          Bullet(Burial(Compromise(method, COMPROMISE), BURIAL), BULLET)):
+            winner, margin = strategic.evaluate(cut)
+            expected, expected_margin = strategic.evaluate(voters)
+            clear = expected_margin > TOLERANCE
+            np.testing.assert_array_equal(winner[clear], expected[clear], err_msg=f"{name} {strategic!r}")
+            np.testing.assert_allclose(margin, expected_margin, rtol=0, atol=1e-6, err_msg=f"{name} {strategic!r}")
+
+
+def test_tilted_strategies_move_each_strip_by_its_share(profile):
+    """Every strip by its own share s_k: of the rankings of strip k, 1 - s_k of the voters
+    as they are and s_k bullet voting, buried or compromised; the part of the top score
+    not given raised by what s_k of the burying voters of each strip gave the frontrunners,
+    and the comparisons by each strip's moved by its share. Ranking for ranking, the
+    profile is that of all voters."""
+    rankings, probs = profile
+    voters = _strategy_shares(rankings, probs)
+    striped, n = Striped.of(TILT), rankings.shape[1]
+    cut = _cut(voters, striped)
+    parts, rows = cut.strips, len(rankings)
+    for share in (BULLET, 1.0):
+        shares = striped.shares(share, TILT)
+        moved = bulleted(cut, share, TILT)
+        np.testing.assert_allclose(moved.probs, _scattered([(1 - s) * p.probs for s, p in zip(shares, parts)],
+                                                           parts, rows), rtol=0, atol=1e-12)
+        np.testing.assert_allclose(moved.bullet, sum(s * p.first for s, p in zip(shares, parts)), rtol=0, atol=1e-12)
+        levels, weights = _bullet_ballots(rankings, probs, 0)
+        weights = np.concatenate([moved.probs, moved.bullet], axis=-1)
+        np.testing.assert_allclose(moved.pairwise, _tied_pairwise(levels, weights), rtol=0, atol=1e-12)
+        np.testing.assert_array_equal(moved.rankings, rankings)
+    shares = striped.shares(BURIAL, TILT)
+    pairs, _ = _pairs(cut)
+    key = SCORE_BALLOT.scored
+    for vote, moved_profile in ((burying, _buried_profile), (compromising, _compromised_profile)):
+        for pair in np.unique(pairs)[:3]:
+            at = pairs == pair
+            a, b = np.flatnonzero((pair >> np.arange(n)) & 1)
+            moved = vote(cut.at(at), BURIAL, a, b, TILT)
+            every = [moved_profile(rankings[p.index], p.probs[at], s, a, b) for s, p in zip(shares, parts)]
+            # the rankings of strip k at rows 2 r and their moved ones at 2 r + 1 of all voters
+            expected = np.zeros((at.sum(), 2 * rows))
+            for (_, weights), p in zip(every, parts):
+                expected[:, 2 * p.index] += weights[:, :len(p.index)]
+                expected[:, 2 * p.index + 1] += weights[:, len(p.index):]
+            np.testing.assert_allclose(moved.probs, expected, rtol=0, atol=1e-12)
+            reference = voters_of(moved.rankings, expected)
+            np.testing.assert_allclose(moved.pairwise, reference.pairwise, rtol=0, atol=1e-12)
+            np.testing.assert_allclose(moved.first, reference.first, rtol=0, atol=1e-12)
+            points, sign = ("taken", 1) if vote is burying else ("added", -1)
+            unscored = cut.unscored[key][at].copy()
+            for s, p in zip(shares, parts):
+                unscored[:, [a, b]] += sign * s * getattr(p.grid(key), points)(a, b, cut.cells[at])
+            np.testing.assert_allclose(moved.unscored[key], unscored, rtol=0, atol=1e-12)
+            bury, compromise = (1, 0) if vote is burying else (0, 1)
+            compared = cut.scored_pairwise[ScoredPairwise(key)][at] + sum(
+                p.grid(key).moved(a, b, bury * s, compromise * s, cut.cells[at]) for s, p in zip(shares, parts))
+            np.testing.assert_allclose(moved.compared(ScoredPairwise(key)), compared, rtol=0, atol=1e-12)
+
+
+def test_a_tilt_needs_the_voters_cut_into_strips(profile):
+    voters = voters_of(*profile)
+    for vote in (lambda v: bulleted(v, 0.3, TILT), lambda v: burying(v, 0.3, 0, 1, TILT)):
+        with pytest.raises(ValueError, match=re.escape(f"needs the voters cut into strips, {Striped.of(TILT)}")):
+            vote(voters)
+    assert bulleted(voters, 0, TILT) is voters
+
+
+# the voters of a model, cut into strips by regions.voters
+MODELS = [Model("beta", 0.2, "rms"), Model("normal", 0.15)]
+MODEL_CANDIDATES = np.array([[0.25, 0.4], [0.75, 0.4], [0.5, 0.7], [0.45, 0.2]])
+
+
+@pytest.mark.parametrize("model", MODELS, ids=lambda m: m.distribution)
+def test_the_voters_of_the_strips_of_a_model(model):
+    """The shares of the strips add up to those of all voters: of the polygons, cut by
+    the strips and scaled to them, and of the rectangles of the voter grid, which the
+    strips split among them (strip_masks). Each strip has the voters across the tilt
+    from it: more of the first one at the wall it starts from, and the strips run along
+    the direction."""
+    method = Bullet(Burial(Compromise(METHODS["star"] | METHODS["mj"] | METHODS["irv"] | METHODS["borda"], 0.3,
+                                      tilt=(2, 0)), 0.3), 0.2)
+    voters = regions.voters(method.needs, MODEL_CANDIDATES, model, 12)
+    parts = voters.strips
+    assert len(parts) == STRIPS and voters.striped == Striped.of((1, 0))
+    np.testing.assert_allclose(sum(part.mass for part in parts), 1, rtol=0, atol=1e-5)
+    for name in ("first", "pairwise"):
+        np.testing.assert_allclose(sum(getattr(part, name) for part in parts), getattr(voters, name), rtol=0, atol=2e-6)
+    probs = np.zeros(voters.probs.shape)
+    for part in parts:
+        probs[..., part.index] += part.probs
+        np.testing.assert_array_equal(part.rankings, voters.rankings[part.index])
+    np.testing.assert_allclose(probs, voters.probs, rtol=0, atol=2e-6)
+    assert set(np.concatenate([part.index for part in parts])) == set(range(len(voters.rankings)))
+    for name in ("unscored", "graded", "scored_pairwise"):
+        for key, value in getattr(voters, name).items():
+            np.testing.assert_allclose(sum(getattr(part, name)[key] for part in parts), value, rtol=1e-12, atol=1e-15)
+    assert (parts[0].mass[1] > parts[-1].mass[1]).all() and (parts[0].mass[-2] < parts[-1].mass[-2]).all()
+    masks = strip_masks(model, Striped.of((1, 0)).direction, Striped.of((1, 0)).bounds)
+    np.testing.assert_array_equal(masks.sum(axis=0), 1)
+    strip = np.tensordot(np.arange(STRIPS), masks, 1)  # the strip of each rectangle
+    assert (np.diff(strip, axis=0) >= 0).all() and (np.diff(strip, axis=1) == 0).all()
+    assert strip[0, 0] == 0 and strip[-1, 0] == STRIPS - 1
+
+
+@pytest.mark.parametrize("model", MODELS, ids=lambda m: m.distribution)
+def test_more_voters_vote_strategically_in_the_direction_of_the_tilt(model):
+    """Bullet voters tilted along x: more of them to the right, as many up and down, and
+    at the centre about the share itself."""
+    method = Bullet(METHODS["irv"], 0.3, tilt=(3, 0))
+    voters = regions.voters(method.needs, MODEL_CANDIDATES, model, 12)
+    share = bulleted(voters, 0.3, (3, 0)).bullet.sum(axis=-1)
+    assert (np.diff(share, axis=0) > 0).all()
+    assert share[0].max() < 0.3 < share[-1].min()
+    assert abs(share[7, 7] - 0.3) < 0.05
+
+
+def _strategic(method, tilt):
+    return Bullet(Burial(Compromise(method, 0.3, tilt=tilt), 0.3, tilt=tilt), 0.2, tilt=tilt)
+
+
+@pytest.mark.parametrize("model", MODELS, ids=lambda m: m.distribution)
+def test_a_tilt_of_almost_0_is_the_strategy_itself(model):
+    """The strips add up to the voters themselves, so a tilt all but 0 moves no winner
+    and the margins only by rounding."""
+    for name in ("fptp", "borda", "irv", "schulze", "star", "mj"):
+        _, winner, margin = regions.winners(_strategic(METHODS[name], (0, 0)), MODEL_CANDIDATES, model, 12)
+        _, tilted, tilted_margin = regions.winners(_strategic(METHODS[name], (1e-9, 1e-9)), MODEL_CANDIDATES, model,
+                                                   12)
+        clear = margin > 1e-5
+        assert clear.mean() > 0.8, name
+        np.testing.assert_array_equal(tilted[clear], winner[clear], err_msg=name)
+        np.testing.assert_allclose(tilted_margin, margin, rtol=0, atol=1e-6, err_msg=name)
+
+
+@pytest.mark.parametrize("model", MODELS, ids=lambda m: m.distribution)
+def test_tilts_mirrored_across_the_square(model):
+    """Candidates symmetric across x = 1/2: a strategy tilted by (l, m) is the one tilted
+    by (-l, m) seen in the mirror, its winners the mirrored candidates. The edge
+    integrals are only symmetric to their quadrature, so the margins to 1e-4."""
+    candidates = np.array([[0.25, 0.4], [0.75, 0.4], [0.5, 0.7]])
+    mirrored = np.array([1, 0, 2])
+    for name in ("borda", "irv", "star"):
+        _, right, right_margin = regions.winners(_strategic(METHODS[name], (2, 1)), candidates, model, 12)
+        _, left, left_margin = regions.winners(_strategic(METHODS[name], (-2, 1)), candidates, model, 12)
+        left, left_margin = mirrored[left[::-1]], left_margin[::-1]
+        clear = np.minimum(right_margin, left_margin) > 1e-3
+        assert clear.mean() > 0.7, name
+        np.testing.assert_array_equal(left[clear], right[clear], err_msg=name)
+        np.testing.assert_allclose(left_margin, right_margin, rtol=0, atol=1e-4, err_msg=name)
+        if name == "borda":
+            assert (right != regions.winners(_strategic(METHODS[name], (0, 0)), candidates, model, 12)[1]).any()
