@@ -230,11 +230,13 @@ class Voters:
 
     @property
     def _marked(self) -> np.ndarray:
-        """The shares of one of the score ballots, (..., C): the part not given, or the
-        share of the top score."""
+        """The shares of one of the score ballots, (..., C): the part not given, the share
+        of the top score, or how the first candidate compares with each."""
         if self.unscored:
             return next(iter(self.unscored.values()))
-        return next(iter(self.graded.values()))[..., -1]
+        if self.graded:
+            return next(iter(self.graded.values()))[..., -1]
+        return next(iter(self.scored_pairwise.values()))[..., 0, :]
 
     @property
     def shape(self) -> tuple[int, ...]:

@@ -136,7 +136,7 @@ def _scores(loss, random, area):
             "relative": float(100 * np.sqrt(error / chance)) if chance > 0 else None}
 
 
-def voronoi_agreement(candidates, points, winner, deviation):
+def voronoi_agreement(candidates, points, winner, deviation, cycles="skip"):
     """The disagreement of the winners `winner` at the `points` with the nearest candidate, over
     the whole diagram and over the focus region (focus_distance), `deviation` being the voters'
     mean absolute deviation: {"diagram": scores, "region": scores}, each of the form
@@ -147,7 +147,13 @@ def voronoi_agreement(candidates, points, winner, deviation):
     decided in the area. relative is 0 where the nearest candidate wins everywhere and 1 for
     no better than chance, the square root stretching the small errors; it depends on the
     candidates less than e does, and e_random > 0 for two candidates or more. All three in
-    percent."""
+    percent.
+
+    With cycles="worst" a cycle is the worst result instead: its points stay in the diagram
+    with the loss of the farthest candidate, so that a method cannot leave out the points it
+    decides badly (yee-search scores the methods it generates so)."""
+    if cycles not in ("skip", "worst"):
+        raise ValueError(f'cycles must be "skip" or "worst", got {cycles!r}')
     candidates = np.asarray(candidates, dtype=np.float64)
     pairwise = np.linalg.norm(candidates[:, None] - candidates[None, :], axis=-1)
     pairwise[pairwise == 0] = np.nan
@@ -155,6 +161,11 @@ def voronoi_agreement(candidates, points, winner, deviation):
     if not np.isfinite(scale) or scale <= 0:
         scale = 1.0
     loss, random, decided = _losses(candidates, points, winner, scale)
+    if cycles == "worst":
+        distances = np.linalg.norm(points[..., None, :] - candidates, axis=-1)
+        regret = distances.max(axis=-1) - distances.min(axis=-1)
+        loss = np.where(decided, loss, regret / (regret + scale))
+        decided = np.ones_like(decided)
     area = _area_weights(points)
     focus = focus_distance(points, candidates, deviation) <= FOCUS_ROUND * deviation
     return {name: _scores(loss[decided], random[decided], weights[decided])

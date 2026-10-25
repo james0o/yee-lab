@@ -216,6 +216,30 @@ def test_cycles_are_left_out():
     assert voronoi_agreement(CANDIDATES, points, np.full(points.shape[:2], CYCLE), 0.2)["diagram"]["relative"] is None
 
 
+def test_cycles_can_be_the_worst_result():
+    """With cycles="worst" a point without a winner counts with the loss of the farthest
+    candidate, and the random winner's error is over all points."""
+    from yeelab.margin.metrics import _area_weights
+
+    points = _grid_points(40)
+    winner = (nearest(CANDIDATES, points)[0] + 1) % len(CANDIDATES)
+    winner[:10] = CYCLE
+    distances = np.linalg.norm(points[..., None, :] - CANDIDATES, axis=-1)
+    regret = distances - distances.min(axis=-1, keepdims=True)
+    gaps = np.linalg.norm(CANDIDATES[:, None] - CANDIDATES[None], axis=-1)
+    loss = regret / (regret + np.median(gaps[np.triu_indices(len(CANDIDATES), 1)]))
+    chosen = np.where(winner >= 0, np.take_along_axis(loss, np.maximum(winner, 0)[..., None], -1)[..., 0],
+                      loss.max(axis=-1))
+    area = _area_weights(points)
+    result = voronoi_agreement(CANDIDATES, points, winner, 0.2, cycles="worst")["diagram"]
+    assert result["error"] == pytest.approx(100 * np.average(chosen, weights=area))
+    assert result["random"] == pytest.approx(100 * np.average(loss.mean(-1), weights=area))
+    every = voronoi_agreement(CANDIDATES, points, np.full(points.shape[:2], CYCLE), 0.2, cycles="worst")
+    assert every["diagram"]["error"] == pytest.approx(100 * np.average(loss.max(-1), weights=area))
+    with pytest.raises(ValueError, match="cycles"):
+        voronoi_agreement(CANDIDATES, points, winner, 0.2, cycles="drop")
+
+
 def _to_segments(points, segments):
     """Distance of each point to the nearest of the segments (S, 2, 2)."""
     starts, directions = segments[:, 0], segments[:, 1] - segments[:, 0]

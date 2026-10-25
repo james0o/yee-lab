@@ -39,3 +39,4 @@ entrypoint = "yeelab.web.app:app"
 
 [tool.pytest.ini_options]
 addopts = "-n auto"  # pytest-xdist: one worker per CPU
+testpaths = ["tests"]  # not search/tests: yee-search has its own project and venv

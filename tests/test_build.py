@@ -650,6 +650,22 @@ def test_score_comparisons_can_weight_ordinal_preferences_on_ties():
             ScoreComparisons(ballot, tie_weight=weight)
 
 
+def test_voters_with_only_score_comparisons_have_a_shape():
+    """A method that reads only score comparisons, a runoff among the candidates of
+    another one, knows the points and the candidates from them."""
+    rng = np.random.default_rng(2)
+    diffs = {}
+    for levels in (2, 6):
+        d = rng.uniform(-1, 1, (4, 6, 5, 5))
+        diffs[ScoredPairwise(Score(levels).scored)] = d - np.swapaxes(d, -1, -2)
+    voters = Voters(scored_pairwise=diffs)
+    assert voters.shape == (4, 6) and voters.n_candidates == 5
+    inner = Unbeaten(ScoreComparisons(Score(2)))
+    runoff = Unbeaten(ScoreComparisons(Score(6)), among=inner | Highest(Weakest(ScoreComparisons(Score(6)))))
+    winner, _ = runoff.evaluate(voters)
+    assert winner.shape == (4, 6)
+
+
 def test_tally_takes_the_mean_unless_told_otherwise():
     """Tally(ballot) is Tally(ballot, statistic="mean"): the same block, hash and shares,
     the same totals bit for bit, and it prints as before. statistic="median" is another

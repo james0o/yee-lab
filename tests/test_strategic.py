@@ -298,6 +298,23 @@ def test_the_poll_names_two_frontrunners():
         Burial(METHODS["borda"], 0.5, poll=Tally(Plurality()))
     assert Burial(METHODS["borda"], 0.5, poll=Highest(Tally(BordaCount()), n=2)).needs == {PAIRWISE, PROFILE}
 
+
+@pytest.mark.parametrize("strategy", [Burial, Compromise])
+def test_the_poll_shares_move_too(strategy):
+    """The strategic voters move all the shares of the voters, also those only the poll
+    reads, so the strategy needs what moving them takes: the profile for a Borda poll's
+    pairwise shares and the ballots for a score poll's. The method is evaluated alike on
+    voters with those shares and on voters with every share a method could read."""
+    scored = Scored(6, power=1.5)
+    for poll, extra in ((Highest(Tally(BordaCount()), n=2), {PAIRWISE, PROFILE}),
+                        (Highest(Tally(SCORE_BALLOT), n=2), {scored, Ballots(scored)})):
+        method = strategy(METHODS["fptp"], 0.3, poll=poll)
+        assert method.needs >= extra
+        alone = regions.winners(method, MODEL_CANDIDATES, MODELS[0], 12)[1]
+        every = method.needs | METHODS["star"].needs | {PAIRWISE, PROFILE, FIRST, Ballots(scored)}
+        voters = regions.voters(every, MODEL_CANDIDATES, MODELS[0], 12)
+        np.testing.assert_array_equal(method.evaluate(voters)[0], alone)
+
 # ---------------------------------------------------------------- Bullet voting
 
 

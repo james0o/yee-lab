@@ -1,0 +1,168 @@
+"""The objective of the search: how far a method's winners are from the nearest candidate,
+sincerely and where 30 % of the voters bury, over a set of configurations; lower is better.
+
+    J = mean over configurations k of (SINCERE e_k(m) + BURIED b_k(m)) + NODE_COST size(m)
+
+e_k is the error of the method over the error of a random winner on the focus region of
+the Yee diagram of k (yeelab.margin.metrics.voronoi_agreement with cycles="worst": a point
+without a winner counts as won by the farthest candidate), and b_k = (mean + max) / 2 of
+that error over the burial scenarios, the frontrunners named by the default poll (the two
+with the most first choices) and by the two highest Borda counts. A method that fails or
+takes too long scores inf (yeesearch.pool)."""
+
+from dataclasses import dataclass, replace
+
+import numpy as np
+
+from yeelab.build import BordaCount, Burial, Highest, ScoreComparisons, Tally, Unbeaten
+from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Voters
+from yeelab.margin import regions
+from yeelab.margin.metrics import FOCUS_ROUND, _area_weights, focus_distance
+
+from yeesearch.configs import Config
+from yeesearch.grammar import SCORE_BALLOTS, TIE_WEIGHTS, needs as grammar_needs, size
+
+NEEDS = grammar_needs()  # the shares cached for every configuration
+
+SHARE = 0.3  # of the voters who bury
+BORDA_POLL = Highest(Tally(BordaCount()), n=2)
+POLLS = {"poll": None, "borda_poll": BORDA_POLL}  # None: Burial's default poll
+SINCERE, BURIED = 0.4, 0.6
+NODE_COST = 0.002
+
+
+def scenarios(method, share: float = SHARE) -> dict:
+    """{name: method as the voters vote}: sincerely and burying against the frontrunners of each poll."""
+    out = {"sincere": method}
+    for name, poll in POLLS.items():
+        out[name] = Burial(method, share) if poll is None else Burial(method, share, poll=poll)
+    return out
+
+
+class Scorer:
+    """The loss of every candidate at every point of the grid of one configuration, and
+    the weights of the focus region, to score many methods' winners fast: relative(winner)
+    is voronoi_agreement(..., cycles="worst")["region"] error over random."""
+
+    def __init__(self, config: Config, size: int):
+        candidates = config.array
+        coords = regions.grid(size, config.model.pixels)[0]
+        points = np.stack(np.meshgrid(coords, coords, indexing="ij"), axis=-1)
+        pairwise = np.linalg.norm(candidates[:, None] - candidates[None], axis=-1)[np.triu_indices(len(candidates), 1)]
+        pairwise = pairwise[pairwise > 0]
+        scale = float(np.median(pairwise)) if len(pairwise) else 1.0
+        distances = np.linalg.norm(points[..., None, :] - candidates, axis=-1)
+        regret = distances - distances.min(axis=-1, keepdims=True)
+        self.every = regret / (regret + scale)  # (G, G, C)
+        self.worst = self.every.max(axis=-1)
+        weights = _area_weights(points)
+        focus = weights * (focus_distance(points, candidates, config.deviation) <= FOCUS_ROUND * config.deviation)
+        self.weights = (focus if focus.sum() > 0 else weights) / (focus if focus.sum() > 0 else weights).sum()
+        self.random = float((self.every.mean(axis=-1) * self.weights).sum())
+
+    def relative(self, winner: np.ndarray) -> float:
+        chosen = np.take_along_axis(self.every, np.maximum(winner, 0)[..., None], axis=-1)[..., 0]
+        loss = np.where(winner >= 0, chosen, self.worst)
+        return float((loss * self.weights).sum() / self.random)
+
+
+def restricted(voters: Voters, needs: frozenset) -> Voters:
+    """The voters with only the shares in `needs`: strategic voters move every share they
+    have, so a method is evaluated fastest on the shares it reads."""
+    def keep(shares):
+        kept = {key: value for key, value in (shares or {}).items() if key in needs}
+        return kept or None
+
+    profile = PROFILE in needs
+    ballots = keep(voters.ballots)
+    return replace(voters, first=voters.first if FIRST in needs else None,
+                   pairwise=voters.pairwise if PAIRWISE in needs else None,
+                   rankings=voters.rankings if profile else None, probs=voters.probs if profile else None,
+                   unscored=keep(voters.unscored), scored_pairwise=keep(voters.scored_pairwise),
+                   graded=keep(voters.graded), ballots=ballots, cells=voters.cells if ballots else None)
+
+
+class MemoGrid:
+    """A score ballot on the voter grid (margin.shares.ScoreGrid) that remembers what it
+    gives: the score shares that burying voters move depend on the configuration, the
+    frontrunners and the points they are frontrunners at, which a poll names alike for
+    every method, and not on the method; ScoreGrid computes them again on every call.
+    Copies are handed out, since the callers may change them in place."""
+
+    def __init__(self, grid):
+        self.grid = grid
+        self.memo = {}
+
+    def _remembered(self, name: str, cells: np.ndarray, *args, **options):
+        key = (name, args, tuple(sorted(options.items())), cells.shape, cells.tobytes())
+        if key not in self.memo:
+            self.memo[key] = getattr(self.grid, name)(*args, cells, **options)
+        return self.memo[key].copy()
+
+    def taken(self, a, b, cells, mask=None):
+        return self._remembered("taken", cells, a, b, mask=mask) if mask is None else self.grid.taken(a, b, cells, mask)
+
+    def added(self, a, b, cells, mask=None):
+        return self._remembered("added", cells, a, b, mask=mask) if mask is None else self.grid.added(a, b, cells, mask)
+
+    def moved_grades(self, a, b, cells, mask=None):
+        if mask is not None:
+            return self.grid.moved_grades(a, b, cells, mask)
+        return self._remembered("moved_grades", cells, a, b)
+
+    def moved(self, a, b, bury, compromise, cells, tie_weight=0.0, mask=None):
+        if mask is not None:
+            return self.grid.moved(a, b, bury, compromise, cells, tie_weight, mask)
+        return self._remembered("moved", cells, a, b, bury, compromise, tie_weight=tie_weight)
+
+    def __getattr__(self, name):
+        return getattr(self.grid, name)
+
+
+@dataclass
+class Prepared:
+    """A configuration on a grid: the cached voters, with every share of the grammar, and
+    its scorer."""
+
+    config: Config
+    size: int
+    voters: Voters
+    scorer: Scorer
+
+    @classmethod
+    def of(cls, config: Config, size: int) -> "Prepared":
+        voters = regions.voters(NEEDS, config.array, config.model, size)
+        voters = replace(voters, ballots={key: MemoGrid(grid) for key, grid in voters.ballots.items()})
+        return cls(config, size, voters, Scorer(config, size))
+
+    def winner(self, method) -> np.ndarray:
+        """The method's winner at every point: on the cached voters where they have every
+        share it reads (restricted), else on its own."""
+        if method.needs <= NEEDS:
+            return method.evaluate(restricted(self.voters, method.needs))[0]
+        return regions.winners(method, self.config.array, self.config.model, self.size)[1]
+
+
+def errors(method, prepared: list[Prepared], share: float = SHARE) -> dict[str, list[float]]:
+    """{scenario: [relative error on each configuration]}."""
+    return {name: [p.scorer.relative(p.winner(variant)) for p in prepared]
+            for name, variant in scenarios(method, share).items()}
+
+
+def warm(prepared: list[Prepared]):
+    """Scores a method of every way a score ballot is read, so that the MemoGrids of the
+    configurations remember what burial moves before the first method with a time limit."""
+    for ballot in SCORE_BALLOTS.values():
+        for method in (Highest(Tally(ballot)), Highest(Tally(ballot, statistic="median")),
+                       *(Unbeaten(ScoreComparisons(ballot, tie_weight=weight)) for weight in TIE_WEIGHTS)):
+            errors(method, prepared)
+
+
+def objective(method, scenario_errors: dict[str, list[float]]) -> dict:
+    """J and its parts from errors(): the sincere and the burial error, means over the configurations."""
+    sincere = np.array(scenario_errors["sincere"])
+    buried = np.array([scenario_errors[name] for name in POLLS])
+    burial = (buried.mean(axis=0) + buried.max(axis=0)) / 2
+    nodes = size(method)
+    return {"J": float((SINCERE * sincere + BURIED * burial).mean() + NODE_COST * nodes),
+            "sincere": float(sincere.mean()), "burial": float(burial.mean()), "size": nodes}

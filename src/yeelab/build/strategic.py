@@ -476,13 +476,15 @@ class Burial(_Frontrunners):
     @property
     def needs(self) -> frozenset[Share]:
         """The method's and the poll's, the profile the buried pairwise shares come from,
-        and the ballots of every score ballot, which what burying takes back comes from."""
+        and the ballots of every score ballot, which what burying takes back comes from:
+        the voters bury all their shares, the poll's too."""
         needs = self.method.needs
         if self.share == 0:
             return needs
+        needs |= self.poll.needs
         if PAIRWISE in needs:
             needs |= {PROFILE}
-        return _striped(needs | self.poll.needs | _ballots(needs), self)
+        return _striped(needs | _ballots(needs), self)
 
     def vote(self, voters: Voters, a: int, b: int) -> Voters:
         return burying(voters, self.share, a, b, self.tilt)
@@ -504,13 +506,15 @@ class Compromise(_Frontrunners):
     def needs(self) -> frozenset[Share]:
         """The method's and the poll's, the profile the moved first-choice and pairwise
         shares come from, and the ballots of every score ballot, which what compromising
-        adds comes from."""
+        adds comes from: the voters compromise in all their shares, the poll's too, but
+        the first choices only the poll reads it has read already (compromising)."""
         needs = self.method.needs
         if self.share == 0:
             return needs
-        if needs & {FIRST, PAIRWISE, PROFILE}:
+        if needs & {FIRST, PAIRWISE, PROFILE} or PAIRWISE in self.poll.needs:
             needs |= {PROFILE}
-        return _striped(needs | self.poll.needs | _ballots(needs), self)
+        needs |= self.poll.needs
+        return _striped(needs | _ballots(needs), self)
 
     def vote(self, voters: Voters, a: int, b: int) -> Voters:
         return compromising(voters, self.share, a, b, self.tilt)

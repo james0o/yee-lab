@@ -1,0 +1,60 @@
+"""yee-search: gp to search overnight, report to score the result on the test set, score
+for one method, grids to check that the coarse grid of the training orders the methods
+as a fine one does."""
+
+from pathlib import Path
+
+import typer
+from rich.console import Console
+
+app = typer.Typer(no_args_is_help=True, add_completion=False)
+console = Console()
+
+
+@app.command()
+def gp(out: Path = typer.Option(..., help="directory of the run; an existing one is continued"),
+       hours: float = typer.Option(10.0, help="how long to run"),
+       population: int = typer.Option(1000, help="methods in a generation"),
+       workers: int = typer.Option(4, help="worker processes"),
+       seed: int = typer.Option(0),
+       timeout: float = typer.Option(60.0, help="seconds a method may take on the training set"),
+       generations: int | None = typer.Option(None, help="stop after this many generations")):
+    """Genetic programming over the grammar, against burial by 30 % of the voters."""
+    from yeesearch.gp import run
+
+    run(out, hours, population, workers, seed, timeout, generations)
+
+
+@app.command()
+def report(run: Path = typer.Argument(None, help="directory of a run; none: only the known methods"),
+           top: int = typer.Option(20, help="methods of the hall of fame to score"),
+           size: int = typer.Option(32, help="grid"),
+           workers: int = typer.Option(4),
+           set_name: str = typer.Option("test", "--set", help="train, validation or test")):
+    """The best methods of a run and the known methods on the test set."""
+    from yeesearch.report import run_report
+
+    run_report(run, top, size, workers, set_name)
+
+
+@app.command()
+def score(method: str = typer.Argument(..., help="the expression of a method, as repr prints it"),
+          set_name: str = typer.Option("train", "--set"),
+          size: int = typer.Option(16)):
+    """J of one method, in this process."""
+    from yeesearch.pool import prepare, parse
+    from yeesearch.evaluate import errors, objective
+
+    block = parse(method)
+    result = objective(block, errors(block, prepare(set_name, size)))
+    console.print(result)
+
+
+@app.command()
+def grids(set_name: str = typer.Option("validation", "--set"),
+          sizes: list[int] = typer.Option([16, 24, 64], "--size"),
+          workers: int = typer.Option(4)):
+    """J of the known methods on several grids, and Spearman's rho against the finest."""
+    from yeesearch.report import grid_agreement
+
+    grid_agreement(set_name, tuple(sizes), workers)
