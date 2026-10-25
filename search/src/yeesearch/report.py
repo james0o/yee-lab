@@ -17,7 +17,7 @@ from scipy.stats import spearmanr
 from yeelab.build.methods import METHODS
 
 from yeesearch.configs import SETS
-from yeesearch.evaluate import POLLS, SHARE, objective
+from yeesearch.evaluate import NODE_COST, POLLS, SHARE, objective
 from yeesearch.pool import Archive, Workers, parse
 
 TEST_SIZE = 32  # Spearman's rho of the known methods' order against 64 is 0.999 already at 24
@@ -113,7 +113,7 @@ class _Cache:
 def _print(rows: list[dict], set_name: str, size: int):
     """The table of the methods by J, and the expressions of the methods found below it."""
     groups = [group for group in GROUPS if any(group in row for row in rows)]
-    table = Table(title=f"{set_name} set, grid {size}: J = mean(0.4 sincere + 0.6 burial) + 0.002 size",
+    table = Table(title=f"{set_name} set, grid {size}: J = mean(0.4 sincere + 0.6 burial) + {NODE_COST} size",
                   caption="burial: at 30 % of the voters, then at 20 and 45 %; the groups: J on part of the set")
     for column in ("", "J", "sincere", "burial", *(f"{100 * s:.0f} %" for s in SHARES[1:]), *groups, "size"):
         table.add_column(column, justify="left" if not column else "right", no_wrap=True)

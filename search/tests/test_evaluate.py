@@ -10,7 +10,7 @@ from yeelab.margin.metrics import voronoi_agreement
 from yeelab.voting import CYCLE
 
 from yeesearch.configs import SETS, Config, random_configs
-from yeesearch.evaluate import BORDA_POLL, NEEDS, Prepared, Scorer, errors, objective, restricted, scenarios
+from yeesearch.evaluate import BORDA_POLL, NEEDS, NODE_COST, Prepared, Scorer, errors, objective, restricted, scenarios
 
 CONFIG = Config("five", ((0.6, 0.35), (0.25, 0.4), (0.35, 0.3), (0.5, 0.5), (0.3, 0.7)), 0.2)
 
@@ -57,14 +57,14 @@ def test_restricted_voters_keep_only_what_is_needed(prepared):
 
 
 def test_objective_weighs_sincere_and_burial(prepared):
-    """J = mean(0.4 sincere + 0.6 (mean + max) / 2 of the burial errors) + 0.002 size;
+    """J = mean(0.4 sincere + 0.6 (mean + max) / 2 of the burial errors) + NODE_COST size;
     burial does not change FPTP, whose first choices stay."""
     found = errors(METHODS["fptp"], [prepared, prepared])
     assert found["sincere"] == found["poll"] == found["borda_poll"]
     result = objective(METHODS["fptp"], {"sincere": [0.1, 0.3], "poll": [0.2, 0.2], "borda_poll": [0.4, 0.0]})
     burial = [(0.3 + 0.4) / 2, (0.1 + 0.2) / 2]
     assert result["burial"] == pytest.approx(np.mean(burial))
-    assert result["J"] == pytest.approx(np.mean([0.4 * 0.1 + 0.6 * burial[0], 0.4 * 0.3 + 0.6 * burial[1]]) + 0.006)
+    assert result["J"] == pytest.approx(np.mean([0.4 * 0.1 + 0.6 * burial[0], 0.4 * 0.3 + 0.6 * burial[1]]) + 3 * NODE_COST)
     assert result["size"] == 3
     assert scenarios(METHODS["fptp"])["borda_poll"] == Burial(METHODS["fptp"], 0.3, poll=BORDA_POLL)
 

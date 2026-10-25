@@ -28,7 +28,7 @@ SHARE = 0.3  # of the voters who bury
 BORDA_POLL = Highest(Tally(BordaCount()), n=2)
 POLLS = {"poll": None, "borda_poll": BORDA_POLL}  # None: Burial's default poll
 SINCERE, BURIED = 0.4, 0.6
-NODE_COST = 0.002
+NODE_COST = 0.0003  # per block: 15 blocks cost 0.0045, about a tenth of a typical J, so a Conditional can win
 
 
 def scenarios(method, share: float = SHARE) -> dict:
