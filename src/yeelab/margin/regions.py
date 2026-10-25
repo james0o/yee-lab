@@ -35,8 +35,8 @@ from itertools import combinations
 import contourpy
 import numpy as np
 
-from yeelab.build import (FIRST, METHODS, PAIRWISE, PROFILE, Ballots, Graded, Scored, ScoredPairwise, Share, Voters,
-                          Winner)
+from yeelab.build import (FIRST, METHODS, PAIRWISE, PROFILE, Ballots, Graded, Scored, ScoredPairwise, Share, Striped,
+                          Voters, Winner)
 from yeelab.margin.geometric import PIXEL_MEDIAN, PixelMedian, geometric_medians, rim
 from yeelab.margin.shares import (
     Model,
@@ -46,6 +46,11 @@ from yeelab.margin.shares import (
     pairwise_shares,
     ranking_shares,
     score_comparison_shares,
+    strip_first_choice_shares,
+    strip_masks,
+    strip_mass,
+    strip_pairwise_shares,
+    strip_ranking_shares,
     unscored_shares,
     voronoi_cells,
 )
@@ -71,8 +76,12 @@ def grid(size: int, pixels: int):
 def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Voters:
     """The shares in `needs` (yeelab.build.voters) at the points of grid(size),
     computed at the nodes and interpolated (score shares: at the points themselves);
-    [i, j] is the point (coordinates[i], coordinates[j])."""
+    [i, j] is the point (coordinates[i], coordinates[j]). With Striped in `needs`, also
+    every other share of the voters of each strip (_strips)."""
     medians = grid(size, model.pixels)[1]
+    striped = [share for share in needs if isinstance(share, Striped)]
+    if len(striped) > 1:
+        raise ValueError(f"the voters can be cut into strips across one direction only, not {striped}")
 
     def interpolate(values):
         return interpolate_to(values, model.medians, medians, model.transform, model.split)
@@ -94,7 +103,7 @@ def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Vote
         shares["rankings"], node_shares = ranking_shares(candidates, model)
         shares["probs"] = interpolate(node_shares)
     # one ballot table per score ballot: by order where burying or compromising read it too
-    ordered = {share.scored for share in needs if isinstance(share, Ballots)}
+    ordered = _ordered(needs)
     scores = [share for share in needs if isinstance(share, Scored)]
     if scores:
         shares["unscored"] = {share: unscored_shares(candidates, model, share.levels, medians, share.rule,
@@ -128,7 +137,61 @@ def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Vote
                              for share in grids}
         shares["cells"] = np.stack(np.meshgrid(np.arange(len(medians)), np.arange(len(medians)), indexing="ij"),
                                    axis=-1)
+    if striped:
+        shares["striped"] = striped[0]
+        shares["strips"] = _strips(striped[0], needs, candidates, model, medians, shares, interpolate)
     return Voters(**shares)
+
+
+def _strips(striped: Striped, needs: frozenset[Share], candidates, model: Model, medians, shares: dict,
+            interpolate) -> tuple[Voters, ...]:
+    """The voters of each strip of `striped`, with the shares in `needs` of their own:
+    those of polygons cut by the strips (shares.strip_*), the score shares of the
+    rectangles of the voter grid in each (strip_masks), and the ballots of the voters'
+    `shares` within them; and the share of the voters in the strip, mass."""
+    direction, bounds = striped.direction, striped.bounds
+    k = len(bounds) - 1
+    parts = [{"mass": mass, "cells": shares.get("cells")}
+             for mass in interpolate(np.moveaxis(strip_mass(model, direction, bounds), 0, -1)).transpose(2, 0, 1)]
+
+    def spread(name, values):
+        for part, value in zip(parts, values):
+            part[name] = value
+
+    if FIRST in needs:
+        spread("first", [interpolate(f) for f in strip_first_choice_shares(candidates, model, direction, bounds)])
+    if PAIRWISE in needs:
+        spread("pairwise", [interpolate(d) for d in strip_pairwise_shares(candidates, model, direction, bounds)])
+    if PROFILE in needs:
+        rankings, rows = strip_ranking_shares(candidates, model, direction, bounds)
+        spread("index", [index for index, _ in rows])
+        spread("rankings", [rankings[index] for index, _ in rows])
+        spread("probs", [interpolate(values) for _, values in rows])
+    masks = strip_masks(model, direction, bounds)
+    for name, compute in (("unscored", lambda key: unscored_shares(
+                                candidates, model, key.levels, medians, key.rule, key.delta, mu=key.mu, kappa=key.kappa,
+                                power=key.power, votes=key.votes, by_order=key in _ordered(needs), masks=masks)),
+                          ("graded", lambda key: graded_shares(
+                                candidates, model, key.scored.levels, medians, key.scored.rule, key.scored.delta,
+                                mu=key.scored.mu, kappa=key.scored.kappa, power=key.scored.power,
+                                votes=key.scored.votes, by_order=key.scored in _ordered(needs), masks=masks)),
+                          ("scored_pairwise", lambda key: score_comparison_shares(
+                                candidates, model, medians, key.scored.levels, key.scored.rule, key.scored.delta,
+                                mu=key.scored.mu, kappa=key.scored.kappa, power=key.scored.power,
+                                votes=key.scored.votes, by_order=key.scored in _ordered(needs),
+                                tie_weight=key.tie_weight, masks=masks))):
+        if shares.get(name):
+            values = {key: compute(key) for key in shares[name]}
+            spread(name, [{key: value[strip] for key, value in values.items()} for strip in range(k)])
+    if shares.get("ballots"):
+        spread("ballots", [{key: grid.within(mask) for key, grid in shares["ballots"].items()} for mask in masks])
+    return tuple(Voters(**part) for part in parts)
+
+
+def _ordered(needs: frozenset[Share]) -> set[Scored]:
+    """The score ballots whose ballot table is kept by order: those burying or
+    compromising read too."""
+    return {share.scored for share in needs if isinstance(share, Ballots)}
 
 
 def winners(method: str | Winner, candidates, model: Model, size: int):

@@ -30,6 +30,17 @@ when the method reads them.
 The shares of every score that the median of a score ballot reads (Voters.graded,
 Tally(ballot, statistic="median")) add up over the voters like the scores: a strategy
 moves the voters it changes from their score of a candidate to 0 or the top score.
+
+A strategy can be tilted, `tilt=u`: then the share of the voters at x who vote by it is
+
+    s(x) = sigma(logit share + u . (x - CENTRE)),   CENTRE = (0.5, 0.5)
+
+the share itself at the centre of the square, more of the voters in the direction of u
+and fewer opposite it, as many across it; the odds of the two walls across u = (l, 0)
+differ e^l times. The voters are cut into strips across u (Striped), each with the mean
+of s over it, and the strategy moves the shares of each strip by its own share
+(Voters.strips); the method reads their sums. The strategies of one method may be tilted
+along one direction only.
 """
 
 from dataclasses import dataclass, field, replace
@@ -37,15 +48,17 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 from yeelab.build.blocks import Highest, Plurality, Result, Tally, Winner, _expect
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Ballots, Graded, Scored, ScoredPairwise, Share, Voters
+from yeelab.build.voters import (FIRST, PAIRWISE, PROFILE, Ballots, Graded, Scored, ScoredPairwise, Share, Striped,
+                                 Voters)
 
 POLL = Highest(Tally(Plurality()), n=2)  # the default frontrunners: the two with the most first choices
+NO_TILT = (0.0, 0.0)  # the same share of strategic voters everywhere
 
 
 # ---------------------------------------------------------------- Voters
 
 
-def bulleted(voters: Voters, share: float) -> Voters:
+def bulleted(voters: Voters, share: float, tilt=NO_TILT) -> Voters:
     """The voters with `share` of them, at every point, bullet voting: they rank their
     first choice first and all other candidates equal below it, and on a score ballot
     give it the top score and all others 0. The rest vote as before; share 0 is the
@@ -64,9 +77,14 @@ def bulleted(voters: Voters, share: float) -> Voters:
                          others at 0)
 
     The pairwise and score shares need `first`; the profile has its own. The bullet
-    voters neither bury nor compromise: `kept`, the part of the voters who may, shrinks."""
-    if share == 0:
-        return voters
+    voters neither bury nor compromise: `kept`, the part of the voters who may, shrinks.
+    With a tilt, each strip of the voters by its own share (_by_strips)."""
+    return _by_strips(voters, share, tilt, _bullet)
+
+
+def _bullet(voters: Voters, share: float) -> Voters:
+    """bulleted() of voters of one share; those of a strip have its mass where all have
+    1 (the 1 of the pairwise shares)."""
     changed = {}
     if voters.probs is not None:
         n = voters.rankings.shape[1]
@@ -79,7 +97,8 @@ def bulleted(voters: Voters, share: float) -> Voters:
             raise ValueError("bullet voting on pairwise or score shares needs the first-choice shares")
         n = f.shape[-1]
         if voters.pairwise is not None:
-            d = (1 - share) * voters.pairwise + share * (1 + f[..., :, None] - f[..., None, :]) / 2
+            mass = np.asarray(voters.mass)[..., None, None]
+            d = (1 - share) * voters.pairwise + share * (mass + f[..., :, None] - f[..., None, :]) / 2
             d[..., range(n), range(n)] = 0.0
             changed["pairwise"] = d
         # a sum of the others, not 1 - f: exact where f is nearly 1
@@ -100,7 +119,7 @@ def bulleted(voters: Voters, share: float) -> Voters:
     return replace(voters, **changed)
 
 
-def burying(voters: Voters, share: float, a: int, b: int) -> Voters:
+def burying(voters: Voters, share: float, a: int, b: int, tilt=NO_TILT) -> Voters:
     """The voters with `share` of them, at every point, burying whichever of the
     frontrunners a and b they rank lower: they rank it last, and on a score ballot give
     it 0. The rest, and the bullet ballots, which rank it among the last already, vote
@@ -118,9 +137,13 @@ def burying(voters: Voters, share: float, a: int, b: int) -> Voters:
                   and likewise of b (Voters.ballots)
 
     The pairwise shares need the profile and the score shares the ballots. The score
-    comparisons are only noted to move (Voters.compared)."""
-    if share == 0:
-        return voters
+    comparisons are only noted to move (Voters.compared). With a tilt, each strip of
+    the voters by its own share (_by_strips)."""
+    return _by_strips(voters, share, tilt, lambda part, s: _bury(part, s, a, b))
+
+
+def _bury(voters: Voters, share: float, a: int, b: int) -> Voters:
+    """burying() of voters of one share."""
     changed = _against(voters, a, b, bury=share) if voters.scored_pairwise else {}
     if voters.probs is not None:
         rankings = np.asarray(voters.rankings)
@@ -138,7 +161,7 @@ def burying(voters: Voters, share: float, a: int, b: int) -> Voters:
     return replace(voters, **changed)
 
 
-def compromising(voters: Voters, share: float, a: int, b: int) -> Voters:
+def compromising(voters: Voters, share: float, a: int, b: int, tilt=NO_TILT) -> Voters:
     """The voters with `share` of them, at every point, compromising on whichever of the
     frontrunners a and b they rank higher, if neither is their first choice: they rank
     it first, and on a score ballot give it the top score. The rest of the ballot stays.
@@ -161,9 +184,13 @@ def compromising(voters: Voters, share: float, a: int, b: int) -> Voters:
     The first-choice and pairwise shares need the profile: without it the first choices
     are left out, the pairwise shares cannot be. The score shares need the ballots; the
     score comparisons are only noted to move (Voters.compared). Burying and compromising
-    move different candidates, so a voter can do both, in either order."""
-    if share == 0:
-        return voters
+    move different candidates, so a voter can do both, in either order. With a tilt,
+    each strip of the voters by its own share (_by_strips)."""
+    return _by_strips(voters, share, tilt, lambda part, s: _compromise(part, s, a, b))
+
+
+def _compromise(voters: Voters, share: float, a: int, b: int) -> Voters:
+    """compromising() of voters of one share."""
     changed = _against(voters, a, b, compromise=share) if voters.scored_pairwise else {}
     if voters.probs is not None:
         rankings = np.asarray(voters.rankings)
@@ -187,6 +214,43 @@ def compromising(voters: Voters, share: float, a: int, b: int) -> Voters:
     return replace(voters, **changed)
 
 
+def _by_strips(voters: Voters, share: float, tilt, vote) -> Voters:
+    """vote(voters, share), the strategy at one share; for voters cut into strips
+    (Voters.strips), vote(strip, its share of `share` and `tilt`) for every strip, and
+    the voters with their sums. Share 0 is the voters themselves."""
+    if share == 0:
+        return voters
+    if voters.strips is None:
+        if any(tilt):
+            raise ValueError(f"a strategy tilted by {tuple(tilt)} needs the voters cut into strips, {Striped.of(tilt)}")
+        return vote(voters, share)
+    return _summed(voters, tuple(vote(part, s) for part, s in zip(voters.strips, voters.striped.shares(share, tilt))))
+
+
+def _summed(voters: Voters, parts: tuple[Voters, ...]) -> Voters:
+    """The voters cut into the strips `parts`: every share the sum of theirs, and the
+    frontrunners theirs. Each strip has some of the rankings of all voters, the rows
+    `index` of them, and every ranking is in one strip at least."""
+    def total(name):
+        values = [getattr(part, name) for part in parts]
+        if values[0] is None:
+            return None
+        if isinstance(values[0], dict):
+            return {key: sum(value[key] for value in values) for key in values[0]}
+        return sum(values)
+
+    changed = {name: total(name) for name in ("first", "pairwise", "unscored", "scored_pairwise", "graded", "bullet")}
+    if parts[0].probs is not None:
+        rows = 1 + max(int(part.index.max()) for part in parts)
+        rankings = np.empty((rows, parts[0].rankings.shape[1]), dtype=parts[0].rankings.dtype)
+        probs = np.zeros((*parts[0].probs.shape[:-1], rows), dtype=parts[0].probs.dtype)
+        for part in parts:
+            rankings[part.index] = part.rankings
+            probs[..., part.index] += part.probs
+        changed.update(rankings=rankings, probs=probs)
+    return replace(voters, strips=parts, frontrunners=parts[0].frontrunners, **changed)
+
+
 def _moved_grades(voters: Voters, a: int, b: int, share: float, bury: bool) -> dict:
     """The shares of every score of every score ballot, where `share` of the voters who
     do not bullet vote, of those that burying (bury) or compromising moves, go from
@@ -208,9 +272,12 @@ def _moved_grades(voters: Voters, a: int, b: int, share: float, bury: bool) -> d
 def _moved_profile(voters: Voters, share: float, rankings: np.ndarray, moved: np.ndarray) -> dict:
     """The profile where `share` of the voters of each ranking mark it `moved`, and the
     pairwise shares that follow: d + share (the shares of the moved rankings minus those
-    of the rankings)."""
+    of the rankings). Of the voters of a strip, row r of the rankings of all voters is
+    row 2 r of theirs after, and its moved ranking row 2 r + 1 (_summed)."""
     changed = {"rankings": np.concatenate([rankings, moved]),
                "probs": np.concatenate([(1 - share) * voters.probs, share * voters.probs], axis=-1)}
+    if voters.index is not None:
+        changed["index"] = np.concatenate([2 * voters.index, 2 * voters.index + 1])
     if voters.pairwise is not None:
         change = voters.probs @ (_prefers(moved) - _prefers(rankings)).astype(voters.probs.dtype)
         changed["pairwise"] = voters.pairwise + share * change.reshape(voters.pairwise.shape)
@@ -259,15 +326,18 @@ class Bullet(Winner):
     (BordaCount: (C - 2) / 2 each); in a pair they abstain, and in an elimination a
     ballot whose first choice is out counts equally for all the remaining candidates.
     Share 0 is the method itself, and at share 1 every method elects the candidate with
-    the most first choices."""
+    the most first choices. With a `tilt`, `share` is that of the voters at the centre of
+    the square (bulleted, Striped)."""
 
     method: Winner
     share: float
+    tilt: tuple[float, float] = field(default=NO_TILT, kw_only=True)
 
     def __post_init__(self):
         _expect(self, self.method, Winner, "a Winner")
         if not 0 <= self.share <= 1:
             raise ValueError(f"Bullet share must be between 0 and 1, got {self.share!r}")
+        _check_tilt(self)
 
     @property
     def seats(self) -> int | None:
@@ -281,16 +351,46 @@ class Bullet(Winner):
         if self.share > 0 and any(share == PAIRWISE or isinstance(share, Scored | ScoredPairwise | Graded)
                                   for share in needs):
             needs |= {FIRST}
-        return needs
+        return _striped(needs, self)
 
     def select(self, voters: Voters) -> Result:
-        return self.method.select(bulleted(voters, self.share))
+        return self.method.select(bulleted(voters, self.share, self.tilt))
 
     def evaluate(self, voters: Voters) -> Result:
-        return self.method.evaluate(bulleted(voters, self.share))
+        return self.method.evaluate(bulleted(voters, self.share, self.tilt))
 
     def __repr__(self):
-        return f"Bullet({self.method!r}, share={self.share!r})"
+        return f"Bullet({self.method!r}, share={self.share!r}{_tilt_repr(self)})"
+
+
+def _check_tilt(block):
+    """The tilt of a strategy block as two floats, or ValueError; and its strips one
+    direction with those of the strategies inside it (_striped)."""
+    name = type(block).__name__
+    try:
+        tilt = tuple(float(value) for value in block.tilt)
+    except (TypeError, ValueError):
+        tilt = ()
+    if len(tilt) != 2 or not np.isfinite(tilt).all():
+        raise ValueError(f"{name} tilt must be two finite numbers, got {block.tilt!r}")
+    object.__setattr__(block, "tilt", tilt)
+    block.needs  # noqa: B018 -- raises for strategies tilted in different directions
+
+
+def _striped(needs: frozenset[Share], block) -> frozenset[Share]:
+    """`needs`, and the strips of the voters across the tilt of `block` where it is
+    tilted (Striped); all the strategies of a method must be tilted along one direction."""
+    if block.share > 0 and any(block.tilt):
+        needs |= {Striped.of(block.tilt)}
+    striped = sorted(share.angle for share in needs if isinstance(share, Striped))
+    if len(striped) > 1:
+        raise ValueError(f"strategies tilted in different directions at once, at angles {striped}: "
+                         "the voters are cut into strips across one direction only")
+    return needs
+
+
+def _tilt_repr(block) -> str:
+    return f", tilt={block.tilt!r}" if any(block.tilt) else ""
 
 
 def _ballots(needs: frozenset[Share]) -> frozenset[Share]:
@@ -309,11 +409,13 @@ class _Frontrunners(Winner):
     frontrunners, so the method runs on the points of each pair of frontrunners apart,
     and the poll's margin (for POLL the second most first choices minus the third) is a
     gap too: the method's margin is the smaller of the two. Share 0 is the method
-    itself."""
+    itself. With a `tilt`, `share` is that of the voters at the centre of the square
+    (burying, compromising, Striped)."""
 
     method: Winner
     share: float
     poll: Winner = field(default=POLL, kw_only=True)
+    tilt: tuple[float, float] = field(default=NO_TILT, kw_only=True)
 
     def __post_init__(self):
         name = type(self).__name__
@@ -323,6 +425,7 @@ class _Frontrunners(Winner):
         _expect(self, self.poll, Winner, "a Winner as poll")
         if self.poll.seats != 2:
             raise ValueError(f"{name} poll must choose two candidates, the frontrunners, not {self.poll!r}")
+        _check_tilt(self)
 
     @property
     def seats(self) -> int | None:
@@ -360,7 +463,7 @@ class _Frontrunners(Winner):
 
     def __repr__(self):
         poll = f", poll={self.poll!r}" if self.poll != POLL else ""
-        return f"{type(self).__name__}({self.method!r}, share={self.share!r}{poll})"
+        return f"{type(self).__name__}({self.method!r}, share={self.share!r}{poll}{_tilt_repr(self)})"
 
 
 @dataclass(frozen=True, repr=False)
@@ -379,10 +482,10 @@ class Burial(_Frontrunners):
             return needs
         if PAIRWISE in needs:
             needs |= {PROFILE}
-        return needs | self.poll.needs | _ballots(needs)
+        return _striped(needs | self.poll.needs | _ballots(needs), self)
 
     def vote(self, voters: Voters, a: int, b: int) -> Voters:
-        return burying(voters, self.share, a, b)
+        return burying(voters, self.share, a, b, self.tilt)
 
 
 @dataclass(frozen=True, repr=False)
@@ -407,7 +510,7 @@ class Compromise(_Frontrunners):
             return needs
         if needs & {FIRST, PAIRWISE, PROFILE}:
             needs |= {PROFILE}
-        return needs | self.poll.needs | _ballots(needs)
+        return _striped(needs | self.poll.needs | _ballots(needs), self)
 
     def vote(self, voters: Voters, a: int, b: int) -> Voters:
-        return compromising(voters, self.share, a, b)
+        return compromising(voters, self.share, a, b, self.tilt)

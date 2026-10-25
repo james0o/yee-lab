@@ -52,6 +52,7 @@ from yeelab.ranking_cells import NODES, QUAD_NODES, Spread, _clip
 PIXELS = 300  # the outermost medians are 1/2 and 1 - 1/2 pixel from the walls
 CACHE_BYTES = 64 * 2**20  # edge integrals kept between requests
 SQUARE = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+CENTRE = np.array([0.5, 0.5])  # of the strips of a tilt (build.voters.Striped)
 # The voter grid of the score shares (_grid_lines): cells per axis across the unit
 # square, ballots per axis in a cell that a border crosses, the smallest cell at a wall
 # (Beta voters) and the growth of the cells beyond the square (normal voters).
@@ -275,12 +276,117 @@ def first_choice_shares(candidates, model: Model) -> np.ndarray:
 def ranking_shares(candidates, model: Model):
     """Return rankings (R, C) and shares (N, N, R) at interpolation nodes, using
     the cells of the bisector arrangement and cached edge integrals."""
+    rankings, polygons = _ranking_polygons(candidates, model)
+    return rankings, _polygon_shares(model, polygons)
+
+
+def _ranking_polygons(candidates, model: Model):
     candidates = np.asarray(candidates, dtype=np.float64)
     if model.distribution == "beta":
         polygons, rankings = ranking_cells.ranking_cells(candidates)
     else:
         polygons, rankings = normal.normal_cells(candidates, model.sigma)
-    return rankings, _polygon_shares(model, polygons)
+    return rankings, polygons
+
+# ---------------------------------------------------------------- Strips
+
+
+def _strip_cut(polygon, direction, low, high):
+    """The part of convex CCW `polygon` (or None) with low <= direction . (p - CENTRE)
+    <= high, or None; an infinite bound cuts nothing."""
+    shift = direction @ CENTRE
+    if polygon is not None and np.isfinite(high):
+        polygon = _clip(polygon, direction, high + shift)
+    if polygon is not None and np.isfinite(low):
+        polygon = _clip(polygon, -direction, -(low + shift))
+    return polygon
+
+
+def _strip_bounds(bounds) -> list[tuple[float, float]]:
+    """(low, high) of every strip of the borders `bounds` (K + 1,): the first and the
+    last reach on beyond the square, where normal voters are too."""
+    bounds = np.array(bounds, dtype=np.float64)
+    bounds[0], bounds[-1] = -np.inf, np.inf
+    return list(zip(bounds[:-1], bounds[1:]))
+
+
+def _strip_shares(model: Model, polygons, direction, bounds, total=None) -> list[np.ndarray]:
+    """_polygon_shares of the part of every polygon in each strip of `direction` and
+    `bounds`, (N, N, P) per strip, from one pass over the edges. With the shares of the
+    whole polygons `total` (N, N, P), the parts are scaled to add up to them exactly.
+
+    Why scaled: an edge cut by the strips is integrated in pieces, and the pieces of the
+    narrowest voters at a corner add up to the whole only to about 2e-4 (the quadrature
+    of beta_tables.py). The strategies of a tilt move the shares of each strip, and the
+    voters would change by that much where the tilt is all but 0."""
+    direction = np.asarray(direction, dtype=np.float64)
+    strips = _strip_bounds(bounds)
+    parts = [_strip_cut(polygon, direction, low, high) for low, high in strips for polygon in polygons]
+    parts = np.split(_polygon_shares(model, parts), len(strips), axis=-1)
+    if total is None:
+        return parts
+    whole = sum(parts)
+    scale = np.divide(total, whole, out=np.ones_like(whole), where=whole > 0)
+    return [part * scale for part in parts]
+
+
+def strip_mass(model: Model, direction, bounds) -> np.ndarray:
+    """The share of the voters of every node in each strip across `direction` between
+    the borders `bounds` (K + 1,) of t = direction . (p - CENTRE), (K, N, N)."""
+    return np.stack([shares[..., 0] for shares in _strip_shares(model, [_voter_box(model)], direction, bounds)])
+
+
+def strip_first_choice_shares(candidates, model: Model, direction, bounds) -> list[np.ndarray]:
+    """first_choice_shares of the voters of each strip (strip_mass), (N, N, C) each,
+    adding up to them."""
+    cells = voronoi_cells(candidates, _voter_box(model))
+    return _strip_shares(model, cells, direction, bounds, _polygon_shares(model, cells))
+
+
+def strip_pairwise_shares(candidates, model: Model, direction, bounds) -> list[np.ndarray]:
+    """pairwise_shares of the voters of each strip (strip_mass), (N, N, C, C) each: of
+    both half-planes of every pair, normal voters too, so d[c, e] + d[e, c] is the
+    strip's share of the voters; adding up to pairwise_shares."""
+    candidates = np.asarray(candidates, dtype=np.float64)
+    n, box = len(candidates), _voter_box(model)
+    pairs = [(c, e) for c in range(n) for e in range(n) if c != e]
+    total = pairwise_shares(candidates, model)[..., [c for c, _ in pairs], [e for _, e in pairs]]
+    out = []
+    for above in _strip_shares(model, [_half_plane(candidates, c, e, box) for c, e in pairs], direction, bounds,
+                               total):
+        d = np.zeros((*above.shape[:2], n, n))
+        for k, (c, e) in enumerate(pairs):
+            d[..., c, e] = above[..., k]
+        out.append(d)
+    return out
+
+
+def strip_ranking_shares(candidates, model: Model, direction, bounds):
+    """ranking_shares of the voters of each strip (strip_mass), adding up to them:
+    rankings (R, C), and for each strip the rows of those whose cells it cuts (R_k,) and
+    their shares (N, N, R_k). A cell is small and cut by one or two strips, so the strips
+    hold not much more than the profile; every ranking is in one at least."""
+    rankings, polygons = _ranking_polygons(candidates, model)
+    direction = np.asarray(direction, dtype=np.float64)
+    inside = np.array([[_strip_cut(polygon, direction, low, high) is not None for polygon in polygons]
+                       for low, high in _strip_bounds(bounds)])
+    centres = np.array([polygon.mean(axis=0) for polygon in polygons]) - CENTRE
+    inside[np.searchsorted(np.asarray(bounds)[1:-1], centres @ direction), np.arange(len(polygons))] = True
+    shares = _strip_shares(model, polygons, direction, bounds, _polygon_shares(model, polygons))
+    return rankings, [(np.flatnonzero(rows), part[..., rows]) for rows, part in zip(inside, shares)]
+
+
+def strip_masks(model: Model, direction, bounds) -> np.ndarray:
+    """(K, X, Y): 1 where the rectangle of the voter grid (_grid_lines) has its centre in
+    the strip, else 0. The score shares of the voters of a strip are those of the voter
+    grid with the rectangles of its voters (unscored_shares(masks=...), ScoreGrid.within):
+    a rectangle that a border of the strips crosses counts whole in one of them."""
+    lines = _grid_lines(model)
+    centres = (lines[:-1] + lines[1:]) / 2
+    direction = np.asarray(direction, dtype=np.float64)
+    t = direction[0] * (centres[:, None] - CENTRE[0]) + direction[1] * (centres[None, :] - CENTRE[1])
+    strip = np.searchsorted(np.asarray(bounds)[1:-1], t, side="right")
+    return (strip[None] == np.arange(len(bounds) - 1)[:, None, None]).astype(np.float64)
 
 # ---------------------------------------------------------------- Score
 
@@ -370,7 +476,7 @@ def unscored_shares(candidates, model: Model, levels: int, medians,
                     rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
                     mu: float = score.MU, kappa: float = score.KAPPA,
                     power: float = score.POWER, votes: tuple[int, int, int] = score.VOTES,
-                    by_order: bool = False) -> np.ndarray:
+                    by_order: bool = False, masks: np.ndarray | None = None) -> np.ndarray | list[np.ndarray]:
     """unscored[i, j, c] = mean part of the top score that the voters with median
     (medians[i], medians[j]) do not give c on a score ballot with `levels` scores by
     `rule`, `delta`, `mu`, `kappa`, `power` and `votes` (yeelab.score), from 0 to 1, shape (M, M, C). The mean score of c
@@ -396,10 +502,15 @@ def unscored_shares(candidates, model: Model, levels: int, medians,
     error of the interpolant, and one more median costs only a row of each product. The
     ballots of the grid are kept (ballots), so the other score shares of the same ballot
     cost only their sums; by_order takes them from the table of given() and raised(),
-    whose rectangles also keep one order of distance, so that one pass serves all."""
+    whose rectangles also keep one order of distance, so that one pass serves all.
+
+    With `masks` (K, X, Y), the shares of the voters of the rectangles of each mask
+    (strip_masks), one array each."""
     mass = _voter_grid(model, medians)[1]
     table = ballots(candidates, model, levels, rule, delta, mu, kappa, power, votes, by_order)
     short = score.tabulate(table, score.UNSCORED).astype(np.float64)
+    if masks is not None:
+        return [np.moveaxis(mass @ (short * mask) @ mass.T, 0, -1) / (levels - 1) for mask in masks]
     return np.moveaxis(mass @ short @ mass.T, 0, -1) / (levels - 1)
 
 
@@ -407,7 +518,7 @@ def graded_shares(candidates, model: Model, levels: int, medians,
                   rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
                   mu: float = score.MU, kappa: float = score.KAPPA,
                   power: float = score.POWER, votes: tuple[int, int, int] = score.VOTES,
-                  by_order: bool = False) -> np.ndarray:
+                  by_order: bool = False, masks: np.ndarray | None = None) -> np.ndarray | list[np.ndarray]:
     """graded[i, j, c, k] = share of the voters with median (medians[i], medians[j]) who
     give c the score k on a score ballot with `levels` scores by `rule`, `delta`, `mu`,
     `kappa`, `power` and `votes` (yeelab.score), shape (M, M, C, levels): what the median of the
@@ -415,34 +526,44 @@ def graded_shares(candidates, model: Model, levels: int, medians,
     unscored_shares, which is sum_k (levels - 1 - k) graded[..., k] / (levels - 1), from
     the same kept ballots: one pair of matrix products per score and candidate instead of
     one per candidate. Every share is a sum of terms of one sign, so it is exact in
-    relative terms where it is tiny, as the part not given is."""
+    relative terms where it is tiny, as the part not given is. With `masks`, those of
+    the voters of each mask, as in unscored_shares."""
     mass = _voter_grid(model, medians)[1]
     short = score.tabulate(ballots(candidates, model, levels, rule, delta, mu, kappa, power, votes, by_order),
                            score.GRADES)
     n, m = len(candidates), len(medians)
-    graded = np.empty((m, m, n, levels))
-    for c in range(n):  # (levels, M, M) for each candidate: a few MB at a time
-        graded[:, :, c] = np.moveaxis(mass @ short[c].astype(np.float64) @ mass.T, 0, -1)
-    return graded
+    out = []
+    for mask in [None] if masks is None else masks:
+        graded = np.empty((m, m, n, levels))
+        for c in range(n):  # (levels, M, M) for each candidate: a few MB at a time
+            part = short[c].astype(np.float64) if mask is None else short[c] * mask
+            graded[:, :, c] = np.moveaxis(mass @ part @ mass.T, 0, -1)
+        out.append(graded)
+    return out[0] if masks is None else out
 
 
 def score_comparison_shares(candidates, model: Model, medians, levels: int,
                             rule: score.Rule = score.RANGE, delta: float = score.DELTA, *,
                             mu: float = score.MU, kappa: float = score.KAPPA,
                             power: float = score.POWER, votes: tuple[int, int, int] = score.VOTES,
-                            by_order: bool = False, tie_weight: float = 0.0) -> np.ndarray:
+                            by_order: bool = False, tie_weight: float = 0.0,
+                            masks: np.ndarray | None = None) -> np.ndarray | list[np.ndarray]:
     """Score-comparison differences at each median, weighting ordinal preferences where
-    the pair has equal scores by `tie_weight`. From the kept ballots, like unscored_shares."""
+    the pair has equal scores by `tie_weight`. From the kept ballots, like unscored_shares,
+    and with `masks` those of the voters of each mask."""
     mass = _voter_grid(model, medians)[1]
     table = ballots(candidates, model, levels, rule, delta, mu, kappa, power, votes, by_order or tie_weight > 0)
     short = score.tabulate(table, score.COMPARISONS, tie_weight).astype(np.float64)
     n, m = len(candidates), len(medians)
-    comparisons = np.zeros((m, m, n, n), dtype=np.float64)
-    for c in range(n):
-        for e in range(c + 1, n):
-            comparisons[:, :, c, e] = mass @ short[c, e] @ mass.T
-            comparisons[:, :, e, c] = -comparisons[:, :, c, e]
-    return comparisons
+    out = []
+    for mask in [None] if masks is None else masks:
+        comparisons = np.zeros((m, m, n, n), dtype=np.float64)
+        for c in range(n):
+            for e in range(c + 1, n):
+                comparisons[:, :, c, e] = mass @ (short[c, e] if mask is None else short[c, e] * mask) @ mass.T
+                comparisons[:, :, e, c] = -comparisons[:, :, c, e]
+        out.append(comparisons)
+    return out[0] if masks is None else out
 
 
 def _pair_shares(kind, candidates, model: Model, medians, levels, rule, delta, mu, kappa, power, votes):
@@ -513,30 +634,37 @@ class ScoreGrid:
         """score.tabulate GIVEN and RAISED of the ballots, (C, C, X, Y) each."""
         return {kind: score.tabulate(self.table, kind) for kind in (score.GIVEN, score.RAISED)}
 
-    def _at(self, short, pairs, cells) -> np.ndarray:
+    def _at(self, short, pairs, cells, mask=None) -> np.ndarray:
         """short[c, e] (C, C, X, Y) weighed with the voters of the points `cells` (P, 2),
-        for each pair (c, e) of `pairs`: (P, len(pairs)). Only the rows and columns of
-        the voters' shares of the rectangles that the points have are multiplied."""
+        for each pair (c, e) of `pairs`: (P, len(pairs)); with `mask` (X, Y), only with
+        those of its rectangles (within). Only the rows and columns of the voters' shares
+        of the rectangles that the points have are multiplied."""
         mass = _voter_grid(self.model, self.medians)[1]
         rows, at_rows = np.unique(cells[:, 0], return_inverse=True)
         columns, at_columns = np.unique(cells[:, 1], return_inverse=True)
         left, right = mass[rows], mass[columns].T
         out = np.empty((len(cells), len(pairs)))
         for k, (c, e) in enumerate(pairs):
-            out[:, k] = (left @ short[c, e].astype(np.float64) @ right)[at_rows, at_columns]
+            part = short[c, e].astype(np.float64) if mask is None else short[c, e] * mask
+            out[:, k] = (left @ part @ right)[at_rows, at_columns]
         return out
 
-    def taken(self, a: int, b: int, cells: np.ndarray) -> np.ndarray:
+    def within(self, mask: np.ndarray) -> "_Within":
+        """The grid of the voters of the rectangles of `mask` (X, Y) only (strip_masks):
+        those of a strip, from the same tables."""
+        return _Within(self, mask)
+
+    def taken(self, a: int, b: int, cells: np.ndarray, mask=None) -> np.ndarray:
         """(P, 2): the part of the top score that the voters of each point who rank b above
         a give a, and those who rank a above b give b (buried_shares): what burying
         takes back."""
-        return self._at(self._pair_points[score.GIVEN], ((a, b), (b, a)), cells) / (self.levels - 1)
+        return self._at(self._pair_points[score.GIVEN], ((a, b), (b, a)), cells, mask) / (self.levels - 1)
 
-    def added(self, a: int, b: int, cells: np.ndarray) -> np.ndarray:
+    def added(self, a: int, b: int, cells: np.ndarray, mask=None) -> np.ndarray:
         """(P, 2): the part of the top score that the voters of each point who rank a above
         b, but neither first, do not give a, and likewise for b (raised_shares): what
         compromising adds."""
-        return self._at(self._pair_points[score.RAISED], ((a, b), (b, a)), cells) / (self.levels - 1)
+        return self._at(self._pair_points[score.RAISED], ((a, b), (b, a)), cells, mask) / (self.levels - 1)
 
     @cached_property
     def _moved_grades(self) -> dict:
@@ -544,7 +672,7 @@ class ScoreGrid:
         against them read one table each."""
         return {}
 
-    def moved_grades(self, a: int, b: int, cells: np.ndarray) -> np.ndarray:
+    def moved_grades(self, a: int, b: int, cells: np.ndarray, mask=None) -> np.ndarray:
         """(2, P, 2, levels): the share of the voters of each point at each score of a and
         b of those a strategy against them moves (score.moved_grades): [0] who rank the
         other frontrunner above it, whom burying gives it 0, and [1] who rank it above the
@@ -553,19 +681,41 @@ class ScoreGrid:
             self._moved_grades.clear()  # the frontrunners of other points do not come back
             self._moved_grades[a, b] = score.moved_grades(self.table, a, b)
         short = self._moved_grades[a, b].reshape(1, -1, *self.table.shape)
-        values = self._at(short, [(0, row) for row in range(short.shape[1])], cells)
+        values = self._at(short, [(0, row) for row in range(short.shape[1])], cells, mask)
         return np.moveaxis(values.reshape(len(cells), 2, 2, self.levels), 1, 0)
 
     def moved(self, a: int, b: int, bury: float, compromise: float, cells: np.ndarray,
-              tie_weight: float = 0.0) -> np.ndarray:
+              tie_weight: float = 0.0, mask=None) -> np.ndarray:
         """(P, C, C): how much the score comparisons of the voters of each point
         move where `bury` of them bury and `compromise` of them compromise against the
         frontrunners a and b (score.moved_comparisons); only the pairs with a or b move."""
         short = score.moved_comparisons(self.table, a, b, bury, compromise, tie_weight)
         n = len(self.candidates)
         pairs = [(c, e) for c in range(n) for e in range(c + 1, n) if a in (c, e) or b in (c, e)]
-        values = self._at(short, pairs, cells)
+        values = self._at(short, pairs, cells, mask)
         moved = np.zeros((len(cells), n, n))
         for k, (c, e) in enumerate(pairs):
             moved[:, c, e], moved[:, e, c] = values[:, k], -values[:, k]
         return moved
+
+
+@dataclass(frozen=True, eq=False)
+class _Within:
+    """A ScoreGrid of the voters of the rectangles of `mask` only (ScoreGrid.within):
+    the ballots of a strip of the voters (build.voters.Striped)."""
+
+    grid: ScoreGrid
+    mask: np.ndarray
+
+    def taken(self, a: int, b: int, cells: np.ndarray) -> np.ndarray:
+        return self.grid.taken(a, b, cells, self.mask)
+
+    def added(self, a: int, b: int, cells: np.ndarray) -> np.ndarray:
+        return self.grid.added(a, b, cells, self.mask)
+
+    def moved_grades(self, a: int, b: int, cells: np.ndarray) -> np.ndarray:
+        return self.grid.moved_grades(a, b, cells, self.mask)
+
+    def moved(self, a: int, b: int, bury: float, compromise: float, cells: np.ndarray,
+              tie_weight: float = 0.0) -> np.ndarray:
+        return self.grid.moved(a, b, bury, compromise, cells, tie_weight, self.mask)

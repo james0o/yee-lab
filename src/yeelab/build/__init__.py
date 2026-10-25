@@ -50,6 +50,9 @@
     # 30% of the voters whose first choice is neither frontrunner rank the one they like
     # more first
     Compromise(fptp, share=0.3)
+    # 30% of the voters at the centre bury, more of them to the left and fewer to the
+    # right: the odds of the left and the right wall differ e^2 times
+    Burial(borda, share=0.3, tilt=(-2, 0))
     # the other ways to score of yeelab.score, for comparisons (not in the web UI)
     ScoreAvg(6), ScoreDH(6, delta=0.8), ScoreHybrid(6, delta=0.8), ScoreCluster(6, mu=0.1, kappa=2.0)
     # Janeček's D21: at most 2 plus votes and 1 minus vote, the minus vote only after 2 plus votes
@@ -105,7 +108,8 @@ from yeelab.build.blocks import (
 )
 from yeelab.build.methods import METHODS
 from yeelab.build.strategic import Bullet, Burial, Compromise
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Ballots, Graded, Scored, ScoredPairwise, Share, Voters
+from yeelab.build.voters import (FIRST, PAIRWISE, PROFILE, Ballots, Graded, Scored, ScoredPairwise, Share, Striped,
+                                 Voters)
 
 __all__ = [
     "AntiPlurality", "Ballot", "Ballots", "BordaCount", "Bullet", "Burial", "CandidateTotals", "Compromise",
@@ -114,5 +118,5 @@ __all__ = [
     "Pairwise", "Plurality", "Score", "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH",
     "ScoreHybrid", "Smith", "StrongestPaths", "Tally", "Top", "Unbeaten", "Undecided", "Union", "Weakest",
     "Winner", "METHODS",
-    "FIRST", "PAIRWISE", "PROFILE", "Graded", "Scored", "ScoredPairwise", "Share", "Voters",
+    "FIRST", "PAIRWISE", "PROFILE", "Graded", "Scored", "ScoredPairwise", "Share", "Striped", "Voters",
 ]
