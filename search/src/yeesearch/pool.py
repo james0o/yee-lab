@@ -82,18 +82,44 @@ def score_config(set_name: str, index: int, size: int, sources: list[str], share
     return out
 
 
+def read_jsonl(path: Path) -> list[dict]:
+    """The entries of a JSON-lines file, without a last line cut off (by a power cut)."""
+    entries = []
+    if path.exists():
+        for line in path.read_text().splitlines():
+            if line.strip():
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+    return entries
+
+
+def append_jsonl(path: Path):
+    """The file opened for appending lines, a line cut off before ended first, so that the
+    next one does not join it."""
+    if path.exists() and path.stat().st_size and not path.read_bytes().endswith(b"\n"):
+        with path.open("a") as file:
+            file.write("\n")
+    return path.open("a")
+
+
+def synced(file):
+    """Written to the disk itself, not only to the system's cache: what survives a power cut."""
+    file.flush()
+    os.fsync(file.fileno())
+
+
 class Archive:
     """Every method scored in a run, by source, in a JSON-lines file (None: in memory only)."""
 
     def __init__(self, path: Path | None = None):
         self.path = path
         self.results: dict[str, dict] = {}
-        if path is not None and path.exists():
-            for line in path.read_text().splitlines():
-                if line.strip():
-                    entry = json.loads(line)
-                    self.results[entry["method"]] = entry
-        self._file = None if path is None else path.open("a")
+        if path is not None:
+            for entry in read_jsonl(path):
+                self.results[entry["method"]] = entry
+        self._file = None if path is None else append_jsonl(path)
 
     def add(self, source: str, result: dict):
         entry = {"method": source} | result
@@ -101,6 +127,10 @@ class Archive:
         if self._file is not None:
             self._file.write(json.dumps(entry) + "\n")
             self._file.flush()
+
+    def sync(self):
+        if self._file is not None:
+            synced(self._file)
 
     def __contains__(self, source: str) -> bool:
         return source in self.results
@@ -110,6 +140,7 @@ class Archive:
 
     def close(self):
         if self._file is not None:
+            synced(self._file)
             self._file.close()
 
 

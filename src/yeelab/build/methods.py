@@ -12,6 +12,7 @@ from yeelab.build.blocks import (
     Margins,
     Pairwise,
     Plurality,
+    Smith,
     Score,
     ScoreComparisons,
     StrongestPaths,
@@ -69,6 +70,8 @@ finalists = Conditional(
     when_false=score | two_round,
 )
 
+search_m = Highest(Tally(AntiPlurality()), among=Smith(ScoreComparisons(Score(6, power=1.5))))
+
 d20 = Highest(Tally(D21(max_positive=2, max_negative=0, ordinal = True)))
 
 
@@ -84,8 +87,8 @@ smj_fin = Conditional(
 )
 smj_two = Unbeaten(ScoreComparisons(score_ballot), among= smj_fin | two_round)
 new = Conditional(
-    (Highest(Tally(Plurality()), n=2)) == (Highest(Tally(score_ballot), n=2)), 
-    when_true=two_round, 
+    (Highest(Tally(Plurality()), n=2)) == (Highest(Tally(score_ballot), n=2)),
+    when_true=two_round,
     when_false = Conditional(
         (score == fptp) & (score == condorcet),
         when_true=score,
@@ -96,8 +99,8 @@ new = Conditional(
 three_round = Eliminate(Tally(Plurality()), how="min", among=top3)
 
 adhoc = Conditional(
-    fptp == score, 
-    when_true=score, 
+    fptp == score,
+    when_true=score,
     when_false=Conditional(
         two_round == score,
         when_true=score,
@@ -110,14 +113,14 @@ adhoc = Conditional(
 )
 
 con_fptp = Conditional(
-    condorcet == fptp, 
-    when_true=fptp, 
+    condorcet == fptp,
+    when_true=fptp,
     when_false=Conditional(
         condorcet == two_round,
         when_true=two_round,
         when_false = Conditional(
             (condorcet == d20),
-            when_true = condorcet, 
+            when_true = condorcet,
             when_false=Undecided()
         )
     )
@@ -148,4 +151,5 @@ METHODS: dict[str, Winner] = {
     "new": new,
     "adhoc": adhoc,
     "con_fptp": con_fptp,
+    "search": search_m,
 }

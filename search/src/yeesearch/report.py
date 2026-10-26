@@ -17,8 +17,8 @@ from scipy.stats import spearmanr
 from yeelab.build.methods import METHODS
 
 from yeesearch.configs import SETS
-from yeesearch.evaluate import NODE_COST, POLLS, SHARE, objective
-from yeesearch.pool import Archive, Workers, parse
+from yeesearch.evaluate import NODE_COST, SCENARIOS, SHARE, objective
+from yeesearch.pool import Archive, Workers, append_jsonl, parse, read_jsonl, synced
 
 TEST_SIZE = 32  # Spearman's rho of the known methods' order against 64 is 0.999 already at 24
 RUNS = Path("runs")
@@ -41,7 +41,7 @@ def summary(source: str, per_config: list[dict | None], share: str) -> dict:
     if any(result is None for result in per_config):
         return {"J": math.inf, "sincere": math.inf, "burial": math.inf}
     scenario_errors = {scenario: [result[share][scenario] for result in per_config]
-                       for scenario in ("sincere", *POLLS)}
+                       for scenario in SCENARIOS}
     return objective(parse(source), scenario_errors)
 
 
@@ -93,13 +93,8 @@ class _Cache:
     """{(configuration name, source): score_config's result for it} in a JSON-lines file."""
 
     def __init__(self, path: Path):
-        self.results = {}
-        if path.exists():
-            for line in path.read_text().splitlines():
-                if line.strip():
-                    entry = json.loads(line)
-                    self.results[entry["config"], entry["method"]] = entry["result"]
-        self._file = path.open("a")
+        self.results = {(entry["config"], entry["method"]): entry["result"] for entry in read_jsonl(path)}
+        self._file = append_jsonl(path)
 
     def add(self, config: str, source: str, result: dict | None):
         self.results[config, source] = result
@@ -107,6 +102,7 @@ class _Cache:
         self._file.flush()
 
     def close(self):
+        synced(self._file)
         self._file.close()
 
 

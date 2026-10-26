@@ -5,16 +5,16 @@ sincerely and where 30 % of the voters bury, over a set of configurations; lower
 
 e_k is the error of the method over the error of a random winner on the focus region of
 the Yee diagram of k (yeelab.margin.metrics.voronoi_agreement with cycles="worst": a point
-without a winner counts as won by the farthest candidate), and b_k = (mean + max) / 2 of
-that error over the burial scenarios, the frontrunners named by the default poll (the two
-with the most first choices) and by the two highest Borda counts. A method that fails or
-takes too long scores inf (yeesearch.pool)."""
+without a winner counts as won by the farthest candidate), and b_k that error where 30 %
+of the voters bury against the frontrunners of Burial's default poll, the two with the
+most first choices: the burial of the web UI. A method that fails or takes too long scores
+inf (yeesearch.pool)."""
 
 from dataclasses import dataclass, replace
 
 import numpy as np
 
-from yeelab.build import BordaCount, Burial, Highest, ScoreComparisons, Tally, Unbeaten
+from yeelab.build import Burial, Highest, ScoreComparisons, Tally, Unbeaten
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Voters
 from yeelab.margin import regions
 from yeelab.margin.metrics import FOCUS_ROUND, _area_weights, focus_distance
@@ -25,18 +25,15 @@ from yeesearch.grammar import SCORE_BALLOTS, TIE_WEIGHTS, needs as grammar_needs
 NEEDS = grammar_needs()  # the shares cached for every configuration
 
 SHARE = 0.3  # of the voters who bury
-BORDA_POLL = Highest(Tally(BordaCount()), n=2)
-POLLS = {"poll": None, "borda_poll": BORDA_POLL}  # None: Burial's default poll
+SCENARIOS = ("sincere", "poll")  # "poll": burying against the frontrunners of Burial's default poll
 SINCERE, BURIED = 0.4, 0.6
 NODE_COST = 0.0003  # per block: 15 blocks cost 0.0045, about a tenth of a typical J, so a Conditional can win
 
 
 def scenarios(method, share: float = SHARE) -> dict:
-    """{name: method as the voters vote}: sincerely and burying against the frontrunners of each poll."""
-    out = {"sincere": method}
-    for name, poll in POLLS.items():
-        out[name] = Burial(method, share) if poll is None else Burial(method, share, poll=poll)
-    return out
+    """{name: method as the voters vote} of SCENARIOS: sincerely, and with `share` of the
+    voters burying against the frontrunners of the default poll."""
+    return {"sincere": method, "poll": Burial(method, share)}
 
 
 class Scorer:
@@ -161,8 +158,7 @@ def warm(prepared: list[Prepared]):
 def objective(method, scenario_errors: dict[str, list[float]]) -> dict:
     """J and its parts from errors(): the sincere and the burial error, means over the configurations."""
     sincere = np.array(scenario_errors["sincere"])
-    buried = np.array([scenario_errors[name] for name in POLLS])
-    burial = (buried.mean(axis=0) + buried.max(axis=0)) / 2
+    burial = np.array(scenario_errors["poll"])
     nodes = size(method)
     return {"J": float((SINCERE * sincere + BURIED * burial).mean() + NODE_COST * nodes),
             "sincere": float(sincere.mean()), "burial": float(burial.mean()), "size": nodes}

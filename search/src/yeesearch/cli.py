@@ -2,6 +2,7 @@
 for one method, grids to check that the coarse grid of the training orders the methods
 as a fine one does."""
 
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import typer
@@ -18,11 +19,28 @@ def gp(out: Path = typer.Option(..., help="directory of the run; an existing one
        workers: int = typer.Option(4, help="worker processes"),
        seed: int = typer.Option(0),
        timeout: float = typer.Option(60.0, help="seconds a method may take on the training set"),
-       generations: int | None = typer.Option(None, help="stop after this many generations")):
+       generations: int | None = typer.Option(None, help="stop after this many generations"),
+       until: str | None = typer.Option(None, help='stop at this time instead of after --hours: "19:00" (the next '
+                                                     'one) or "2026-10-27 19:00"')):
     """Genetic programming over the grammar, against burial by 30 % of the voters."""
     from yeesearch.gp import run
 
-    run(out, hours, population, workers, seed, timeout, generations)
+    run(out, hours, population, workers, seed, timeout, generations, _time(until) if until else None)
+
+
+def _time(text: str) -> datetime:
+    """"HH:MM", the next such time, or "YYYY-MM-DD HH:MM"."""
+    try:
+        return datetime.strptime(text, "%Y-%m-%d %H:%M")
+    except ValueError:
+        pass
+    try:
+        clock = datetime.strptime(text, "%H:%M").time()
+    except ValueError:
+        raise typer.BadParameter(f'expected "HH:MM" or "YYYY-MM-DD HH:MM", got {text!r}') from None
+    now = datetime.now()
+    when = datetime.combine(now.date(), clock)
+    return when if when > now else when + timedelta(days=1)
 
 
 @app.command()
