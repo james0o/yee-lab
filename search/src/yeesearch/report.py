@@ -17,7 +17,7 @@ from scipy.stats import spearmanr
 from yeelab.build.methods import METHODS
 
 from yeesearch.configs import SETS
-from yeesearch.evaluate import NODE_COST, SCENARIOS, SHARE, objective
+from yeesearch.evaluate import NODE_COST, PIXEL_MEDIAN, SCENARIOS, SHARE, TRIM, objective
 from yeesearch.pool import Archive, Workers, append_jsonl, parse, read_jsonl, synced
 
 TEST_SIZE = 32  # Spearman's rho of the known methods' order against 64 is 0.999 already at 24
@@ -46,17 +46,22 @@ def summary(source: str, per_config: list[dict | None], share: str) -> dict:
 
 
 def run_report(run: Path | None, top: int = 20, size: int = TEST_SIZE, workers: int = 4, set_name: str = "test",
-               cache_dir: Path = RUNS):
+               cache_dir: Path = RUNS, found: list[str] | None = None, names: dict[str, str] | None = None):
     """Scores the best methods of the run (none for None) and the methods of
     yeelab.build.methods on a set, writes report.json into the run and prints a table.
     What a method scores on a configuration is cached in cache_dir/<set>-<size>.jsonl
-    for all runs, so the known methods are scored once and a stopped report goes on."""
-    found = best_found(run, top) if run is not None else []
-    names = {repr(method): name for name, method in METHODS.items()}
+    for all runs, so the known methods are scored once and a stopped report goes on.
+    `found`: the methods to score instead of the run's hall of fame, `names` {source:
+    name} of them."""
+    if found is None:
+        found = best_found(run, top) if run is not None else []
+    names = {repr(method): name for name, method in METHODS.items()} | (names or {})
     sources = list(dict.fromkeys(found + list(names)))
     configs = SETS[set_name]()
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache = _Cache(cache_dir / f"{set_name}-{size}.jsonl")
+    # the scores of each pixel median apart: test-32.jsonl holds those of "marginal", from before 2026-10-28
+    suffix = "" if PIXEL_MEDIAN == "marginal" else f"-{PIXEL_MEDIAN}"
+    cache = _Cache(cache_dir / f"{set_name}-{size}{suffix}.jsonl")
     todo = {index: [source for source in sources if (config.name, source) not in cache.results]
             for index, config in enumerate(configs)}
     console.print(f"{sum(map(len, todo.values()))} of {len(sources) * len(configs)} scores to compute")
@@ -109,7 +114,8 @@ class _Cache:
 def _print(rows: list[dict], set_name: str, size: int):
     """The table of the methods by J, and the expressions of the methods found below it."""
     groups = [group for group in GROUPS if any(group in row for row in rows)]
-    table = Table(title=f"{set_name} set, grid {size}: J = mean(0.4 sincere + 0.6 burial) + {NODE_COST} size",
+    table = Table(title=f"{set_name} set, grid {size}, pixel median {PIXEL_MEDIAN}: J = mean(0.4 sincere + 0.6 burial) "
+                        f"without {TRIM:.0%} of the configurations at each end + {NODE_COST} size",
                   caption="burial: at 30 % of the voters, then at 20 and 45 %; the groups: J on part of the set")
     for column in ("", "J", "sincere", "burial", *(f"{100 * s:.0f} %" for s in SHARES[1:]), *groups, "size"):
         table.add_column(column, justify="left" if not column else "right", no_wrap=True)

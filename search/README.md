@@ -12,7 +12,13 @@ uv run yee-search gp --out runs/first --hours 10      # overnight; the same --ou
 uv run yee-search report runs/first                   # the best methods and the known ones on the test set
 uv run yee-search score 'Unbeaten(StrongestPaths(Margins(Pairwise())))'
 uv run yee-search grids                               # does the coarse training grid order methods as a fine one?
+uv run yee-search conditional --out runs/cond         # every Conditional(c, A, B) of the small methods, from their maps
 ```
 
 A run directory holds `evals.jsonl` (every method scored on the training set),
 `validation.jsonl`, `generations.jsonl`, `hall.json` and the report.
+
+`conditional` enumerates every method of the grammar up to 8 blocks, computes once where
+each one elects whom on every configuration (sincerely and buried), and scores every
+Conditional of two of them from those maps (`yeesearch.conditional`); its directory
+holds the maps, `train.json`, `validation.json`, the test report and `summary.md`.

@@ -148,4 +148,12 @@ def test_set() -> list[Config]:
     return configs
 
 
-SETS = {"train": train_set, "validation": validation_set, "test": test_set}
+def wide_set() -> list[Config]:
+    """The training set, 36 more random configurations (seed 6) and the families turned
+    otherwise: the training of the search of Conditionals, which scores millions of
+    methods and so needs more configurations not to fit chance."""
+    return (train_set() + random_configs(6, 36)
+            + hand_made(200.0, 1.05, 0.12, "wide-", collinear={"n": 3}, dark_horse={"gap": 0.07, "far": 0.32}))
+
+
+SETS = {"train": train_set, "validation": validation_set, "test": test_set, "wide": wide_set}

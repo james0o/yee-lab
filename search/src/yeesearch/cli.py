@@ -69,6 +69,31 @@ def score(method: str = typer.Argument(..., help="the expression of a method, as
 
 
 @app.command()
+def conditional(out: Path = typer.Option(..., help="directory of the search; the maps in it are reused"),
+                max_size: int = typer.Option(8, help="blocks of the enumerated primitives"),
+                same_size: int | None = typer.Option(None, help="blocks of a condition X == Y at most; none: any"),
+                combine: int = typer.Option(1000, help="best conditions combined with & and |"),
+                deeper: int = typer.Option(300, help="best Conditionals of each ranking taken a level deeper"),
+                deeper_conditions: int = typer.Option(5000, help="best conditions of the level deeper"),
+                top_train: int = typer.Option(200, help="best of the training scored on the validation set"),
+                top_test: int = typer.Option(20, help="best of the validation of each ranking scored on the test set"),
+                workers: int = typer.Option(4),
+                estimate: bool = typer.Option(False, help="only count the Conditionals and time them"),
+                summary: bool = typer.Option(False, help="only write summary.md again from a finished search"),
+                pixel_median: str = typer.Option("geometric", help='"geometric" as the web UI starts, or "marginal"'),
+                maps: Path | None = typer.Option(None, help="directory of the maps (default: OUT/maps)")):
+    """Every Conditional(c, A, B) of the primitives (the grammar up to --max-size blocks,
+    the known methods, the best of the GP runs), scored from their maps."""
+    from yeesearch.conditional import run, summary_again
+
+    if summary:
+        summary_again(out, top_test)
+        return
+    run(out, Path("runs"), max_size, same_size, combine, deeper, deeper_conditions, top_train, top_test, workers,
+        estimate, pixel_median, maps)
+
+
+@app.command()
 def grids(set_name: str = typer.Option("validation", "--set"),
           sizes: list[int] = typer.Option([16, 24, 64], "--size"),
           workers: int = typer.Option(4)):

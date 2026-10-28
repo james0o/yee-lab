@@ -21,7 +21,7 @@ def prepared():
 
 
 def test_relative_error_is_the_metric_with_cycles_worst():
-    scorer = Scorer(CONFIG, 20)
+    scorer = Scorer(CONFIG, 20, "marginal")
     coords = regions.grid(20, CONFIG.model.pixels)[0]
     points = np.stack(np.meshgrid(coords, coords, indexing="ij"), axis=-1)
     winner = regions.nearest(CONFIG.array, points)[0]
@@ -72,7 +72,8 @@ def test_sets_do_not_share_configurations():
     names = {name: {(c.candidates, c.deviation) for c in make()} for name, make in SETS.items()}
     assert not names["train"] & names["validation"] and not names["train"] & names["test"]
     assert not names["validation"] & names["test"]
-    assert len(SETS["train"]()) == 20
+    assert names["train"] <= names["wide"] and not names["wide"] & (names["validation"] | names["test"])
+    assert len(SETS["train"]()) == 20 and len(SETS["wide"]()) == 64
 
 
 def test_random_candidates_are_apart():
