@@ -13,6 +13,7 @@ uv run yee-search report runs/first                   # the best methods and the
 uv run yee-search score 'Unbeaten(StrongestPaths(Margins(Pairwise())))'
 uv run yee-search grids                               # does the coarse training grid order methods as a fine one?
 uv run yee-search conditional --out runs/cond         # every Conditional(c, A, B) of the small methods, from their maps
+./night.sh 06:00                                      # a night: the Conditionals, then gp from their best, then the report
 ```
 
 A run directory holds `evals.jsonl` (every method scored on the training set),

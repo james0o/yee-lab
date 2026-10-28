@@ -3,8 +3,12 @@ sincerely and where 30 % of the voters bury, over a set of configurations; lower
 
     J = trimmed mean over configurations k of (SINCERE e_k(m) + BURIED b_k(m)) + NODE_COST size(m)
 
-e_k is the error of the method over the error of a random winner on the focus region of
-the Yee diagram of k (yeelab.margin.metrics.voronoi_agreement with cycles="worst": a point
+size(m) the number of distinct blocks of m (grammar.distinct_size): a method used twice,
+in a condition and in a branch, is paid for once.
+
+e_k is the error of the method over the error of a random winner, REGION of it that on
+the focus region of the Yee diagram of k (around the candidates) and WHOLE of it that on
+the whole diagram (yeelab.margin.metrics.voronoi_agreement with cycles="worst": a point
 without a winner counts as won by the farthest candidate), each point of the voter grid
 drawn at the geometric median of its voters as the web UI starts (PIXEL_MEDIAN), and b_k
 that error where 30 % of the voters bury against the frontrunners of Burial's default
@@ -23,16 +27,18 @@ from yeelab.margin import regions
 from yeelab.margin.metrics import FOCUS_ROUND, _area_weights, focus_distance
 
 from yeesearch.configs import Config
-from yeesearch.grammar import SCORE_BALLOTS, TIE_WEIGHTS, needs as grammar_needs, size
+from yeesearch.grammar import D20, SCORE_BALLOTS, TIE_WEIGHTS, distinct_size, needs as grammar_needs
 
 NEEDS = grammar_needs()  # the shares cached for every configuration
 
 SHARE = 0.3  # of the voters who bury
 SCENARIOS = ("sincere", "poll")  # "poll": burying against the frontrunners of Burial's default poll
-SINCERE, BURIED = 0.4, 0.6
-NODE_COST = 0.0003  # per block: 15 blocks cost 0.0045, about a tenth of a typical J, so a Conditional can win
+SINCERE, BURIED = 0.25, 0.75  # the burial error matters most (2026-10-28; 0.4 and 0.6 before)
+NODE_COST = 0.0001  # per block: 15 blocks cost 0.0015, a tenth of a typical J (0.0003 before 2026-10-28)
 TRIM = 0.05  # of the configurations left out of J's mean at each end, for each method
 PIXEL_MEDIAN = "geometric"  # where a point of the voter grid is drawn: as the web UI starts (Scorer)
+REGION, WHOLE = 0.8, 0.2  # of the error around the candidates and on the whole diagram (2026-10-28; 1 and 0 before)
+SCORER = f"{PIXEL_MEDIAN}-whole{WHOLE:g}"  # what the errors depend on: caches of errors are kept apart by it
 
 
 def scenarios(method, share: float = SHARE) -> dict:
@@ -43,14 +49,16 @@ def scenarios(method, share: float = SHARE) -> dict:
 
 class Scorer:
     """The loss of every candidate at every point of the grid of one configuration, and
-    the weights of the focus region, to score many methods' winners fast: relative(winner)
-    is voronoi_agreement(..., cycles="worst")["region"] error over random."""
+    what each point weighs, to score many methods' winners fast: relative(winner) is
+    REGION voronoi_agreement(..., cycles="worst")["region"] error over random and WHOLE
+    the same of "diagram", the sum over the points of the loss times `scale`."""
 
-    def __init__(self, config: Config, size: int, pixel_median: str = PIXEL_MEDIAN):
+    def __init__(self, config: Config, size: int, pixel_median: str = PIXEL_MEDIAN, whole: float = WHOLE):
         """`pixel_median` "geometric": each point of the voter grid drawn at the geometric
         median of its voters, as the web UI starts (regions.geometric_grid), the points it
         does not keep weighing 0; "marginal": at the median of each coordinate, the
-        library's default and the search's before 2026-10-28."""
+        library's default and the search's before 2026-10-28. `whole`: the part of the error
+        on the whole diagram, the rest around the candidates."""
         candidates = config.array
         coords = regions.grid(size, config.model.pixels)[0]
         keep = np.ones(len(coords), dtype=bool)
@@ -69,14 +77,17 @@ class Scorer:
         self.every = np.zeros((len(coords), len(coords), len(candidates)))  # (G, G, C)
         self.every[kept] = regret / (regret + scale)
         self.worst = self.every.max(axis=-1)
-        self.weights = np.zeros((len(coords), len(coords)))
-        self.weights[kept] = (focus if focus.sum() > 0 else weights) / (focus if focus.sum() > 0 else weights).sum()
-        self.random = float((self.every.mean(axis=-1) * self.weights).sum())
+        self.scale = np.zeros((len(coords), len(coords)))  # what each point's loss adds to relative()
+        for part, area in ((1 - whole, focus if focus.sum() > 0 else weights), (whole, weights)):
+            if part:
+                spread = np.zeros((len(coords), len(coords)))
+                spread[kept] = area / area.sum()
+                self.scale += part * spread / float((self.every.mean(axis=-1) * spread).sum())
 
     def relative(self, winner: np.ndarray) -> float:
         chosen = np.take_along_axis(self.every, np.maximum(winner, 0)[..., None], axis=-1)[..., 0]
         loss = np.where(winner >= 0, chosen, self.worst)
-        return float((loss * self.weights).sum() / self.random)
+        return float((loss * self.scale).sum())
 
 
 def restricted(voters: Voters, needs: frozenset) -> Voters:
@@ -169,6 +180,7 @@ def warm(prepared: list[Prepared]):
         for method in (Highest(Tally(ballot)), Highest(Tally(ballot, statistic="median")),
                        *(Unbeaten(ScoreComparisons(ballot, tie_weight=weight)) for weight in TIE_WEIGHTS)):
             errors(method, prepared)
+    errors(D20, prepared)
 
 
 def trimmed(values, trim: float = TRIM) -> np.ndarray:
@@ -186,6 +198,6 @@ def objective(method, scenario_errors: dict[str, list[float]]) -> dict:
     sincere = np.array(scenario_errors["sincere"])
     burial = np.array(scenario_errors["poll"])
     kept = trimmed(SINCERE * sincere + BURIED * burial)
-    nodes = size(method)
+    nodes = distinct_size(method)
     return {"J": float((SINCERE * sincere[kept] + BURIED * burial[kept]).mean() + NODE_COST * nodes),
             "sincere": float(sincere[kept].mean()), "burial": float(burial[kept].mean()), "size": nodes}

@@ -21,11 +21,12 @@ def gp(out: Path = typer.Option(..., help="directory of the run; an existing one
        timeout: float = typer.Option(60.0, help="seconds a method may take on the training set"),
        generations: int | None = typer.Option(None, help="stop after this many generations"),
        until: str | None = typer.Option(None, help='stop at this time instead of after --hours: "19:00" (the next '
-                                                     'one) or "2026-10-27 19:00"')):
+                                                     'one) or "2026-10-27 19:00"'),
+       seed_from: Path | None = typer.Option(None, help="a directory of yee-search conditional: its best as seeds")):
     """Genetic programming over the grammar, against burial by 30 % of the voters."""
     from yeesearch.gp import run
 
-    run(out, hours, population, workers, seed, timeout, generations, _time(until) if until else None)
+    run(out, hours, population, workers, seed, timeout, generations, _time(until) if until else None, seed_from)
 
 
 def _time(text: str) -> datetime:

@@ -10,7 +10,8 @@ from yeelab.margin.metrics import voronoi_agreement
 from yeelab.voting import CYCLE
 
 from yeesearch.configs import SETS, Config, random_configs
-from yeesearch.evaluate import NEEDS, NODE_COST, Prepared, Scorer, errors, objective, restricted, scenarios
+from yeesearch.evaluate import (BURIED, NEEDS, NODE_COST, SINCERE, Prepared, Scorer, errors, objective, restricted,
+                                scenarios)
 
 CONFIG = Config("five", ((0.6, 0.35), (0.25, 0.4), (0.35, 0.3), (0.5, 0.5), (0.3, 0.7)), 0.2)
 
@@ -57,13 +58,13 @@ def test_restricted_voters_keep_only_what_is_needed(prepared):
 
 
 def test_objective_weighs_sincere_and_burial(prepared):
-    """J = mean(0.4 sincere + 0.6 burial against the default poll's frontrunners) + NODE_COST
+    """J = mean(SINCERE sincere + BURIED burial against the default poll's frontrunners) + NODE_COST
     size; burial does not change FPTP, whose first choices stay."""
     found = errors(METHODS["fptp"], [prepared, prepared])
     assert found["sincere"] == found["poll"]
     result = objective(METHODS["fptp"], {"sincere": [0.1, 0.3], "poll": [0.2, 0.4]})
     assert result["burial"] == pytest.approx(0.3) and result["sincere"] == pytest.approx(0.2)
-    assert result["J"] == pytest.approx(np.mean([0.4 * 0.1 + 0.6 * 0.2, 0.4 * 0.3 + 0.6 * 0.4]) + 3 * NODE_COST)
+    assert result["J"] == pytest.approx(np.mean([SINCERE * 0.1 + BURIED * 0.2, SINCERE * 0.3 + BURIED * 0.4]) + 3 * NODE_COST)
     assert result["size"] == 3
     assert scenarios(METHODS["fptp"]) == {"sincere": METHODS["fptp"], "poll": Burial(METHODS["fptp"], 0.3)}
 
@@ -73,7 +74,7 @@ def test_sets_do_not_share_configurations():
     assert not names["train"] & names["validation"] and not names["train"] & names["test"]
     assert not names["validation"] & names["test"]
     assert names["train"] <= names["wide"] and not names["wide"] & (names["validation"] | names["test"])
-    assert len(SETS["train"]()) == 20 and len(SETS["wide"]()) == 64
+    assert len(SETS["train"]()) == 18 and len(SETS["wide"]()) == 58  # those with a candidate near a wall left out
 
 
 def test_random_candidates_are_apart():

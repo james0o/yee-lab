@@ -7,10 +7,11 @@ spread wider or narrower, with other voters."""
 
 import math
 from dataclasses import dataclass
-from functools import cached_property
+from functools import cached_property, lru_cache
 
 import numpy as np
 
+from yeelab.margin import regions
 from yeelab.margin.shares import Model
 from yeelab.ranking_cells import SPREAD
 
@@ -19,6 +20,8 @@ SIZES = (3, 4, 5, 6)  # the number of candidates of a random configuration
 LOW, HIGH = 0.1, 0.9  # random candidates are inside this square
 SEPARATION = 0.08  # and at least this far from each other
 EDGE = 0.04  # hand-made candidates are kept this far from the walls
+WALL = 0.1  # a configuration is left out of the sets where a candidate is nearer a wall than this
+STRIP = 0.05  # or nearer than this to the strip along the walls a geometric diagram leaves empty
 
 
 @dataclass(frozen=True)
@@ -40,6 +43,24 @@ class Config:
     @property
     def n_candidates(self) -> int:
         return len(self.candidates)
+
+
+@lru_cache
+def empty_strip(deviation: float) -> float:
+    """How far from a wall, at most, the diagram of voters drawn at their geometric
+    median starts (regions.geometric_grid): the web UI's diagram is empty nearer."""
+    points = regions.geometric_grid(Model("beta", deviation, SPREAD), 16)[1]
+    return float(points[0, :, 0].max())
+
+
+def inside(config: Config) -> bool:
+    """Whether every candidate is at least WALL from the walls and STRIP beyond the empty strip."""
+    nearest = min(float(config.array.min()), float((1 - config.array).min()))
+    return nearest >= max(WALL, empty_strip(config.deviation) + STRIP) - 1e-9
+
+
+def _inside(configs: list[Config]) -> list[Config]:
+    return [config for config in configs if inside(config)]
 
 
 def _config(name: str, points, deviation: float) -> Config:
@@ -125,14 +146,15 @@ def hand_made(angle: float, scale: float, deviation: float, prefix: str, **optio
 
 
 def train_set() -> list[Config]:
-    """12 random configurations (seed 1) and every hand-made family as drawn."""
-    return random_configs(1, 12) + hand_made(0.0, 1.0, 0.2, "train-")
+    """12 random configurations (seed 1) and every hand-made family as drawn, but those
+    with a candidate near a wall (inside), as in every set."""
+    return _inside(random_configs(1, 12) + hand_made(0.0, 1.0, 0.2, "train-"))
 
 
 def validation_set() -> list[Config]:
     """20 random configurations (seed 2) and the families turned a quarter, other voters."""
-    return (random_configs(2, 20)
-            + hand_made(90.0, 0.9, 0.15, "validation-", collinear={"n": 3}, dark_horse={"gap": 0.06}))
+    return _inside(random_configs(2, 20)
+                   + hand_made(90.0, 0.9, 0.15, "validation-", collinear={"n": 3}, dark_horse={"gap": 0.06}))
 
 
 def test_set() -> list[Config]:
@@ -145,15 +167,15 @@ def test_set() -> list[Config]:
                              dark_horse={"gap": 0.1, "far": 0.3}, clones={"gap": 0.03})
     configs += random_configs(4, 20, sizes=(7, 8), prefix="ood-many")
     configs += random_configs(5, 20, deviations=(0.05, 0.4), prefix="ood-deviation")
-    return configs
+    return _inside(configs)
 
 
 def wide_set() -> list[Config]:
     """The training set, 36 more random configurations (seed 6) and the families turned
     otherwise: the training of the search of Conditionals, which scores millions of
     methods and so needs more configurations not to fit chance."""
-    return (train_set() + random_configs(6, 36)
-            + hand_made(200.0, 1.05, 0.12, "wide-", collinear={"n": 3}, dark_horse={"gap": 0.07, "far": 0.32}))
+    return train_set() + _inside(random_configs(6, 36) + hand_made(200.0, 1.05, 0.12, "wide-", collinear={"n": 3},
+                                                                   dark_horse={"gap": 0.07, "far": 0.32}))
 
 
 SETS = {"train": train_set, "validation": validation_set, "test": test_set, "wide": wide_set}

@@ -30,11 +30,12 @@ from yeelab.margin import regions
 
 from yeesearch.configs import SETS
 from yeesearch.evaluate import SHARE, Prepared, scenarios
-from yeesearch.grammar import RULES, SCORE_BALLOTS, Invalid, Node, build_method, from_block
+from yeesearch.grammar import RULES, SCORE_BALLOTS, Invalid, Node, build_method, from_block, size
 from yeesearch.pool import Workers, parse
 
 MAX_SIZE = 8  # blocks of the enumerated methods: 8368 methods; 9 would add 58549
-OWN = {name: 2 if name == "margins" else 0 if name == "elects" else 1 for name in RULES}  # blocks of a rule itself
+OWN = {name: 0 if name == "elects" else 1 if rule.children else size(rule.build(tuple(v[0] for v in rule.params), []))
+       for name, rule in RULES.items()}  # blocks of a rule itself: of a leaf, all it builds (Margins(Pairwise()), D20)
 BALLOTS = (Plurality(), AntiPlurality(), BordaCount(), *SCORE_BALLOTS.values())  # of the grammar's "mean"
 MEASURES = tuple(kind(Tally(ballot)) for kind in (Top, Lead) for ballot in BALLOTS)
 SCENARIO_NAMES = ("sincere", "poll")  # the second axis of the maps

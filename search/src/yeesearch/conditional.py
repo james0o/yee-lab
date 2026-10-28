@@ -24,9 +24,9 @@ or false at every point, sincerely and buried:
 
 The same products rank the Conditionals without the cost of their size too ("raw"), to
 see whether a Conditional is better at all or only too large; and the primitives alone
-are ranked too ("alone"), the best of them being new methods themselves. Chains (Chains)
-take the winner of a method burial cannot move (SAFE) where a method it can agrees with
-it, a level or two deep.
+are ranked too ("alone"), the best of them being new methods themselves. Two levels of
+Conditionals of the best conditions, A1, A2 and B free, are searched apart (Nested): the
+J of Conditional(c1, A1, Conditional(c2, A2, B)) is three sums apart as well.
 
 J's mean is trimmed (evaluate.objective), which no sum over points is: the search sums
 over the configurations of middle difficulty (Search) and scores its best exactly.
@@ -61,14 +61,17 @@ console = Console(width=150)
 TRAIN_SET, TRAIN_SIZE = "wide", 16
 VALIDATION_SET, VALIDATION_SIZE = "validation", 24
 COSTS = {"J": NODE_COST, "raw": 0.0}  # the rankings of Conditionals: by J, and without the cost of the size
-RANKINGS = COSTS | {"alone": NODE_COST, "chain": NODE_COST, "chain_raw": 0.0}  # and the primitives alone, the chains
-SAFE = ("fptp", "two_round")  # burial moves neither the first choices nor the frontrunners' head-to-head
+RANKINGS = COSTS | {"alone": NODE_COST, "nested": NODE_COST, "nested_raw": 0.0}  # and the primitives alone, Nested
+# methods whose agreements with others go into Nested's conditions: burial moves neither fptp's first choices nor
+# two_round's head-to-head of the frontrunners, and D20 is weak alone but may tell where others are right
+AGREEING = ("fptp", "two_round", "d20")
+NESTED_TOP, NESTED_EACH = 1400, 200  # conditions of Nested: the best of all, and of the agreements with each AGREEING
 BATCH = 1024  # conditions in one matrix product
 BEST = 6  # of f and of g of a condition, whose pairs are tried
 KEEP = 4  # pairs of a condition kept
 POOL = 50_000  # the best Conditionals kept over all conditions, of each ranking
 BASELINES = ("star", "star_two_round", "mj", "search_1", "search_2", "search_3", "search_4", "d20")
-EXTRA = ("d20",)  # methods of yeelab.build.methods outside the grammar taken as primitives
+EXTRA = ()  # methods of yeelab.build.methods outside the grammar taken as primitives (D20 is in it since 2026-10-28)
 
 # ---------------------------------------------------------------- trees
 
@@ -138,7 +141,7 @@ class Space:
         for k, scorer in enumerate(scorers):
             unit[k, ..., :scorer.every.shape[-1]] = scorer.every
             unit[k, ..., -1] = scorer.worst
-            unit[k] *= (scorer.weights / scorer.random)[..., None]
+            unit[k] *= scorer.scale[..., None]
         self.unit = unit  # the relative error each winner adds at each point (Scorer.relative)
 
     def extended(self, trees: list) -> "Space":
@@ -467,75 +470,83 @@ def combined(search: Search, best: list) -> Conditions:
                     trees.append(("and", one, other))
     return Conditions(search, trees, [condition_size(tree, sizes) for tree in trees])
 
-class Chains:
-    """Conditional(S1 == G1, S1, Conditional(S2 == G2, S2, B)) and Conditional(S1 == G1,
-    S1, B): where a method G that burial can move elects as a method S of SAFE, which it
-    cannot, that winner; else the same with another S and G; else B. Of S and G the
-    smaller is the when_true: they elect alike there. Every S1 and S2 of `safe` and every
-    G1, G2 and B of the items, the best B of each (S1, G1, S2, G2) by the matrix product."""
+class Nested:
+    """Conditional(c1, A1, Conditional(c2, A2, B)) of every two conditions c1 != c2 of a
+    Conditions and the best items A1, A2 != B for them. J is the sum of c1 . l_A1, (not c1
+    and c2) . l_A2 and (not c1 and not c2) . l_B with the costs, each of one item, so one
+    matrix product a pair of conditions gives the best of all three: the last is not c1 .
+    l_B, of the condition alone, less the second."""
 
-    def __init__(self, search: Search, safe: list[str]):
-        self.search = search
-        space = search.space
-        sizes, every = space.sizes, np.arange(len(space.items))
-        rows = []
-        for s1 in (space.index[source] for source in safe):
-            g1 = every[every != s1]
-            rows.append(np.column_stack([np.full(len(g1), s1), g1, np.full(len(g1), -1), np.full(len(g1), -1)]))
-            for s2 in (space.index[source] for source in safe):
-                g2 = every[every != s2]
-                first, second = (part.ravel() for part in np.meshgrid(g1, g2, indexing="ij"))
-                rows.append(np.column_stack([np.full(len(first), s1), first, np.full(len(first), s2), second]))
-        self.rows = np.concatenate(rows).astype(np.int64)
-        s1, g1, s2, g2 = self.rows.T
-        two = s2 >= 0
-        s2, g2 = np.maximum(s2, 0), np.maximum(g2, 0)
-        self.true1 = np.where(sizes[s1] <= sizes[g1], s1, g1)
-        self.true2 = np.where(sizes[s2] <= sizes[g2], s2, g2)
-        self.two = two
-        self.sizes = (2 + sizes[s1] + sizes[g1] + sizes[self.true1]
-                      + np.where(two, 2 + sizes[s2] + sizes[g2] + sizes[self.true2], 0))  # all but B
+    def __init__(self, conditions: Conditions):
+        self.conditions, self.search = conditions, conditions.search
+        first, second = np.meshgrid(np.arange(len(conditions)), np.arange(len(conditions)), indexing="ij")
+        apart = first != second
+        self.pairs = np.column_stack([first[apart], second[apart]])
 
     def __len__(self):
-        return len(self.rows)
+        return len(self.pairs)
 
     def tree(self, row: int, a: int, b: int):
+        """The tree of a pair, A1 = a and A2, B = divmod(b, the number of items)."""
         items = self.search.space.items
-        s1, g1, s2, g2 = self.rows[row]
-        rest = items[b]
-        if self.two[row]:
-            rest = "if", ("same", items[s2], items[g2]), items[self.true2[row]], rest
-        return "if", ("same", items[s1], items[g1]), items[self.true1[row]], rest
+        i, j = self.pairs[row]
+        a2, b2 = divmod(b, len(items))
+        return "if", self.conditions[int(i)], items[a], ("if", self.conditions[int(j)], items[a2], items[b2])
 
     def run(self, log=None) -> dict[str, Pool]:
-        """The best chains of each ranking of COSTS, BATCH rows at a time."""
+        """The best of each pair of conditions, of each ranking of COSTS, BATCH pairs at a time."""
         search = self.search
-        flat, L, item_sizes = search.flat, search.L, search.space.sizes
+        L, sizes, count = search.L, search.space.sizes, len(search.space.items)
+        masks = self.conditions.masks(np.arange(len(self.conditions)))
+        true = masks.astype(np.float32) @ L.T  # (C, P): c . l of every item
+        false = search.total[None, :] - true
+        costs = {name: (cost * sizes).astype(np.float32) for name, cost in COSTS.items()}
+        first_best = {name: (true + costs[name]).min(axis=1) for name in COSTS}
+        first_item = {name: (true + costs[name]).argmin(axis=1) for name in COSTS}
         pools = {name: Pool.empty() for name in COSTS}
         start, best = time.perf_counter(), np.inf
-        for first in range(0, len(self), BATCH):
-            index = np.arange(first, min(first + BATCH, len(self)))
-            s1, g1, s2, g2 = self.rows[index].T
-            one = flat[s1] == flat[g1]
-            two = (flat[np.maximum(s2, 0)] == flat[np.maximum(g2, 0)]) & self.two[index][:, None] & ~one
-            rest = ~one & ~two
-            prefix = (one * L[self.true1[index]]).sum(axis=1) + (two * L[self.true2[index]]).sum(axis=1)
-            M = rest.astype(np.float32) @ L.T  # (C, P): each B's loss where neither S agrees
+        for begin in range(0, len(self), BATCH):
+            index = np.arange(begin, min(begin + BATCH, len(self)))
+            i, j = self.pairs[index].T
+            second = (~masks[i] & masks[j]).astype(np.float32) @ L.T  # (not c1 and c2) . l
+            rest = false[i] - second  # (not c1 and not c2) . l
             for name, cost in COSTS.items():
-                J = M + (cost * item_sizes).astype(np.float32) + (
-                    search.constant + prefix + cost * self.sizes[index])[:, None]
-                keep = np.argpartition(J, KEEP, axis=1)[:, :KEEP]
-                values = np.take_along_axis(J, keep, axis=1)
+                f2, f3 = second + costs[name], rest + costs[name]
+                o2, o3 = np.argpartition(f2, 1, axis=1)[:, :2], np.argpartition(f3, 1, axis=1)[:, :2]
+                v2, v3 = np.take_along_axis(f2, o2, axis=1), np.take_along_axis(f3, o3, axis=1)
+                alike = o2[:, 0] == o3[:, 0]  # A2 == B: one of them the second best
+                other2, other3 = v2[:, 1] + v3[:, 0], v2[:, 0] + v3[:, 1]
+                a2 = np.where(alike & (other2 < other3), o2[:, 1], o2[:, 0])
+                b = np.where(alike & (other2 >= other3), o3[:, 1], o3[:, 0])
+                tail = np.where(alike, np.minimum(other2, other3), v2[:, 0] + v3[:, 0])
+                J = (search.constant + cost * (2 + self.conditions.sizes[i] + self.conditions.sizes[j])
+                     + first_best[name][i] + tail)
                 if name == "J":
-                    best = min(best, float(values.min()))
-                rows = np.broadcast_to(index[:, None], values.shape)
-                pools[name] = pools[name].merged(Pool(values.ravel(), rows.ravel(), np.zeros(values.size, np.int64),
-                                                      keep.ravel()))
-            if log is not None and ((first // BATCH) % 300 == 0 or first + BATCH >= len(self)):
+                    best = min(best, float(J.min()))
+                pools[name] = pools[name].merged(Pool(J.astype(np.float32), index, first_item[name][i],
+                                                      a2 * count + b))
+            if log is not None and ((begin // BATCH) % 300 == 0 or begin + BATCH >= len(self)):
                 done, elapsed = index[-1] + 1, time.perf_counter() - start
-                log(f"  chains: {done}/{len(self)}, {elapsed:.0f} s, about {elapsed / done * (len(self) - done):.0f} s "
+                log(f"  nested: {done}/{len(self)}, {elapsed:.0f} s, about {elapsed / done * (len(self) - done):.0f} s "
                     f"to go, best J {best:.5f}")
         return {name: pool.sorted() for name, pool in pools.items()}
+
+
+def nested_conditions(search: Search, stages: dict, alias: dict) -> Conditions:
+    """The conditions of Nested: the NESTED_TOP best of the stages and the NESTED_EACH best
+    agreements X == Y of every method of AGREEING, alike on the active points only once."""
+    from yeelab.build.methods import METHODS
+
+    trees = _best_conditions(stages, NESTED_TOP)
+    same, _, best = stages["same"]
+    for name in AGREEING:
+        k = search.space.index[alias.get(repr(METHODS[name]), repr(METHODS[name]))]
+        mine = np.flatnonzero((same.pairs == k).any(axis=1))
+        trees += [same[int(m)] for m in mine[np.argsort(best[mine], kind="stable")[:NESTED_EACH]]]
+    trees = list(dict.fromkeys(trees))
+    sizes = dict(zip(search.space.items, search.space.sizes))
+    return Conditions(search, trees, [condition_size(tree, sizes) for tree in trees]).unique()
+
 
 # ---------------------------------------------------------------- the run
 
@@ -552,7 +563,9 @@ def _json(value):
 
 def candidates(space: Space, conditions: Conditions, pool: Pool, count: int, cost: float) -> list[dict]:
     """The `count` best Conditionals of a pool, scored exactly, of those alike on every
-    point (sincerely and buried) only the best, by J with the cost `cost` of a block."""
+    point (sincerely and buried) only the best, by J with the cost `cost` of a block. The
+    pool's J pays for every block, the exact one for every distinct block once, so ten
+    times `count` are scored."""
     out, seen = [], set()
     for k in range(len(pool.J)):
         tree = conditions.tree(int(pool.condition[k]), int(pool.a[k]), int(pool.b[k]))
@@ -564,7 +577,7 @@ def candidates(space: Space, conditions: Conditions, pool: Pool, count: int, cos
         out.append({"tree": tree, "J": result["J"], "rank": result["J"] - (NODE_COST - cost) * result["size"],
                     "sincere": result["sincere"], "burial": result["burial"], "size": result["size"],
                     "screened": float(pool.J[k])})
-        if len(out) >= 3 * count:
+        if len(out) >= 10 * count:
             break
     out.sort(key=lambda entry: entry["rank"])
     return out[:count]
@@ -643,13 +656,12 @@ def run(out: Path, runs: Path = Path("runs"), max_size: int = 8, same_size: int 
     deep_pools, best = deep_search.run(deep_conditions, log=log, label="deeper")
     count = len(deep_space.items)
     record["deeper"] = _stage(deep_conditions, best, count * (count - 1), time.perf_counter() - tick)
-    from yeelab.build.methods import METHODS
-
-    chains = Chains(search, [alias.get(repr(METHODS[name]), repr(METHODS[name])) for name in SAFE])
+    nested = Nested(nested_conditions(search, stages, alias))
+    log(f"nested: {len(nested.conditions)} conditions, {len(nested):,} pairs of them")
     tick = time.perf_counter()
-    chain_pools = chains.run(log=log)
-    record["chains"] = {"rows": len(chains), "conditionals": len(chains) * len(items),
-                        "seconds": round(time.perf_counter() - tick, 1)}
+    nested_pools = nested.run(log=log)
+    record["nested"] = {"conditions": len(nested.conditions), "pairs": len(nested),
+                        "conditionals": len(nested) * len(items) ** 3, "seconds": round(time.perf_counter() - tick, 1)}
     (out / "search.json").write_text(json.dumps(record, indent=1))
     train = {}
     for name, cost in COSTS.items():
@@ -659,8 +671,8 @@ def run(out: Path, runs: Path = Path("runs"), max_size: int = 8, same_size: int 
                       for k in np.argsort(alone)[:top_train]]
     for entry in train["alone"]:
         entry["rank"] = entry["J"]
-    for name in ("chain", "chain_raw"):
-        train[name] = candidates(space, chains, chain_pools["raw" if name == "chain_raw" else "J"], top_train,
+    for name in ("nested", "nested_raw"):
+        train[name] = candidates(space, nested, nested_pools["raw" if name == "nested_raw" else "J"], top_train,
                                  RANKINGS[name])
     (out / "train.json").write_text(json.dumps({name: [_entry(e) for e in entries] for name, entries in train.items()},
                                                indent=1))

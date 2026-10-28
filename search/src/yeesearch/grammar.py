@@ -20,16 +20,17 @@ the constructors accept, nearly always (build() checks). The types:
 
 Undecided() is left out: a method must try to elect someone everywhere. The score ballots
 are a small fixed set (SCORE_BALLOTS), so that the shares of the voters cached for all
-methods stay few (needs())."""
+methods stay few (needs()). D20 (yeelab.build.methods.d20) is a method of its own, a
+leaf: weak alone, it may tell where others are right inside a Conditional."""
 
 import random
 from dataclasses import dataclass, field, fields
 
-from yeelab.build import (AntiPlurality, BordaCount, Conditional, DescendingCoalitions, Eliminate, Highest, Lead,
+from yeelab.build import (D21, AntiPlurality, BordaCount, Conditional, DescendingCoalitions, Eliminate, Highest, Lead,
                           Margins, Pairwise, Plurality, Score, ScoreComparisons, Smith, StrongestPaths, Tally, Top,
                           Unbeaten, Union, Weakest, Winner)
 from yeelab.build.blocks import Block, CombinedCondition, Threshold, WinnerComparison
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Ballots, Graded, ScoredPairwise
+from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Ballots, Graded, Scored, ScoredPairwise
 
 SCORE_POWER = 1.5  # as yeelab.build.methods.SCORE_POWER
 SCORE_LEVELS = (2, 6)  # approval and the 0 to 5 ballot of the web UI
@@ -38,8 +39,9 @@ TIE_WEIGHTS = (0.0, 1.0)  # of ScoreComparisons: the STAR runoff, and ranked on 
 THRESHOLDS = (0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.55, 0.6, 0.7)
 FINALISTS = (2, 3)  # of the n highest totals
 MAJORITIES = (0.5, 0.55, 0.6)  # of the Smith set
-MAX_DEPTH = 9
-MAX_NODES = 40
+D20 = Highest(Tally(D21(max_positive=2, max_negative=0, ordinal=True)))  # two votes for the first two
+MAX_DEPTH = 12  # 9 and 40 before 2026-10-28: room for Conditionals in Conditionals
+MAX_NODES = 60
 
 
 @dataclass(frozen=True)
@@ -94,6 +96,7 @@ RULES = {rule.name: rule for rule in [
     _rule("runoff", WINNERS, "diffs among", (), lambda p, c: Unbeaten(c[0], among=c[1])),
     _rule("king", WINNERS, "diffs method totals", (), lambda p, c: Unbeaten(c[0], against=c[1], order=c[2])),
     _rule("dac", WINNERS, "", (), lambda p, c: DescendingCoalitions()),
+    _rule("d20", WINNERS, "", (), lambda p, c: D20),
     _rule("conditional", WINNERS, "if method method", (), lambda p, c: Conditional(c[0], c[1], c[2])),
     _rule("finalists", "among", "totals", (FINALISTS,), lambda p, c: Highest(c[0], n=p[0])),
     _rule("finalists_among", "among", "totals among", (FINALISTS,), lambda p, c: Highest(c[0], n=p[0], among=c[1])),
@@ -167,6 +170,24 @@ def size(block) -> int:
                    if isinstance(value := getattr(block, item.name), Block))
 
 
+def distinct_size(block) -> int:
+    """The number of distinct blocks in a block: one that recurs, a method in a condition
+    and in a branch or a ballot read twice, counted once, as yeelab.build.methods writes
+    it once by name. The size J charges for (evaluate.objective); at most size()."""
+    seen = set()
+
+    def walk(part):
+        key = repr(part)
+        if key not in seen:
+            seen.add(key)
+            for item in fields(part):
+                if isinstance(value := getattr(part, item.name), Block):
+                    walk(value)
+
+    walk(block)
+    return len(seen)
+
+
 def check(node: Node, slot: str = "method") -> bool:
     """Whether the tree is typed right in a slot of type `slot`."""
     rule = RULES.get(node.rule)
@@ -179,7 +200,7 @@ def check(node: Node, slot: str = "method") -> bool:
 def needs() -> frozenset:
     """Every share of the voters a method of the grammar can read, sincere or buried:
     the voters cached for every configuration (yeesearch.evaluate)."""
-    shares = {FIRST, PAIRWISE, PROFILE}
+    shares = {FIRST, PAIRWISE, PROFILE} | D20.needs | {Ballots(share) for share in D20.needs if isinstance(share, Scored)}
     for ballot in SCORE_BALLOTS.values():
         shares |= {ballot.scored, Graded(ballot.scored), Ballots(ballot.scored)}
         shares |= {ScoredPairwise(ballot.scored, weight) for weight in TIE_WEIGHTS}
@@ -297,6 +318,8 @@ def _from_block(block, slot: str) -> Node:  # noqa: C901 -- one case per block
                         (_from_block(block.first, "condition"), _from_block(block.second, "condition")))
         case Winner() if slot == "if":
             return Node("elects", (), (_from_block(block, "method"),))
+        case Highest() if repr(block) == repr(D20):
+            return Node("d20")
         case Highest():
             totals = _from_block(block.totals, "totals")
             among = () if block.among is None else (_from_block(block.among, "among"),)

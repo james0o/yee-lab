@@ -20,6 +20,7 @@ from yeelab.build.blocks import (
     Undecided,
     Weakest,
     Winner,
+    WinnerComparison,
 )
 
 fptp = Highest(Tally(Plurality()))                   # first past the post
@@ -73,7 +74,7 @@ search_3 = Unbeaten(ScoreComparisons(score_ballot), among=condorcet | dac)
 # found by the exhaustive search of the methods up to 8 blocks (search/, run 2026-10-27-conditional):
 # the higher mean score of DAC's winner and the Condorcet winner of the score comparisons
 search_4 = Highest(Tally(score_ballot), among=dac | Unbeaten(ScoreComparisons(score_ballot)))
-FOUND = ("search_1", "search_2", "search_3", "search_4")
+FOUND = ("search_1", "search_2", "search_3", "search_4", "search_5", "search_6", "search_7")  # 5-7 below d20
 
 star_two_round = Unbeaten(ScoreComparisons(score_ballot), among= score | two_round)
 finalists = Conditional(
@@ -83,6 +84,40 @@ finalists = Conditional(
 )
 
 d20 = Highest(Tally(D21(max_positive=2, max_negative=0, ordinal = True)))
+
+# found by the search of two levels of Conditionals (search/, run 2026-10-28-conditional-b75:
+# 0.25 sincere + 0.75 burial by 30 %, geometric pixel medians): Nanson's winner where the
+# higher mean score of the two with the most first choices agrees with it; else the
+# Condorcet winner of the score comparisons where D20 agrees with it; else the higher
+# median score of the two best by minimax
+search_5 = Conditional(
+    # nanson == ...: written out, as == would put Highest (a kind of Eliminate) first
+    WinnerComparison(nanson, Highest(Tally(score_ballot), among=Highest(Tally(Plurality()), n=2)), equal=True),
+    when_true=nanson,
+    when_false=Conditional(
+        Unbeaten(ScoreComparisons(score_ballot)) == d20,
+        when_true=d20,
+        when_false=Highest(Tally(score_ballot, statistic="median"), among=Highest(Weakest(M), n=2)),
+    ),
+)
+# found by the night search of 2026-10-28 (search/, runs 2026-10-28-night-*: 0.25 sincere +
+# 0.75 burial by 30 %, geometric pixel medians, 0.8 around the candidates + 0.2 the whole
+# diagram). search_6, by genetic programming from search_5: Nanson's winner where the
+# higher mean score of the two with the most first choices agrees with it; else a runoff on
+# the scores of each ballot between the higher median score of the two best by mean score
+# and D20's winner
+search_6 = Conditional(
+    WinnerComparison(Highest(Tally(score_ballot), among=Highest(Tally(Plurality()), n=2)), nanson, equal=True),
+    when_true=nanson,
+    when_false=Unbeaten(ScoreComparisons(score_ballot),
+                        among=Highest(Tally(score_ballot, statistic="median"), among=Highest(Tally(score_ballot), n=2))
+                        | d20),
+)
+# search_7, the best method of the grammar up to 8 blocks alone: a runoff counting each
+# ballot's ranking where the scores tie (tie weight 1) between MJ's winner and the
+# Condorcet winner of the score comparisons
+search_7 = Unbeaten(ScoreComparisons(score_ballot, tie_weight=1.0),
+                    among=mj | Unbeaten(ScoreComparisons(score_ballot)))
 
 
 sun_two_round = Unbeaten(ScoreComparisons(score_ballot), among = finalists)
@@ -165,4 +200,7 @@ METHODS: dict[str, Winner] = {
     "search_2": search_2,
     "search_3": search_3,
     "search_4": search_4,
+    "search_5": search_5,
+    "search_6": search_6,
+    "search_7": search_7,
 }

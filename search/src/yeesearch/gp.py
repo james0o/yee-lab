@@ -43,16 +43,23 @@ REFILLS = 3  # rounds of random trees replacing the copies in a population
 STALL = 30  # generations without a better method in the cycle before the population starts again
 HALL = 50  # methods kept in the hall of fame
 RETRIES = 50  # draws of a child before taking a parent as it is
+SEEDS_EACH = 20  # best methods of each ranking of a search of Conditionals taken as seeds (--seed-from)
 console = Console()
 
 
-def seeds() -> list[Node]:
+def seeds(seed_from: Path | None = None) -> list[Node]:
     """The methods of yeelab.build.methods the grammar can build; Black's method with
-    "the Condorcet winner, where there is one" as a method that elects someone."""
+    "the Condorcet winner, where there is one" as a method that elects someone; and with
+    `seed_from`, a directory of yee-search conditional, the SEEDS_EACH best of each of its
+    rankings on the validation set."""
     condorcet = Unbeaten(Margins(Pairwise()))
     black = Conditional(condorcet, condorcet, Highest(Tally(BordaCount())))
     trees = [from_block(method) for method in [*METHODS.values(), black]]
-    return list({repr(tree): tree for tree in trees if tree is not None}.values())
+    if seed_from is not None:
+        validated = json.loads((seed_from / "validation.json").read_text())
+        trees += [from_block(parse(entry["method"])) for name, entries in validated.items() if name != "baselines"
+                  for entry in entries[:SEEDS_EACH]]
+    return list({repr(tree): tree for tree in trees if tree is not None and grammar.valid(tree)}.values())
 
 
 def source(node: Node) -> str:
@@ -128,14 +135,14 @@ def child(rng: random.Random, population: list[Individual], taken: set[str]) -> 
 
 
 def run(out: Path, hours: float, population: int = 1000, workers: int = 4, seed: int = 0, timeout: float = 60.0,
-        generations: int | None = None, until: datetime | None = None):
+        generations: int | None = None, until: datetime | None = None, seed_from: Path | None = None):
     """Evolve for `hours`, or until the time `until`, or `generations`, writing to the
     directory `out`: evals.jsonl every method scored on the training set, validation.jsonl
     the hall of fame on the validation set, generations.jsonl the progress, hall.json the
     hall of fame after every generation. A run started again in the same directory, by hand
     or after a power cut (resume.sh), starts from the best methods it has scored and does
     not score any of them again: what it has written is on the disk after every
-    generation. One run at a time works in a directory (lock)."""
+    generation. One run at a time works in a directory (lock). `seed_from`: see seeds()."""
     out.mkdir(parents=True, exist_ok=True)
     seconds = (until - datetime.now()).total_seconds() if until is not None else 3600 * hours
     if seconds <= 0:
@@ -154,7 +161,7 @@ def run(out: Path, hours: float, population: int = 1000, workers: int = 4, seed:
     progress = append_jsonl(out / "generations.jsonl")
     stopped = False
     try:
-        nodes = _resumed(archive, population) or seeds()
+        nodes = _resumed(archive, population) or seeds(seed_from)
         nodes += _random(rng, population - len(nodes))
         current = _distinct(rng, workers_, archive, _scored(workers_, archive, nodes), population)
         generation, stalled = done, 0

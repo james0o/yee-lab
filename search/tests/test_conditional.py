@@ -9,7 +9,7 @@ from yeelab.build.methods import METHODS
 from yeesearch.conditional import (COSTS, Conditions, SamePairs, Search, Space, block, combined, condition_size,
                                    distinct, simple)
 from yeesearch.evaluate import NODE_COST, SHARE, Prepared, errors, objective
-from yeesearch.grammar import build_method, size
+from yeesearch.grammar import build_method, distinct_size, size
 from yeesearch.primitives import MapStore, config_maps, enumerated, trees
 
 GRID = 8
@@ -66,7 +66,7 @@ def test_score_from_the_maps_is_the_objective(space, prepared, tree):
     direct = objective(method, errors(method, prepared))
     fast = space.score(tree)
     assert fast["J"] == pytest.approx(direct["J"], rel=1e-12)
-    assert fast["size"] == direct["size"] == size(method)
+    assert fast["size"] == direct["size"] == distinct_size(method) <= size(method)
     assert fast["sincere"] == pytest.approx(direct["sincere"]) and fast["burial"] == pytest.approx(direct["burial"])
 
 
@@ -76,25 +76,31 @@ def test_condition_sizes_count_the_blocks(space):
         assert size(block(tree)) == 1 + condition_size(tree[1], sizes) + size(block(tree[2])) + size(block(tree[3]))
 
 
+def paid(tree) -> dict:
+    """space.score's J with the cost of every block, distinct or not: the search's."""
+    return lambda score: score["J"] + NODE_COST * (size(block(tree)) - score["size"])
+
+
 def test_the_search_finds_the_best_pair_of_every_condition(space):
     """The matrix product picks for every condition the A != B of the least J, as
-    scoring every pair would, by J and without the cost of the size."""
+    scoring every pair would, by J (paying for every block) and without the cost of the size."""
     search = Search(space)
-    np.testing.assert_allclose(search.alone(), [space.score(item)["J"] for item in space.items], rtol=1e-6)
+    np.testing.assert_allclose(search.alone(), [paid(item)(space.score(item)) for item in space.items], rtol=1e-6)
     first = simple(search).unique()
     same = SamePairs(search, 40).unique()
     both = combined(search, [same[k] for k in range(min(6, len(same)))])
     for conditions in (first, same, both):
         pools, best = search.run(conditions)
         for k in range(0, len(conditions), max(1, len(conditions) // 8)):
-            scores = {(a, b): space.score(("if", conditions[k], a, b))
-                      for a, b in itertools.permutations(space.items, 2)}
-            assert best[k] == pytest.approx(min(s["J"] for s in scores.values()), abs=1e-5)
+            scores = [paid(tree)(space.score(tree)) for a, b in itertools.permutations(space.items, 2)
+                      for tree in [("if", conditions[k], a, b)]]
+            assert best[k] == pytest.approx(min(scores), abs=1e-5)
         for name, cost in COSTS.items():
             pool = pools[name]
             tree = ("if", conditions[int(pool.condition[0])], space.items[pool.a[0]], space.items[pool.b[0]])
             score = space.score(tree)
-            assert pool.J[0] == pytest.approx(score["J"] - (NODE_COST - cost) * score["size"], abs=1e-5)
+            assert pool.J[0] == pytest.approx(paid(tree)(score) - NODE_COST * size(block(tree)) + cost * size(block(tree)),
+                                              abs=1e-5)
 
 
 def test_alike_methods_are_one_primitive(store):

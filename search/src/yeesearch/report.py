@@ -17,7 +17,7 @@ from scipy.stats import spearmanr
 from yeelab.build.methods import METHODS
 
 from yeesearch.configs import SETS
-from yeesearch.evaluate import NODE_COST, PIXEL_MEDIAN, SCENARIOS, SHARE, TRIM, objective
+from yeesearch.evaluate import BURIED, NODE_COST, PIXEL_MEDIAN, SCENARIOS, SCORER, SHARE, SINCERE, TRIM, objective
 from yeesearch.pool import Archive, Workers, append_jsonl, parse, read_jsonl, synced
 
 TEST_SIZE = 32  # Spearman's rho of the known methods' order against 64 is 0.999 already at 24
@@ -59,9 +59,8 @@ def run_report(run: Path | None, top: int = 20, size: int = TEST_SIZE, workers: 
     sources = list(dict.fromkeys(found + list(names)))
     configs = SETS[set_name]()
     cache_dir.mkdir(parents=True, exist_ok=True)
-    # the scores of each pixel median apart: test-32.jsonl holds those of "marginal", from before 2026-10-28
-    suffix = "" if PIXEL_MEDIAN == "marginal" else f"-{PIXEL_MEDIAN}"
-    cache = _Cache(cache_dir / f"{set_name}-{size}{suffix}.jsonl")
+    # the errors of each Scorer apart: test-32.jsonl holds those of before 2026-10-28 (marginal, around the candidates)
+    cache = _Cache(cache_dir / f"{set_name}-{size}-{SCORER}.jsonl")
     todo = {index: [source for source in sources if (config.name, source) not in cache.results]
             for index, config in enumerate(configs)}
     console.print(f"{sum(map(len, todo.values()))} of {len(sources) * len(configs)} scores to compute")
@@ -114,7 +113,7 @@ class _Cache:
 def _print(rows: list[dict], set_name: str, size: int):
     """The table of the methods by J, and the expressions of the methods found below it."""
     groups = [group for group in GROUPS if any(group in row for row in rows)]
-    table = Table(title=f"{set_name} set, grid {size}, pixel median {PIXEL_MEDIAN}: J = mean(0.4 sincere + 0.6 burial) "
+    table = Table(title=f"{set_name} set, grid {size}, pixel median {PIXEL_MEDIAN}: J = mean({SINCERE} sincere + {BURIED} burial) "
                         f"without {TRIM:.0%} of the configurations at each end + {NODE_COST} size",
                   caption="burial: at 30 % of the voters, then at 20 and 45 %; the groups: J on part of the set")
     for column in ("", "J", "sincere", "burial", *(f"{100 * s:.0f} %" for s in SHARES[1:]), *groups, "size"):
