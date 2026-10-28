@@ -170,10 +170,40 @@ def size(block) -> int:
                    if isinstance(value := getattr(block, item.name), Block))
 
 
+FREE = (Tally, Weakest, Union)  # blocks J does not charge for: the totals every ballot and pairwise comparison
+#                                 need to give a winner, and the union that lists finalists
+NEST = 2  # blocks a Conditional costs more for each Conditional it is nested in
+
+
+def complexity(block) -> int:
+    """What J charges for a method (evaluate.objective), in blocks: its distinct blocks
+    (one that recurs counted once, distinct_size) but those of FREE, and NEST more for every
+    Conditional for each Conditional around it (in a branch or a condition). So a chain of
+    Conditionals costs more than a balanced tree of as many, and one Conditional of a
+    combined condition (&, |) less than two Conditionals."""
+    seen, nesting = {}, 0
+
+    def walk(part, depth: int):
+        nonlocal nesting
+        key = repr(part)
+        if key in seen:
+            return
+        seen[key] = part
+        if isinstance(part, Conditional):
+            nesting += depth
+            depth += 1
+        for item in fields(part):
+            if isinstance(value := getattr(part, item.name), Block):
+                walk(value, depth)
+
+    walk(block, 0)
+    return sum(not isinstance(part, FREE) for part in seen.values()) + NEST * nesting
+
+
 def distinct_size(block) -> int:
     """The number of distinct blocks in a block: one that recurs, a method in a condition
     and in a branch or a ballot read twice, counted once, as yeelab.build.methods writes
-    it once by name. The size J charges for (evaluate.objective); at most size()."""
+    it once by name; at most size()."""
     seen = set()
 
     def walk(part):

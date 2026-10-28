@@ -130,7 +130,11 @@ class Measured(Winner):
 
 def winners(prepared: Prepared, method) -> np.ndarray:
     """The winners of the method (2, G, G) on a prepared configuration: sincerely and
-    buried (SCENARIO_NAMES); for a Measured, the measure."""
+    buried (SCENARIO_NAMES), remembering the subtrees (Prepared.winners); for a Measured,
+    the measure."""
+    if not isinstance(method, Measured):
+        found = prepared.winners(method, SHARE)
+        return np.array([found[name] for name in SCENARIO_NAMES])
     variants = scenarios(method, SHARE)
     return np.array([prepared.winner(variants[name]) for name in SCENARIO_NAMES])
 

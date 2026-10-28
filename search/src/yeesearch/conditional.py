@@ -53,7 +53,7 @@ from yeelab.build import Conditional
 from yeelab.build.blocks import CombinedCondition, Threshold, WinnerComparison
 
 from yeesearch.evaluate import BURIED, NODE_COST, PIXEL_MEDIAN, SINCERE, Scorer, objective, trimmed
-from yeesearch.grammar import THRESHOLDS, size
+from yeesearch.grammar import NEST, THRESHOLDS, complexity, size
 from yeesearch.pool import parse
 from yeesearch.primitives import MEASURES, MapStore, enumerated, found, known, side
 
@@ -165,7 +165,7 @@ class Space:
 
     @cached_property
     def sizes(self) -> np.ndarray:
-        return np.array([size(block(item)) for item in self.items])
+        return np.array([complexity(block(item)) for item in self.items])
 
     def map_of(self, tree) -> np.ndarray:
         """The winners (2, K, G, G) of a method tree."""
@@ -217,7 +217,7 @@ def distinct(store: MapStore, sources: list[str]) -> tuple[list[str], dict[str, 
     (sincere and buried, everywhere) only the smallest; and {source left out: the one
     kept in its place}."""
     maps, ok = store.stacked(sources)
-    sizes = [size(parse(s)) for s in sources]
+    sizes = [complexity(parse(s)) for s in sources]
     order = sorted((k for k in range(len(sources)) if ok[k]), key=lambda k: (sizes[k], len(sources[k]), sources[k]))
     kept, by_key, alias = [], {}, {}
     for k in order:
@@ -443,7 +443,7 @@ def condition_size(condition, sizes: dict) -> int:
     if kind == "elects":
         return sizes[condition[1]]
     if kind in ("above", "below"):
-        return 1 + size(MEASURES[condition[1]])
+        return 1 + complexity(MEASURES[condition[1]])
     if kind in ("same", "differ"):
         return 1 + sizes[condition[1]] + sizes[condition[2]]
     return 1 + condition_size(condition[1], sizes) + condition_size(condition[2], sizes)
@@ -519,7 +519,7 @@ class Nested:
                 a2 = np.where(alike & (other2 < other3), o2[:, 1], o2[:, 0])
                 b = np.where(alike & (other2 >= other3), o3[:, 1], o3[:, 0])
                 tail = np.where(alike, np.minimum(other2, other3), v2[:, 0] + v3[:, 0])
-                J = (search.constant + cost * (2 + self.conditions.sizes[i] + self.conditions.sizes[j])
+                J = (search.constant + cost * (2 + NEST + self.conditions.sizes[i] + self.conditions.sizes[j])
                      + first_best[name][i] + tail)
                 if name == "J":
                     best = min(best, float(J.min()))

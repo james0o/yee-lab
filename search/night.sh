@@ -3,8 +3,8 @@
 #
 #   0 22 * * * /home/james/Desktop/dev/yee-lab/search/night.sh 06:00
 #
-# and a second argument the worker processes (4 by default: each GP worker holds about 2.3
-# GB of voters, so 4 take 9-10 GB; 3 leave room for a browser).
+# and a second argument the worker processes (4 by default: each GP worker holds about 2.5
+# GB of voters and remembered subtrees, so 4 take about 10 GB; 3 leave room for a browser).
 # First every Conditional of the library, one and two levels deep (yee-search conditional,
 # about an hour and a half), then genetic programming from their best until the time given (06:00 by
 # default: the report after it takes an hour), then the report of the GP run on the test

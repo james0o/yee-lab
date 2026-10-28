@@ -10,7 +10,7 @@ import math
 import multiprocessing
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 
 from pebble import ProcessPool, ProcessExpired
@@ -20,7 +20,7 @@ import yeelab.threads
 from yeelab.build.blocks import CombinedCondition, Threshold, WinnerComparison
 
 from yeesearch.configs import SETS
-from yeesearch.evaluate import SHARE, Prepared, errors, objective, scenarios, warm
+from yeesearch.evaluate import SHARE, Prepared, errors, objective, warm
 
 NAMESPACE = {name: getattr(yeelab.build, name) for name in yeelab.build.__all__}
 NAMESPACE |= {"CombinedCondition": CombinedCondition, "Threshold": Threshold, "WinnerComparison": WinnerComparison}
@@ -36,12 +36,22 @@ def parse(source: str):
     return eval(source, dict(NAMESPACE))  # noqa: S307 -- our own reprs
 
 
+class _Inline:
+    """An executor that runs in the calling thread: a worker is one thread, and handing each
+    chunk of a kernel to a thread of its own costs more than the kernel on the small grids
+    of the search."""
+
+    @staticmethod
+    def map(fn, *iterables):
+        return map(fn, *iterables)
+
+
 def _start_worker(prepared: tuple[tuple[str, int], ...] = ()):
     """One thread per worker for yeelab's kernels, the workers being the parallelism, and
     the configurations of the sets on their grids `prepared` ready before the first method:
     preparing the training set takes tens of seconds, which must not count against the
     time limit of a method (a worker killed for it would prepare again, and run over again)."""
-    yeelab.threads.pool = ThreadPoolExecutor(max_workers=1)
+    yeelab.threads.pool = _Inline()
     for set_name, size in prepared:
         warm(prepare(set_name, size))
 
@@ -73,10 +83,9 @@ def score_config(set_name: str, index: int, size: int, sources: list[str], share
     for source in sources:
         try:
             method = parse(source)
-            sincere = prepared.scorer.relative(prepared.winner(method))
-            out[source] = {str(share): {"sincere": sincere} | {
-                name: prepared.scorer.relative(prepared.winner(variant))
-                for name, variant in scenarios(method, share).items() if name != "sincere"} for share in shares}
+            out[source] = {str(share): {name: prepared.scorer.relative(winner)
+                                        for name, winner in prepared.winners(method, share).items()}
+                           for share in shares}
         except Exception:  # noqa: BLE001 -- a baseline that cannot run here scores nothing
             out[source] = None
     return out

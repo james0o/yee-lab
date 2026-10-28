@@ -16,6 +16,9 @@ uv run yee-search conditional --out runs/cond         # every Conditional(c, A, 
 ./night.sh 06:00                                      # a night: the Conditionals, then gp from their best, then the report
 ```
 
+What is scored, on which configurations and how the searches work: `docs/search.pdf`
+(`typst compile docs/search.typ`, its data from `uv run python docs/data.py <maps>`).
+
 A run directory holds `evals.jsonl` (every method scored on the training set),
 `validation.jsonl`, `generations.jsonl`, `hall.json` and the report.
 

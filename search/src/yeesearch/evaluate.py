@@ -3,8 +3,9 @@ sincerely and where 30 % of the voters bury, over a set of configurations; lower
 
     J = trimmed mean over configurations k of (SINCERE e_k(m) + BURIED b_k(m)) + NODE_COST size(m)
 
-size(m) the number of distinct blocks of m (grammar.distinct_size): a method used twice,
-in a condition and in a branch, is paid for once.
+size(m) the complexity of m (grammar.complexity): its distinct blocks, a method used
+twice (in a condition and in a branch) paid for once, but not the totals and unions every
+method needs, and more for Conditionals nested in Conditionals.
 
 e_k is the error of the method over the error of a random winner, REGION of it that on
 the focus region of the Yee diagram of k (around the candidates) and WHOLE of it that on
@@ -17,17 +18,22 @@ the TRIM of the configurations the method does best on and the TRIM it does wors
 that a few configurations do not decide it. A method that fails or takes too long scores
 inf (yeesearch.pool)."""
 
-from dataclasses import dataclass, replace
+from collections import OrderedDict
+from copy import copy
+from dataclasses import dataclass, field, fields, replace
+from functools import cached_property
 
 import numpy as np
 
-from yeelab.build import Burial, Highest, ScoreComparisons, Tally, Unbeaten
+from yeelab.build import Burial, Highest, ScoreComparisons, Tally, Unbeaten, Winner
+from yeelab.build.blocks import Block
+from yeelab.build.strategic import POLL, burying
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Voters
 from yeelab.margin import regions
 from yeelab.margin.metrics import FOCUS_ROUND, _area_weights, focus_distance
 
 from yeesearch.configs import Config
-from yeesearch.grammar import D20, SCORE_BALLOTS, TIE_WEIGHTS, distinct_size, needs as grammar_needs
+from yeesearch.grammar import D20, SCORE_BALLOTS, TIE_WEIGHTS, complexity, needs as grammar_needs
 
 NEEDS = grammar_needs()  # the shares cached for every configuration
 
@@ -39,6 +45,7 @@ TRIM = 0.05  # of the configurations left out of J's mean at each end, for each 
 PIXEL_MEDIAN = "geometric"  # where a point of the voter grid is drawn: as the web UI starts (Scorer)
 REGION, WHOLE = 0.8, 0.2  # of the error around the candidates and on the whole diagram (2026-10-28; 1 and 0 before)
 SCORER = f"{PIXEL_MEDIAN}-whole{WHOLE:g}"  # what the errors depend on: caches of errors are kept apart by it
+MEMO_BYTES = 256 * 2**20  # of the results of subtrees a process remembers (Memo)
 
 
 def scenarios(method, share: float = SHARE) -> dict:
@@ -143,6 +150,77 @@ class MemoGrid:
         return getattr(self.grid, name)
 
 
+class Memo:
+    """What the Winner subtrees of methods select and elect, by their repr and the voters
+    they ran on (`context`: a configuration, sincerely or buried at one pair of frontrunners),
+    so that a method shares the work of the subtrees it has in common with those before it:
+    a genetic program's children keep most of their parents, an enumeration most of the
+    smaller methods. The least recently used go once they take more than `limit` bytes.
+    A child block runs on the voters its parent got (yeelab.build.blocks), so the context
+    of the root names those of every subtree."""
+
+    def __init__(self, limit: int = MEMO_BYTES):
+        self.entries: OrderedDict = OrderedDict()
+        self.limit, self.bytes, self.context = limit, 0, None
+        self.hits = self.misses = 0
+
+    def get(self, key, compute) -> tuple:
+        full = (self.context, key)
+        value = self.entries.get(full)
+        if value is None:
+            self.misses += 1
+            value = tuple(np.array(part) for part in compute())
+            self.entries[full] = value
+            self.bytes += sum(part.nbytes for part in value)
+            while self.bytes > self.limit and self.entries:
+                self.bytes -= sum(part.nbytes for part in self.entries.popitem(last=False)[1])
+        else:
+            self.hits += 1
+            self.entries.move_to_end(full)
+        return tuple(part.copy() for part in value)  # the caller may change it in place
+
+
+MEMO = Memo()  # of this process
+
+
+@dataclass(frozen=True, eq=False)
+class _Remembered(Winner):
+    """A Winner whose select() and evaluate() go through a Memo."""
+
+    inner: Winner
+    key: str = field(repr=False)
+    memo: Memo = field(repr=False)
+
+    @property
+    def seats(self):
+        return self.inner.seats
+
+    @property
+    def needs(self):
+        return self.inner.needs
+
+    def select(self, voters):
+        return self.memo.get(("select", self.key), lambda: self.inner.select(voters))
+
+    def evaluate(self, voters):
+        return self.memo.get(("evaluate", self.key), lambda: self.inner.evaluate(voters))
+
+    def __repr__(self):
+        return repr(self.inner)
+
+
+def remembering(block, memo: Memo):
+    """The block with every Winner in it (and itself, if one) going through `memo`, by its repr."""
+    key = repr(block)
+    changes = {item.name: remembering(value, memo) for item in fields(block)
+               if isinstance(value := getattr(block, item.name), Block)}
+    if changes:  # a copy with the fields set, as the constructors of some (Highest) do not take them all
+        block = copy(block)
+        for name, value in changes.items():
+            object.__setattr__(block, name, value)
+    return _Remembered(block, key, memo) if isinstance(block, Winner) else block
+
+
 @dataclass
 class Prepared:
     """A configuration on a grid: the cached voters, with every share of the grammar, and
@@ -166,11 +244,41 @@ class Prepared:
             return method.evaluate(restricted(self.voters, method.needs))[0]
         return regions.winners(method, self.config.array, self.config.model, self.size)[1]
 
+    @cached_property
+    def pairs(self) -> list[tuple[int, int, int, np.ndarray]]:
+        """(key, a, b, points) of every pair of frontrunners a, b of Burial's default poll
+        and the points it names them at: the same for every method."""
+        chosen, _ = POLL.select(restricted(self.voters, POLL.needs))
+        n = chosen.shape[-1]
+        pairs = chosen @ (1 << np.arange(n))
+        return [(int(pair), *np.flatnonzero((int(pair) >> np.arange(n)) & 1), pairs == pair)
+                for pair in np.unique(pairs)]
+
+    def winners(self, method, share: float = SHARE, memo: Memo = MEMO) -> dict[str, np.ndarray]:
+        """{scenario: winner} of SCENARIOS, as winner() of each of scenarios(method, share)
+        but remembering the subtrees (Memo): sincerely, and burying at every pair of
+        frontrunners as Burial does."""
+        variant = Burial(method, share)
+        if not variant.needs <= NEEDS:
+            return {name: self.winner(each) for name, each in scenarios(method, share).items()}
+        remembered = remembering(method, memo)
+        memo.context = (self.config.name, self.size, "sincere")
+        sincere = remembered.evaluate(restricted(self.voters, method.needs))[0]
+        voters = restricted(self.voters, variant.needs)
+        buried = np.empty_like(sincere)
+        for pair, a, b, at in self.pairs:
+            memo.context = (self.config.name, self.size, share, pair)
+            buried[at] = remembered.evaluate(burying(voters.at(at), share, a, b))[0]
+        return {"sincere": sincere, "poll": buried}
+
 
 def errors(method, prepared: list[Prepared], share: float = SHARE) -> dict[str, list[float]]:
     """{scenario: [relative error on each configuration]}."""
-    return {name: [p.scorer.relative(p.winner(variant)) for p in prepared]
-            for name, variant in scenarios(method, share).items()}
+    out = {name: [] for name in SCENARIOS}
+    for p in prepared:
+        for name, winner in p.winners(method, share).items():
+            out[name].append(p.scorer.relative(winner))
+    return out
 
 
 def warm(prepared: list[Prepared]):
@@ -198,6 +306,6 @@ def objective(method, scenario_errors: dict[str, list[float]]) -> dict:
     sincere = np.array(scenario_errors["sincere"])
     burial = np.array(scenario_errors["poll"])
     kept = trimmed(SINCERE * sincere + BURIED * burial)
-    nodes = distinct_size(method)
+    nodes = complexity(method)
     return {"J": float((SINCERE * sincere[kept] + BURIED * burial[kept]).mean() + NODE_COST * nodes),
             "sincere": float(sincere[kept].mean()), "burial": float(burial[kept].mean()), "size": nodes}
