@@ -12,7 +12,6 @@ from yeelab.build.blocks import (
     Margins,
     Pairwise,
     Plurality,
-    Smith,
     Score,
     ScoreComparisons,
     StrongestPaths,
@@ -63,14 +62,25 @@ d21 = Highest(Tally(D21(max_positive=2, max_negative=1, negative_after=2, power=
 
 #-----------------------------------experimental methods, do not tests-----------------------------------
 TESTED = frozenset(globals())  # the names above the wall: the tests check only the methods among them
+
+# found by the search (search/, run 2026-10-26: 0.4 sincere + 0.6 burial by 30 %), best
+# three on its test set; the web UI lists them in a row of their own (FOUND). Each is a
+# runoff on the scores of each ballot, as STAR's, between the winners of two methods
+search_1 = Unbeaten(ScoreComparisons(score_ballot), among=mj | condorcet)
+search_2 = Unbeaten(ScoreComparisons(score_ballot),
+                    among=nanson | Eliminate(Tally(score_ballot, statistic="median"), how="min"))
+search_3 = Unbeaten(ScoreComparisons(score_ballot), among=condorcet | dac)
+# found by the exhaustive search of the methods up to 8 blocks (search/, run 2026-10-27-conditional):
+# the higher mean score of DAC's winner and the Condorcet winner of the score comparisons
+search_4 = Highest(Tally(score_ballot), among=dac | Unbeaten(ScoreComparisons(score_ballot)))
+FOUND = ("search_1", "search_2", "search_3", "search_4")
+
 star_two_round = Unbeaten(ScoreComparisons(score_ballot), among= score | two_round)
 finalists = Conditional(
     (fptp == two_round) & (two_round != condorcet),
     when_true=score | condorcet,
     when_false=score | two_round,
 )
-
-search_m = Highest(Tally(AntiPlurality()), among=Smith(ScoreComparisons(Score(6, power=1.5))))
 
 d20 = Highest(Tally(D21(max_positive=2, max_negative=0, ordinal = True)))
 
@@ -151,5 +161,8 @@ METHODS: dict[str, Winner] = {
     "new": new,
     "adhoc": adhoc,
     "con_fptp": con_fptp,
-    "search": search_m,
+    "search_1": search_1,
+    "search_2": search_2,
+    "search_3": search_3,
+    "search_4": search_4,
 }

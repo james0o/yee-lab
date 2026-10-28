@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
 from yeelab.build import (D21, Bullet, Burial, Compromise, Score, ScoreComparisons, Winner)
-from yeelab.build.methods import SCORE_POWER
+from yeelab.build.methods import FOUND, SCORE_POWER
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
 from yeelab.margin.metrics import borders, focus_outline, voronoi_agreement
@@ -442,7 +442,8 @@ def _method_option(name: str, method: Winner) -> dict[str, str]:
 @app.get("/api/config")
 def config():
     return {
-        "methods": [_method_option(name, method) for name, method in MARGINS.items()],
+        "methods": [_method_option(name, method) for name, method in MARGINS.items() if name not in FOUND],
+        "found": [_method_option(name, MARGINS[name]) for name in FOUND],  # by the search, a row of their own
         "ideals": [{"name": name, **METHOD_INFO[name]} for name in IDEALS],
         "distributions": [{"name": name, **info} for name, info in DISTRIBUTION_INFO.items()],
         "spread": SPREAD_INFO,

@@ -18,6 +18,7 @@ from yeelab.build import (D21, METHODS, AntiPlurality, Bullet, Burial, Condition
 from yeelab.margin.metrics import (FOCUS_REACH, FOCUS_ROUND, OUTLINE_STEPS, borders, convex_hull, focus_hull,
                                    focus_outline, hull_distance, voronoi_agreement)
 from yeelab.margin.regions import MARGINS, grid, nearest, regions, voronoi_borders, winners
+from yeelab.build.methods import FOUND
 from yeelab.margin.shares import Model, first_choice_shares, ranking_shares, score_comparison_shares, unscored_shares
 from yeelab.voting import CYCLE, irv_rounds
 from yeelab.web.app import DIAGRAMS, MAX_TILT, TILT_STEP, _score_ballot_settings, _score_ballots, app
@@ -286,9 +287,10 @@ def test_config_lists_every_method():
     """The UI makes a button of each; a built method's tooltip ends with its expression.
     Score and STAR use the score settings."""
     config = TestClient(app).get("/api/config").json()
-    methods = config["methods"]
-    assert [m["name"] for m in methods] == list(MARGINS)
-    assert [m["name"] for m in methods + config["ideals"]] == [*MARGINS, "voronoi"]
+    methods = config["methods"] + config["found"]
+    assert [m["name"] for m in config["found"]] == list(FOUND)
+    assert [m["name"] for m in config["methods"]] == [name for name in MARGINS if name not in FOUND]
+    assert {m["name"] for m in methods + config["ideals"]} == {*MARGINS, "voronoi"}
     assert config["ideals"][0]["label"] == "Voronoi"
     assert all({"name", "label", "description"} <= method.keys() for method in methods)
     assert all(method["description"].endswith(repr(MARGINS[method["name"]])) for method in methods)

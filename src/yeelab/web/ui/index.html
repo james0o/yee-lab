@@ -78,6 +78,7 @@
       <div class="choices" id="spreadPowerRow"><span>Beta spread p:</span><input type="range" id="spreadPower"><output id="spreadPowerValue"></output></div>
       <div class="choices" id="pixelMedians"><span>Point in diagram is:</span></div>
       <div class="choices" id="methods"><span>Voting method:</span></div>
+      <div class="choices" id="found"><span>Found by search:</span></div>
       <div class="choices"><span>Score categories:</span><input type="range" id="levels" min="2" step="1"><output id="levelsValue"></output></div>
       <div class="choices"><span>Score power p:</span><input type="range" id="power"><output id="powerValue"></output></div>
       <div class="choices"><span>Runoff tie weight:</span><input type="range" id="tieWeight"><output id="tieWeightValue"></output></div>
@@ -112,6 +113,7 @@
     let shown = null, previous = null;
     const methods = document.getElementById("methods");
     const ideals = document.getElementById("ideals");
+    const found = document.getElementById("found");
     const distributions = document.getElementById("distributions");
     const pixelMedians = document.getElementById("pixelMedians");
     const deviationSlider = document.getElementById("deviation");
@@ -1143,9 +1145,10 @@
       confineAll();
       drawVoters();
     });
-    choices(methods, config.methods, pickMethod, [methods, ideals]);
-    choices(ideals, config.ideals, pickMethod, [methods, ideals]);
-    labels = Object.fromEntries([...config.methods, ...config.ideals].map(({ name, label }) => [name, label]));
+    choices(methods, config.methods, pickMethod, [methods, found, ideals]);
+    choices(found, config.found, pickMethod, [methods, found, ideals]);
+    choices(ideals, config.ideals, pickMethod, [methods, found, ideals]);
+    labels = Object.fromEntries([...config.methods, ...config.found, ...config.ideals].map(({ name, label }) => [name, label]));
     distribution = config.distributions[0].name;
     distributions.querySelector("button").classList.add("active");
     pixelMedian = config.pixel_median;
