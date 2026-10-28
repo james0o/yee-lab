@@ -107,22 +107,48 @@ each method, the 5 % of the configurations it does best on and the 5 % it does w
 decide the order; the sincere and the burial error reported with $J$ are the means over the
 same kept configurations. A method that fails or takes too long has $J = infinity$.
 
-== Complexity
+== Complexity <sec-complexity>
 
 The complexity counts the blocks of a method, so that of two methods that err alike the
-simpler one wins:
+simpler one wins. Let $T(m)$ be the tree of blocks of $m$ and $D(m)$ the set of its
+_distinct_ subtrees: two blocks are the same if they have the same type, parameters and
+children (the same `repr`), so that a block that recurs is one element of $D(m)$. Let
+$F$ be the free types `Tally`, `Weakest` and `Union`, and $C(m) subset D(m)$ the distinct
+Conditionals. The depth $delta(c)$ of a Conditional $c$ is the number of Conditionals
+that enclose it in $T(m)$, in a branch or in a condition, found where the tree is first
+entered. Then
+$ "complexity"(m) = underbrace(|{b in D(m) : "type"(b) in.not F}|, "blocks paid for") + 2 sum_(c in C(m)) delta(c). $ <eq-complexity>
+The cost in $J$ is $0.0001$ times this.
 
-- every block counts once however often it recurs: a method in a condition and in a branch,
-  or the score ballot that four blocks read, is paid for once, as `methods.py` writes it once
-  by name;
-- `Tally`, `Weakest` and the union `|` are free: every ballot needs a tally to give a
-  winner, every pairwise comparison a weakest or an unbeaten, and the union only lists two
-  finalists;
-- every Conditional costs 2 blocks more for each Conditional it is nested in (in a branch
-  or in a condition): a chain of Conditionals costs more than a balanced tree of as many,
-  and one Conditional of a combined condition (`&`, `|`) less than two Conditionals.
+- *Distinct blocks.* A method in a condition and in a branch, or the score ballot that four
+  blocks read, is paid for once, as `methods.py` writes it once by name.
+- *Free types.* Every ballot needs a `Tally` to give a winner, every pairwise comparison a
+  `Weakest` or an `Unbeaten`, and a `Union` (`A | B`) only lists two finalists, so none is
+  paid for: only what is inside them. A union costs the blocks of $A$ and $B$ and nothing
+  for the `|`.
+- *Nesting.* A Conditional pays 2 more for each Conditional around it. A chain
+  $"Conditional"(c_1, A, "Conditional"(c_2, B, "Conditional"(c_3, C, D)))$ has depths
+  $0, 1, 2$ and pays $2(0 + 1 + 2) = 6$ beyond its blocks; a balanced one, a root with a
+  Conditional in each branch, has depths $0, 1, 1$ and pays $2(0 + 1 + 1) = 4$. One
+  Conditional of a combined condition, $"Conditional"((x == y) | (y != z), A, B)$, has
+  depth 0 and pays nothing beyond its blocks: a `CombinedCondition` and two
+  `WinnerComparison`s are blocks, but no Conditional is nested.
+- Parameters (`n=2`, `how="mean"`, a threshold, a tie weight) are free.
 
-Parameters (`n=2`, `how="mean"`, a threshold, a tie weight) are free.
+*`among=`.* It is a field of `Highest`, `Eliminate` and `Unbeaten` like any other, so its
+value is a subtree counted by the same rule. `Highest(Tally(Plurality()), n=2)` costs two
+blocks (`Highest` and `Plurality`, the `Tally` being free); `among=A | B` costs the blocks
+of $A$ and $B$ together, those they share counted once.
+
+*Examples.* STAR, `Unbeaten(ScoreComparisons(Score(6)), among=Highest(Tally(Score(6)), n=2))`,
+has the distinct blocks `Unbeaten`, `ScoreComparisons`, `Score(6)` (read twice, paid once),
+`Highest` and `Tally`; without the free `Tally`, $"complexity" = 4$. `search_6` has 20
+distinct blocks: 5 different `Highest`, 5 different `Tally`, and one each of `Conditional`,
+`WinnerComparison`, `Unbeaten`, `ScoreComparisons`, `Union`, `Eliminate`, `BordaCount`,
+`Plurality`, `Score(6)` and `D21`. Without the 5 `Tally` and the `Union` it is
+$20 - 6 = 14$; its only Conditional is the root, $delta = 0$, so
+$"complexity" = 14$ and the cost $0.0014$. `search_5` has a Conditional in the else-branch
+of its root, $delta = 1$, which adds $2$ beyond its blocks, giving 20.
 
 #figure(table(columns: 4, align: (left, right, right, right),
   [method], [blocks], [distinct blocks], [complexity],
