@@ -33,6 +33,13 @@ from yeelab.ranking_cells import SPREAD, beta_params
 MAX_CANDIDATES = 8
 # The candidates the page starts with.
 CANDIDATES = [[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]]
+# The candidates the page offers to start from again, the first the one it starts with; 2 and 3
+# are the two the search weighs most (search/src/yeesearch/configs.py, focus_configs).
+SETUPS = {
+    "Setup 1": CANDIDATES,
+    "Setup 2": [[0.271, 0.713], [0.41, 0.555], [0.494, 0.476], [0.632, 0.344]],
+    "Setup 3": [[0.233, 0.523], [0.639, 0.688], [0.494, 0.476], [0.57, 0.275]],
+}
 DEVIATION = 0.2  # default of the deviation slider
 SPREAD_POWER = 2.0
 # The powers p of the Beta spread rule that the UI offers: only the default, rms (math.typ,
@@ -450,6 +457,7 @@ def config():
         "pixel_medians": [{"name": name, **info} for name, info in PIXEL_MEDIAN_INFO.items()],
         "pixel_median": UI_PIXEL_MEDIAN,
         "candidates": CANDIDATES,
+        "setups": [{"name": name, "candidates": candidates} for name, candidates in SETUPS.items()],
         "max_candidates": MAX_CANDIDATES,
         "pixels": PIXELS,
         "drag_grid": DRAG_GRID,

@@ -65,6 +65,7 @@
       </details>
     </div>
     <div class="controls">
+      <div class="choices" id="setups"><span>Candidates:</span></div>
       <div class="choices" id="distributions"><span>Voters:</span></div>
       <div class="choices"><span>Show voters:</span>
         <label><input type="checkbox" id="showMarginal">marginal distribution of x</label>
@@ -114,6 +115,9 @@
     const methods = document.getElementById("methods");
     const ideals = document.getElementById("ideals");
     const found = document.getElementById("found");
+    const setups = document.getElementById("setups");
+    // A setup's button stays lit only while its candidates are as it put them.
+    const leaveSetup = () => { for (const b of setups.querySelectorAll("button")) b.classList.remove("active"); };
     const distributions = document.getElementById("distributions");
     const pixelMedians = document.getElementById("pixelMedians");
     const deviationSlider = document.getElementById("deviation");
@@ -896,6 +900,7 @@
           return;
         }
         candidates.push(confine(point));
+        leaveSetup();
         colorCandidates();
         dragged = candidates.length - 1;
       }
@@ -908,6 +913,7 @@
       hovered = toUnit(event);
       if (dragged !== -1) {
         candidates[dragged] = confine(hovered);
+        leaveSetup();
         compute(dragGrid);  // follow the drag on a coarser grid; the drop asks for the fine one
       }
       showDensity = dragged === -1 && showJoint.checked;  // not while dragging, so the diagram stays visible
@@ -932,6 +938,7 @@
       const i = candidateAt(toUnit(event));
       if (i === -1) return;
       candidates.splice(i, 1);
+      leaveSetup();
       colorOf.splice(i, 1);
       colorCandidates();
       regions = null;  // their winners are indices, which just shifted
@@ -996,6 +1003,16 @@
     const config = await (await fetch("/api/config")).json();
     candidates = config.candidates;
     colorCandidates();
+    // Another setup puts other candidates and changes nothing else: method, voters, strategies.
+    choices(setups, config.setups.map(({ name }) => ({ name })), name => {
+      candidates = config.setups.find(setup => setup.name === name).candidates.map(c => confine([...c]));
+      colorOf = [];
+      colorCandidates();
+      regions = null;  // their winners are indices of the candidates before
+      boundaryPath = null;
+      draw();
+    });
+    setups.querySelector("button").classList.add("active");
     maxCandidates = config.max_candidates;
     pixels = config.pixels;
     dragGrid = config.drag_grid;

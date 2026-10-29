@@ -74,7 +74,7 @@ search_3 = Unbeaten(ScoreComparisons(score_ballot), among=condorcet | dac)
 # found by the exhaustive search of the methods up to 8 blocks (search/, run 2026-10-27-conditional):
 # the higher mean score of DAC's winner and the Condorcet winner of the score comparisons
 search_4 = Highest(Tally(score_ballot), among=dac | Unbeaten(ScoreComparisons(score_ballot)))
-FOUND = ("search_1", "search_2", "search_3", "search_4", "search_5", "search_6", "search_7")  # 5-7 below d20
+FOUND = ("search_1", "search_2", "search_3", "search_4", "search_5", "search_6", "search_7", "search_8")  # 5-8 below d20
 
 star_two_round = Unbeaten(ScoreComparisons(score_ballot), among= score | two_round)
 finalists = Conditional(
@@ -118,6 +118,22 @@ search_6 = Conditional(
 # Condorcet winner of the score comparisons
 search_7 = Unbeaten(ScoreComparisons(score_ballot, tie_weight=1.0),
                     among=mj | Unbeaten(ScoreComparisons(score_ballot)))
+# found by the search of 2026-10-29 (search/, run 2026-10-29-gp: as above, and the web UI's
+# Setup 2 and Setup 3 weighing three times, a method burying worse than search_6 there
+# paying more): of the two with the most first choices, the one fewest voters rank last,
+# where the same is chosen among the three best by their worst score comparison; else a
+# runoff on the scores of each ballot between the higher median score of the two best by
+# mean score and the IRV winner of last places. Six times better than search_6 at burial in
+# Setup 2, as good in Setup 3, worse on the test set (J 0.0119 against 0.0104)
+search_8 = Conditional(
+    WinnerComparison(Highest(Tally(AntiPlurality()), among=Highest(Tally(Plurality()), n=2)),
+                     Highest(Tally(AntiPlurality()), among=Highest(Weakest(ScoreComparisons(score_ballot)), n=3)),
+                     equal=True),
+    when_true=Highest(Tally(AntiPlurality()), among=Highest(Tally(Plurality()), n=2)),
+    when_false=Unbeaten(ScoreComparisons(score_ballot),
+                        among=Highest(Tally(score_ballot, statistic="median"), among=Highest(Tally(score_ballot), n=2))
+                        | Eliminate(Tally(AntiPlurality()), how="min")),
+)
 
 
 sun_two_round = Unbeaten(ScoreComparisons(score_ballot), among = finalists)
@@ -203,4 +219,5 @@ METHODS: dict[str, Winner] = {
     "search_5": search_5,
     "search_6": search_6,
     "search_7": search_7,
+    "search_8": search_8,
 }
