@@ -59,7 +59,7 @@ def _start_worker(prepared: tuple[tuple[str, int], ...] = ()):
 def prepare(set_name: str, size: int) -> list[Prepared]:
     key = (set_name, size)
     if key not in _prepared:
-        _prepared[key] = [Prepared.of(config, size) for config in SETS[set_name]()]
+        _prepared[key] = [Prepared.of(config, config.grid or size) for config in SETS[set_name]()]
     return _prepared[key]
 
 
@@ -69,7 +69,8 @@ def score_method(source: str, set_name: str, size: int) -> dict:
     method = parse(source)
     scenario_errors = errors(method, prepare(set_name, size))
     result = objective(method, scenario_errors)
-    rounded = {name: [round(value, 6) for value in values] for name, values in scenario_errors.items()}
+    rounded = {name: [value if value is None else round(value, 6) for value in values]
+               for name, values in scenario_errors.items()}
     return result | {"errors": rounded, "seconds": round(time.perf_counter() - start, 3)}
 
 
@@ -78,7 +79,8 @@ def score_config(set_name: str, index: int, size: int, sources: list[str], share
     (the sincere error the same at every share), None where a method fails: the many
     configurations of the test set one at a time, so that a worker never holds the voters
     of more than one."""
-    prepared = Prepared.of(SETS[set_name]()[index], size)
+    config = SETS[set_name]()[index]
+    prepared = Prepared.of(config, config.grid or size)
     out = {}
     for source in sources:
         try:

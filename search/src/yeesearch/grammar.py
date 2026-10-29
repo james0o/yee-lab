@@ -173,14 +173,22 @@ def size(block) -> int:
 FREE = (Tally, Weakest, Union)  # blocks J does not charge for: the totals every ballot and pairwise comparison
 #                                 need to give a winner, and the union that lists finalists
 NEST = 2  # blocks a Conditional costs more for each Conditional it is nested in
+AMONG = 1  # blocks every among= costs more, each time it occurs (2026-10-28): the GP copied subtrees in chains of them
+
+
+def among_count(block) -> int:
+    """The number of among= set in a block, each occurrence, a subtree that recurs as often as it does."""
+    return sum((item.name == "among") + among_count(value) for item in fields(block)
+               if isinstance(value := getattr(block, item.name), Block))
 
 
 def complexity(block) -> int:
     """What J charges for a method (evaluate.objective), in blocks: its distinct blocks
-    (one that recurs counted once, distinct_size) but those of FREE, and NEST more for every
-    Conditional for each Conditional around it (in a branch or a condition). So a chain of
-    Conditionals costs more than a balanced tree of as many, and one Conditional of a
-    combined condition (&, |) less than two Conditionals."""
+    (one that recurs counted once, distinct_size) but those of FREE, NEST more for every
+    Conditional for each Conditional around it (in a branch or a condition), and AMONG more
+    for every among= where it occurs (among_count). So a chain of Conditionals costs more
+    than a balanced tree of as many, one Conditional of a combined condition (&, |) less
+    than two Conditionals, and a subtree with an among= copied into another pays again."""
     seen, nesting = {}, 0
 
     def walk(part, depth: int):
@@ -197,7 +205,7 @@ def complexity(block) -> int:
                 walk(value, depth)
 
     walk(block, 0)
-    return sum(not isinstance(part, FREE) for part in seen.values()) + NEST * nesting
+    return sum(not isinstance(part, FREE) for part in seen.values()) + NEST * nesting + AMONG * among_count(block)
 
 
 def distinct_size(block) -> int:

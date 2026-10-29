@@ -1,11 +1,22 @@
 """The objective of the search: how far a method's winners are from the nearest candidate,
 sincerely and where 30 % of the voters bury, over a set of configurations; lower is better.
 
-    J = trimmed mean over configurations k of (SINCERE e_k(m) + BURIED b_k(m)) + NODE_COST size(m)
+    J = trimmed weighted mean over configurations k of (SINCERE e_k(m) + BURIED b_k(m)) + NODE_COST size(m)
+
+the weight of a configuration 1 but for the configurations of the web UI the search is to
+get right (configs.focus_configs), which are never trimmed either. On those a method must
+bury no worse than a rival (Config.rival), a hard rule: with
+
+    behind(m) = sum over them of max(0, b_k(m) / b_k(rival) - 1),
+
+a method behind its rivals gets RIVAL_HARD + behind(m) added to J, so that it ranks below
+every method that is not, and those behind among themselves by how far (the genetic
+programming keeps a slope to climb); the report shows only those with behind(m) = 0.
 
 size(m) the complexity of m (grammar.complexity): its distinct blocks, a method used
 twice (in a condition and in a branch) paid for once, but not the totals and unions every
-method needs, and more for Conditionals nested in Conditionals.
+method needs, more for Conditionals nested in Conditionals, and one more for every among=
+each time it occurs.
 
 e_k is the error of the method over the error of a random winner, REGION of it that on
 the focus region of the Yee diagram of k (around the candidates) and WHOLE of it that on
@@ -45,6 +56,8 @@ TRIM = 0.05  # of the configurations left out of J's mean at each end, for each 
 PIXEL_MEDIAN = "geometric"  # where a point of the voter grid is drawn: as the web UI starts (Scorer)
 REGION, WHOLE = 0.8, 0.2  # of the error around the candidates and on the whole diagram (2026-10-28; 1 and 0 before)
 SCORER = f"{PIXEL_MEDIAN}-whole{WHOLE:g}"  # what the errors depend on: caches of errors are kept apart by it
+RIVAL_HARD = 1.0  # added to J of a method burying worse than a rival anywhere: more than any J of one that does not
+RIVAL_TOLERANCE = 1e-9  # behind at most this is none: the same winners as the rival, up to rounding
 MEMO_BYTES = 256 * 2**20  # of the results of subtrees a process remembers (Memo)
 
 
@@ -254,6 +267,14 @@ class Prepared:
         return [(int(pair), *np.flatnonzero((int(pair) >> np.arange(n)) & 1), pairs == pair)
                 for pair in np.unique(pairs)]
 
+    @cached_property
+    def rival_burial(self) -> float | None:
+        """The burial error of the configuration's rival (Config.rival), None without one."""
+        if self.config.rival is None:
+            return None
+        from yeelab.build.methods import METHODS
+        return self.scorer.relative(self.winners(METHODS[self.config.rival])["poll"])
+
     def winners(self, method, share: float = SHARE, memo: Memo = MEMO) -> dict[str, np.ndarray]:
         """{scenario: winner} of SCENARIOS, as winner() of each of scenarios(method, share)
         but remembering the subtrees (Memo): sincerely, and burying at every pair of
@@ -273,11 +294,19 @@ class Prepared:
 
 
 def errors(method, prepared: list[Prepared], share: float = SHARE) -> dict[str, list[float]]:
-    """{scenario: [relative error on each configuration]}."""
+    """{scenario: [relative error on each configuration]}, "weights": [Config.weight of
+    each] where one is not 1, and "rivals": [burial error of each one's rival, None
+    without] where one has a rival (objective)."""
     out = {name: [] for name in SCENARIOS}
     for p in prepared:
         for name, winner in p.winners(method, share).items():
             out[name].append(p.scorer.relative(winner))
+    weights = [p.config.weight for p in prepared]
+    if any(weight != 1 for weight in weights):
+        out["weights"] = weights
+    rivals = [p.rival_burial for p in prepared]
+    if any(rival is not None for rival in rivals):
+        out["rivals"] = rivals
     return out
 
 
@@ -291,21 +320,34 @@ def warm(prepared: list[Prepared]):
     errors(D20, prepared)
 
 
-def trimmed(values, trim: float = TRIM) -> np.ndarray:
+def trimmed(values, trim: float = TRIM, weights=None) -> np.ndarray:
     """The indices of the values but the int(trim n) lowest and as many highest (as
-    scipy.stats.trim_mean cuts)."""
+    scipy.stats.trim_mean cuts); with `weights`, of the values of weight 1 only, those of
+    another weight always kept."""
     values = np.asarray(values)
-    cut = int(trim * len(values))
-    return np.argsort(values, kind="stable")[cut:len(values) - cut]
+    plain = np.arange(len(values)) if weights is None else np.flatnonzero(np.asarray(weights) == 1)
+    cut = int(trim * len(plain))
+    kept = plain[np.argsort(values[plain], kind="stable")[cut:len(plain) - cut]]
+    return kept if weights is None else np.sort(np.concatenate([kept, np.flatnonzero(np.asarray(weights) != 1)]))
 
 
 def objective(method, scenario_errors: dict[str, list[float]]) -> dict:
     """J and its parts from errors(): the sincere and the burial error, means over the
     configurations J keeps (trimmed: those of the TRIM lowest and highest SINCERE e_k +
-    BURIED b_k left out), so that J = SINCERE sincere + BURIED burial + NODE_COST size."""
+    BURIED b_k left out, of weight 1), each counting as its weight (Config.weight), so that
+    J = SINCERE sincere + BURIED burial + NODE_COST size, and RIVAL_HARD + behind more for
+    a method whose burial error is above a rival's (Config.rival): behind how far, 0
+    without rivals."""
     sincere = np.array(scenario_errors["sincere"])
     burial = np.array(scenario_errors["poll"])
-    kept = trimmed(SINCERE * sincere + BURIED * burial)
+    weights = scenario_errors.get("weights")
+    kept = trimmed(SINCERE * sincere + BURIED * burial, weights=weights)
+    w = np.ones(len(sincere)) if weights is None else np.asarray(weights, dtype=np.float64)
+    w = w[kept] / w[kept].sum()
     nodes = complexity(method)
-    return {"J": float((SINCERE * sincere[kept] + BURIED * burial[kept]).mean() + NODE_COST * nodes),
-            "sincere": float(sincere[kept].mean()), "burial": float(burial[kept].mean()), "size": nodes}
+    sincere_mean, burial_mean = float(w @ sincere[kept]), float(w @ burial[kept])
+    behind = sum(max(0.0, b / rival - 1) for b, rival in zip(burial, scenario_errors.get("rivals") or [])
+                 if rival is not None and rival > 0)
+    behind = float(behind) if behind > RIVAL_TOLERANCE else 0.0
+    J = SINCERE * sincere_mean + BURIED * burial_mean + NODE_COST * nodes + (RIVAL_HARD + behind if behind else 0.0)
+    return {"J": J, "sincere": sincere_mean, "burial": burial_mean, "size": nodes, "behind": behind}

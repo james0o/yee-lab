@@ -9,7 +9,7 @@ from yeelab.margin import regions
 from yeelab.margin.metrics import voronoi_agreement
 from yeelab.voting import CYCLE
 
-from yeesearch.configs import SETS, Config, random_configs
+from yeesearch.configs import SETS, Config, focus_configs, random_configs
 from yeesearch.evaluate import (BURIED, NEEDS, NODE_COST, SINCERE, Prepared, Scorer, errors, objective, restricted,
                                 scenarios)
 
@@ -73,8 +73,9 @@ def test_sets_do_not_share_configurations():
     names = {name: {(c.candidates, c.deviation) for c in make()} for name, make in SETS.items()}
     assert not names["train"] & names["validation"] and not names["train"] & names["test"]
     assert not names["validation"] & names["test"]
-    assert names["train"] <= names["wide"] and not names["wide"] & (names["validation"] | names["test"])
-    assert len(SETS["train"]()) == 18 and len(SETS["wide"]()) == 58  # those with a candidate near a wall left out
+    focus = {(c.candidates, c.deviation) for c in focus_configs()}
+    assert names["train"] - focus <= names["wide"] and not names["wide"] & (names["validation"] | names["test"] | focus)
+    assert len(SETS["train"]()) == 20 and len(SETS["wide"]()) == 58  # those with a candidate near a wall left out
 
 
 def test_random_candidates_are_apart():
@@ -82,3 +83,40 @@ def test_random_candidates_are_apart():
         gaps = np.linalg.norm(config.array[:, None] - config.array[None], axis=-1)
         assert gaps[np.triu_indices(config.n_candidates, 1)].min() >= 0.08
         assert math.isclose(config.deviation, 0.1) or config.deviation in (0.2, 0.3)
+
+
+def test_weighted_configurations_count_more_and_are_never_trimmed():
+    from yeelab.build.methods import METHODS
+
+    from yeesearch.evaluate import objective
+
+    plain = {"sincere": [0.1] * 20 + [0.5, 0.6], "poll": [0.1] * 20 + [0.5, 0.6]}
+    assert abs(objective(METHODS["fptp"], plain)["sincere"] - 0.12) < 1e-12  # 0.6 trimmed
+    weighted = plain | {"weights": [1] * 20 + [3, 3]}
+    assert abs(objective(METHODS["fptp"], weighted)["sincere"] - (18 * 0.1 + 3 * 0.5 + 3 * 0.6) / 24) < 1e-12
+
+
+def test_the_focus_configurations_are_in_training_only_on_their_own_grid():
+    from yeesearch.configs import FOCUS_GRID, SETS, focus_configs
+
+    names = {config.name for config in focus_configs()}
+    assert names <= {config.name for config in SETS["train"]()}
+    assert all(config.grid == FOCUS_GRID for config in focus_configs())
+    for other in ("validation", "test", "wide"):
+        assert not names & {config.name for config in SETS[other]()}
+
+
+def test_a_method_behind_its_rival_ranks_below_every_one_that_is_not():
+    from yeelab.build.methods import METHODS
+
+    from yeesearch.evaluate import RIVAL_HARD, objective
+
+    errors = {"sincere": [0.1] * 22, "poll": [0.1] * 20 + [0.3, 0.05], "weights": [1] * 20 + [3, 3],
+              "rivals": [None] * 20 + [0.2, 0.1]}
+    result = objective(METHODS["fptp"], errors)
+    assert abs(result["behind"] - 0.5) < 1e-12  # 0.3 is 50 % above its rival, 0.05 below its
+    plain = objective(METHODS["fptp"], {key: value for key, value in errors.items() if key != "rivals"})
+    assert abs(result["J"] - (plain["J"] + RIVAL_HARD + 0.5)) < 1e-12
+    level = objective(METHODS["fptp"], errors | {"poll": [0.1] * 20 + [0.2, 0.1]})  # as good as the rivals
+    assert level["behind"] == 0
+    assert level["J"] < 1 < result["J"]

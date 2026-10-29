@@ -268,6 +268,7 @@ def _write_hall(path: Path, hall: list[dict], validation: Archive):
     written = path.with_suffix(".tmp")
     with written.open("w") as file:
         json.dump([{key: entry[key] for key in ("method", "J", "sincere", "burial", "size")}
+                   | {"behind": entry.get("behind", 0.0)}
                    | {"validation": validation[entry["method"]]["J"] if entry["method"] in validation else None}
                    for entry in hall], file, indent=1)
         synced(file)

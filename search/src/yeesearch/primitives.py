@@ -144,7 +144,7 @@ def config_maps(set_name: str, index: int, grid: int, sources: list[str], measur
     side(grid)), the
     indices of those that fail, and with `measures` those of MEASURES (M, 2, G, G): one
     task of a worker."""
-    prepared = Prepared.of(SETS[set_name]()[index], grid)
+    prepared = Prepared.of(SETS[set_name]()[index], grid)  # one grid for all the maps of a set (no focus_configs)
     maps = np.full((len(sources), 2, side(grid), side(grid)), -2, dtype=np.int8)
     failed = []
     for k, source in enumerate(sources):

@@ -69,3 +69,15 @@ def test_positions_name_the_slot_of_every_subtree():
     assert slots[0] == ((), "king", "method")
     assert ((1,), "highest", "method") in slots and ((2,), "tally", "totals") in slots
     assert grammar.replaced(tree, (1,), Node("dac")).children[1] == Node("dac")
+
+
+def test_every_among_is_paid_for_each_time_it_occurs():
+    star, two_round = METHODS["star"], METHODS["two_round"]
+    assert grammar.among_count(METHODS["fptp"]) == 0
+    assert grammar.among_count(star) == 1
+    union = parse(f"Highest(Tally(BordaCount()), among={star!r} | {two_round!r})")
+    assert grammar.among_count(union) == 3
+    twice = parse(f"Unbeaten(Margins(Pairwise()), among={star!r} | Highest(Tally(Plurality()), among={star!r}))")
+    once = parse(f"Unbeaten(Margins(Pairwise()), among={star!r} | Highest(Tally(Plurality())))")
+    assert grammar.among_count(twice) == 4  # star's among counted in each copy
+    assert grammar.complexity(twice) - grammar.complexity(once) == 2 * grammar.AMONG  # as many blocks, two among= more

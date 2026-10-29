@@ -100,7 +100,14 @@ burying.
 == The objective
 
 $ J = op("trimmed mean", limits: #true)_k (0.25 e_k + 0.75 b_k) + 0.0001 dot "complexity", $
-lower being better. Burial weighs three times as much as the sincere error: a method that
+lower being better, the focus configurations (@ch-sets) each counting as 3 configurations
+and never trimmed. On them a method must bury no worse than `search_6`, a hard rule: with
+$b_k$ the burial error and
+$ "behind" = sum_(k in "focus") max(0, b_k / b_k ("search_6") - 1), $
+a method of $"behind" > 0$ gets $1 + "behind"$ added to $J$. It ranks below every method
+that keeps the rule, whose $J$ is far below 1, and the others among themselves by how far
+behind they are, so that the genetic programming still has a slope to climb towards the
+rule. The report shows only the methods of $"behind" = 0$. Burial weighs three times as much as the sincere error: a method that
 only resists burial is FPTP, whose sincere error is large. The trimmed mean leaves out, for
 each method, the 5 % of the configurations it does best on and the 5 % it does worst on
 ($floor(0.05 K)$ of each end of $K$ configurations), so that a few configurations do not
@@ -116,8 +123,9 @@ children (the same `repr`), so that a block that recurs is one element of $D(m)$
 $F$ be the free types `Tally`, `Weakest` and `Union`, and $C(m) subset D(m)$ the distinct
 Conditionals. The depth $delta(c)$ of a Conditional $c$ is the number of Conditionals
 that enclose it in $T(m)$, in a branch or in a condition, found where the tree is first
-entered. Then
-$ "complexity"(m) = underbrace(|{b in D(m) : "type"(b) in.not F}|, "blocks paid for") + 2 sum_(c in C(m)) delta(c). $ <eq-complexity>
+entered. Let $alpha(m)$ be the number of `among=` set in $T(m)$, each occurrence: a subtree
+that recurs counts its `among=` as often as it recurs. Then
+$ "complexity"(m) = underbrace(|{b in D(m) : "type"(b) in.not F}|, "blocks paid for") + 2 sum_(c in C(m)) delta(c) + alpha(m). $ <eq-complexity>
 The cost in $J$ is $0.0001$ times this.
 
 - *Distinct blocks.* A method in a condition and in a branch, or the score ballot that four
@@ -135,20 +143,25 @@ The cost in $J$ is $0.0001$ times this.
   `WinnerComparison`s are blocks, but no Conditional is nested.
 - Parameters (`n=2`, `how="mean"`, a threshold, a tie weight) are free.
 
-*`among=`.* It is a field of `Highest`, `Eliminate` and `Unbeaten` like any other, so its
-value is a subtree counted by the same rule. `Highest(Tally(Plurality()), n=2)` costs two
-blocks (`Highest` and `Plurality`, the `Tally` being free); `among=A | B` costs the blocks
-of $A$ and $B$ together, those they share counted once.
+- *`among=`.* It is a field of `Highest`, `Eliminate` and `Unbeaten` like any other, so its
+  value is a subtree counted by the same rule: `Highest(Tally(Plurality()), n=2)` costs two
+  blocks (`Highest` and `Plurality`, the `Tally` being free), and `among=A | B` the blocks
+  of $A$ and $B$ together, those they share counted once. Every `among=` costs 1 more, and
+  this each time it occurs, not once: with distinct blocks alone a subtree copied into
+  another `among=` was nearly free, and the genetic programming grew chains of `among=`
+  that repeat the same finalists (5 to 7 of them in a third of its best methods). A runoff
+  (STAR, the two-round system) pays 1 for its finalists.
 
 *Examples.* STAR, `Unbeaten(ScoreComparisons(Score(6)), among=Highest(Tally(Score(6)), n=2))`,
 has the distinct blocks `Unbeaten`, `ScoreComparisons`, `Score(6)` (read twice, paid once),
-`Highest` and `Tally`; without the free `Tally`, $"complexity" = 4$. `search_6` has 20
-distinct blocks: 5 different `Highest`, 5 different `Tally`, and one each of `Conditional`,
-`WinnerComparison`, `Unbeaten`, `ScoreComparisons`, `Union`, `Eliminate`, `BordaCount`,
-`Plurality`, `Score(6)` and `D21`. Without the 5 `Tally` and the `Union` it is
-$20 - 6 = 14$; its only Conditional is the root, $delta = 0$, so
-$"complexity" = 14$ and the cost $0.0014$. `search_5` has a Conditional in the else-branch
-of its root, $delta = 1$, which adds $2$ beyond its blocks, giving 20.
+`Highest` and `Tally`; without the free `Tally` that is 4, and its one `among=` makes
+$"complexity" = 5$. `search_6` has 20 distinct blocks: 5 different `Highest`, 5 different
+`Tally`, and one each of `Conditional`, `WinnerComparison`, `Unbeaten`, `ScoreComparisons`,
+`Union`, `Eliminate`, `BordaCount`, `Plurality`, `Score(6)` and `D21`. Without the 5
+`Tally` and the `Union` it is $20 - 6 = 14$; its only Conditional is the root, $delta = 0$,
+and it sets 3 `among=`, so $"complexity" = 17$ and the cost $0.0017$. `search_5` has a
+Conditional in the else-branch of its root, $delta = 1$, which adds $2$ beyond its blocks,
+and 2 `among=`, giving 22.
 
 #figure(table(columns: 4, align: (left, right, right, right),
   [method], [blocks], [distinct blocks], [complexity],
@@ -176,14 +189,20 @@ voters.
 
 #figure(table(columns: 4, align: (left, left, center, right),
   [set], [made of], [grid], [configurations],
-  [train], [12 random (seed 1); the families at 0°, scale 1, deviation 0.2], [16], [#data.sets.train.len()],
-  [wide], [train; 36 random (seed 6); the families at 200°, scale 1.05, deviation 0.12], [16], [#data.sets.wide.len()],
+  [train], [12 random (seed 1); the families at 0°, scale 1, deviation 0.2; the two focus configurations], [16; the focus ones 64], [#data.sets.train.len()],
+  [wide], [train but the focus configurations; 36 random (seed 6); the families at 200°, scale 1.05, deviation 0.12], [16], [#data.sets.wide.len()],
   [validation], [20 random (seed 2); the families at 90°, scale 0.9, deviation 0.15], [24], [#data.sets.validation.len()],
   [test], [200 random (seed 3); the families at 30°, 135° and 250° (scales 1.1, 0.8, 1, deviations 0.1, 0.25, 0.3);
     out of the training distribution: 20 of 7 or 8 candidates (seed 4), 20 of deviation 0.05 or 0.4 (seed 5)],
     [32], [#data.sets.test.len()]),
   caption: [The sets of configurations, which share none. GP trains on `train`, the search of
     Conditionals on `wide`.])
+
+*Focus configurations.* Two configurations of the web UI (deviation 0.2) that the methods
+found by 2026-10-29 did not get right are in the training set on a grid of 64, each counting
+as 3 configurations in $J$ and never trimmed (`configs.focus_configs`): four candidates
+nearly on a diagonal, the two in the middle close together, and three candidates around a
+fourth. They are in no other set: the search of Conditionals keeps one grid for all its maps.
 
 A configuration is left out of every set where a candidate is nearer than 0.1 to a wall, or
 nearer than 0.05 to the strip the geometric diagram leaves empty along the walls: such a

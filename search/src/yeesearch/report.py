@@ -29,8 +29,9 @@ console = Console(width=120)
 
 def best_found(run: Path, top: int) -> list[str]:
     """The `top` methods of the hall of fame, by their J on the validation set, those
-    without one last."""
-    hall = json.loads((run / "hall.json").read_text())
+    without one last; only those that bury no worse than the rivals of the focus
+    configurations (behind 0, evaluate.objective), the others are of no interest."""
+    hall = [entry for entry in json.loads((run / "hall.json").read_text()) if entry.get("behind", 0.0) <= 0]
     return [entry["method"] for entry in sorted(hall, key=lambda e: (e["validation"] is None, e["validation"] or 0,
                                                                        e["J"]))[:top]]
 

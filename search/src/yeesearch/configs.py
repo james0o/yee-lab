@@ -22,15 +22,24 @@ SEPARATION = 0.08  # and at least this far from each other
 EDGE = 0.04  # hand-made candidates are kept this far from the walls
 WALL = 0.1  # a configuration is left out of the sets where a candidate is nearer a wall than this
 STRIP = 0.05  # or nearer than this to the strip along the walls a geometric diagram leaves empty
+FOCUS_GRID = 64  # the grid of the configurations of the web UI the search is to get right (focus_configs)
+FOCUS_WEIGHT = 3.0  # in J each of them counts as this many configurations, and is never trimmed
+FOCUS_RIVAL = "search_6"  # whose burial error on them a method must not exceed (evaluate.RIVAL_HARD)
 
 
 @dataclass(frozen=True)
 class Config:
-    """Candidates (C, 2) and the deviation of the Beta voters around every point."""
+    """Candidates (C, 2) and the deviation of the Beta voters around every point; `grid` its
+    own grid instead of the set's, `weight` how many configurations it counts as in J, and
+    `rival` a method of yeelab.build.methods whose burial error a method must not exceed
+    here (evaluate.objective)."""
 
     name: str
     candidates: tuple[tuple[float, float], ...]
     deviation: float
+    grid: int | None = None
+    weight: float = 1.0
+    rival: str | None = None
 
     @cached_property
     def array(self) -> np.ndarray:
@@ -145,10 +154,25 @@ def hand_made(angle: float, scale: float, deviation: float, prefix: str, **optio
             for name, family in FAMILIES.items()]
 
 
+def focus_configs() -> list[Config]:
+    """Two configurations of the web UI (deviation 0.2, as it starts) that the methods found
+    by 2026-10-29 did not get right: four candidates nearly on a diagonal, the two in the
+    middle close together, and three around a fourth (the web UI's Setup 2 and Setup 3). On
+    FOCUS_GRID, weighing FOCUS_WEIGHT, a method to bury no worse than FOCUS_RIVAL there."""
+    return [Config("focus-diagonal", ((0.271, 0.713), (0.41, 0.555), (0.494, 0.476), (0.632, 0.344)), 0.2,
+                   FOCUS_GRID, FOCUS_WEIGHT, FOCUS_RIVAL),
+            Config("focus-around", ((0.233, 0.523), (0.639, 0.688), (0.494, 0.476), (0.57, 0.275)), 0.2,
+                   FOCUS_GRID, FOCUS_WEIGHT, FOCUS_RIVAL)]
+
+
+def _train() -> list[Config]:
+    return _inside(random_configs(1, 12) + hand_made(0.0, 1.0, 0.2, "train-"))
+
+
 def train_set() -> list[Config]:
     """12 random configurations (seed 1) and every hand-made family as drawn, but those
-    with a candidate near a wall (inside), as in every set."""
-    return _inside(random_configs(1, 12) + hand_made(0.0, 1.0, 0.2, "train-"))
+    with a candidate near a wall (inside), as in every set, and the focus_configs."""
+    return _train() + _inside(focus_configs())
 
 
 def validation_set() -> list[Config]:
@@ -171,10 +195,11 @@ def test_set() -> list[Config]:
 
 
 def wide_set() -> list[Config]:
-    """The training set, 36 more random configurations (seed 6) and the families turned
-    otherwise: the training of the search of Conditionals, which scores millions of
-    methods and so needs more configurations not to fit chance."""
-    return train_set() + _inside(random_configs(6, 36) + hand_made(200.0, 1.05, 0.12, "wide-", collinear={"n": 3},
+    """The training set but the focus_configs (its maps share one grid), 36 more random
+    configurations (seed 6) and the families turned otherwise: the training of the search of
+    Conditionals, which scores millions of methods and so needs more configurations not to
+    fit chance."""
+    return _train() + _inside(random_configs(6, 36) + hand_made(200.0, 1.05, 0.12, "wide-", collinear={"n": 3},
                                                                    dark_horse={"gap": 0.07, "far": 0.32}))
 
 

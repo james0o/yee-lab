@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-app = typer.Typer(no_args_is_help=True, add_completion=False)
+app = typer.Typer(no_args_is_help=True, add_completion=False, context_settings={"help_option_names": ["-h", "--help"]})
 console = Console()
 
 
@@ -22,7 +22,10 @@ def gp(out: Path = typer.Option(..., help="directory of the run; an existing one
        generations: int | None = typer.Option(None, help="stop after this many generations"),
        until: str | None = typer.Option(None, help='stop at this time instead of after --hours: "19:00" (the next '
                                                      'one) or "2026-10-27 19:00"'),
-       seed_from: Path | None = typer.Option(None, help="a directory of yee-search conditional: its best as seeds")):
+       seed_from: Path | None = typer.Option(None, help="a directory of yee-search conditional: the best methods of its validation.json "
+                                                 "(of each ranking) join the first generation of a new run, with "
+                                                 "the library's known methods and random ones; ignored when the run "
+                                                 "continues one in --out")):
     """Genetic programming over the grammar, against burial by 30 % of the voters."""
     from yeesearch.gp import run
 
@@ -92,6 +95,63 @@ def conditional(out: Path = typer.Option(..., help="directory of the search; the
         return
     run(out, Path("runs"), max_size, same_size, combine, deeper, deeper_conditions, top_train, top_test, workers,
         estimate, pixel_median, maps)
+
+
+@app.command()
+def table(runs: list[Path] = typer.Argument(..., help="directories of GP runs"),
+          out: Path | None = typer.Option(None, help="the file (default: methods.py in the first run)"),
+          max_j: float | None = typer.Option(None, help="only the methods of J at most this (a smaller file)")):
+    """Every method the runs scored, best first, written short (fptp, nanson, ...) in a
+    Python file to read and search in an editor."""
+    from yeesearch.table import write_table
+
+    out = out or runs[0] / "methods.py"
+    console.print(f"{write_table(runs, out, max_j)} methods: {out}")
+
+
+@app.command()
+def find(run: Path = typer.Argument(..., help="directory of a GP run, or a file of yee-search table"),
+         patterns: list[str] = typer.Argument(..., help='what a method holds, all of them: nanson "among=top2"'),
+         regex: bool = typer.Option(False, "--regex", "-e", help="the patterns as regular expressions"),
+         limit: int = typer.Option(50, "--limit", "-n", help="best matches shown; 0: all"),
+         aliases: bool = typer.Option(False, "--aliases", "-a", help="show what score6, cmp6, ... stand for"),
+         pager: bool = typer.Option(False, "--pager", "-p", help="in less, to scroll")):
+    """The methods a run scored that hold the patterns, best first, highlighted: as
+    grep over yee-search table, which it writes first if the run has no methods.py."""
+    from rich import box
+    from rich.table import Table
+    from rich.text import Text
+
+    from yeesearch.table import find as found_in, highlighted, layout, matchers, row, write_table
+
+    table_path = run if run.is_file() else run / "methods.py"
+    if not table_path.exists():
+        console.print(f"writing {table_path} first (a minute or two)", style="dim")
+        write_table([run], table_path)
+    alias_lines, found = found_in(table_path, patterns, regex)
+    shown = found if limit == 0 else found[:limit]
+    matches = [match.pattern for match in matchers(patterns, regex)]
+
+    def write():
+        if aliases:
+            for line in alias_lines:
+                console.print(highlighted(line), soft_wrap=True)
+        table = Table(box=box.SIMPLE_HEAD, show_lines=True, header_style="bold", pad_edge=False)
+        table.add_column("method", overflow="fold", ratio=1)
+        for name in ("J(0.3)", "sincere", "burial", "size", "#"):
+            table.add_column(name, justify="right", style="dim" if name == "#" else "cyan", no_wrap=True)
+        for rank, line in shown:
+            *numbers, method = row(line)
+            table.add_row(highlighted(layout(method), matches), *numbers, str(rank))
+        console.print(table)
+        console.print(Text(f"{len(found)} methods match" + (f", the best {len(shown)} shown" if len(shown) < len(found)
+                                                            else ""), style="dim"))
+
+    if pager:
+        with console.pager(styles=True):
+            write()
+    else:
+        write()
 
 
 @app.command()
