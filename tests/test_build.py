@@ -427,7 +427,7 @@ def test_score_takes_the_number_of_levels():
         with pytest.raises(ValueError, match=re.escape(f"Score power must be a number above 0, got {power!r}")):
             Score(3, power=power)
     for score in (ScoreAvg, ScoreDH, ScoreHybrid, ScoreCluster):
-        with pytest.raises(TypeError, match=f"{score.__name__} has no power; only Score and D21 have"):
+        with pytest.raises(TypeError, match=f"{score.__name__} has no power; only Score, D21 and Coarse have"):
             score(3, power=1.5)  # only RANGE and D21 have a power
     # as a ballot like any other: mixed with another, and eliminated round by round
     mixed = Mix(ScoreAvg(4), Score(4), share=0.5)

@@ -1186,6 +1186,20 @@ scores). `Score` meets all ten at every power of the slider, `ScoreAvg` and
 points than with $p = 1$, `ScoreHybrid` 10.8% fewer, `ScoreCluster` 0.2% more,
 `ScoreDH` 7.5% more and `ScoreAvg` 22.9% more (@sec-score-data).
 
+*Coarse counts* (`Coarse(n)`, `coarse_3`, `coarse_2`). The voter marks the ballot of
+$L = 6$ levels, and the count groups its scores: $s |-> floor(s n slash 6)$ for $n = 3$
+(0–1, 2–3, 4–5) or $n = 2$ (0–2, 3–5), the divisors of 6, so that the groups have the
+same size. That is a ballot of $n$ levels whose score rises where the score of six
+levels crosses a group, at $t_i^p = 0.3$ and $0.7$ for $n = 3$,
+against $0.25$ and $0.75$ of @eq-range with $L = 3$: nearly `Score(3)` with another
+power, its winner differs on about 3 % of the square at $p = 1.5$. For $n = 2$ the one
+threshold is $t_i^p = 0.5$, that of $L = 2$: `Coarse(2)` is `Score(2)`, approval voting. Its
+shares are those of six levels summed over each group (`score.COARSE`,
+`tests/test_coarse.py`); the categories slider does not change $n$, the power slider
+does. The methods `coarse_3` and `coarse_2` of the web UI take the trimmed mean of the
+groups (@sec-trimmed), by the same trim slider: at 0 the mean, and `coarse_2` approval
+voting.
+
 == Score ballots on real ballots <sec-score-data>
 
 @eq-range is an assumption about how a voter turns distances into scores. It can be
@@ -1573,6 +1587,59 @@ compromising voter move a candidate's score for different voters, so the two add
 of every rectangle at each score of the two that each strategy moves, from the ballot
 table by order. With burial and compromise the update takes about 0.4 to 0.9 s at
 $G = 160$ for 5 candidates, against 0.07 to 0.2 s for Score.
+
+== Trimmed mean (`Tally(ballot, trim=t)`) <sec-trimmed>
+
+Between the mean of Score and the median of majority judgment lies the trimmed mean: of
+the voters of a pixel, in the order of the score they give $c_i$, a share
+$a = t slash 100$ is taken off each end, and the rest are averaged. `Tally(ballot,
+trim=t)` takes it for a score ballot, for $0 <= t < 50$; $t = 0$ is the mean, and
+$t = 25$ the interquartile mean. It reads the same shares $w_i (k)$ as majority judgment
+(@sec-mj) and is no slower than the mean of them.
+
+*Formula.* A voter's score is the number of thresholds $k = 0, dots, L - 2$ it lies
+above, so the quantile of $c_i$'s scores at $u$ is $Q_i (u) = sum_k [u > F_i (k)]$, and
+
+$ T_i = 1 / (1 - 2a) integral_a^(1 - a) Q_i (u) dif u
+  = sum_k "clip"(S_i (k) - a, 0, 1 - 2a) / (1 - 2a). $ <eq-trimmed>
+
+At $a = 0$ each threshold counts $S_i (k)$ and $T_i$ is the mean score. As $a -> 1 slash 2$
+a threshold counts 1 where $S_i (k) > 1 slash 2$ and 0 where $S_i (k) < 1 slash 2$:
+$T_i$ tends to the median score. The totals are $T_i slash (L - 1) - 1$, from $-1$ to 0
+like Score's, with $F$ summed from the bottom, so that where nearly all voters give two
+candidates the top score the few who do not still decide (@sec-score). `Top`, `Lead`
+and `Eliminate(how="mean")` take them as they take a mean.
+
+*Margin.* @eq-trimmed is continuous and piecewise linear in the shares, and no total
+moves by more than $1 slash (1 - 2a)$ times a change of a candidate's shares in all, so
+the lead of the highest total is a margin as for the mean: 0 where the winner changes.
+That is why $t = 50$ is excluded: there the totals jump. The median is
+`statistic="median"`, majority judgment, which is not the limit of the trimmed means.
+Near $a = 1 slash 2$ only the thresholds with $S_i (k)$ between $a$ and $1 - a$ tell
+two candidates with the same median apart, linearly in how far $S_i (k)$ is from
+$1 slash 2$; Balinski and Laraki's tie-break decides all of them, lexicographically.
+
+*Ties.* Two candidates with the same median whose thresholds are all outside the trim,
+every $S_i (k)$ below $a$ or above $1 - a$, have the same $T_i$, their median, and so
+do the candidates at every point around: they tie over whole areas, where the margin is
+0 and no region is drawn. Near $t = 50$ that is a tenth of the diagram. So a share
+$epsilon = 10^(-3)$ (`TRIM_TIE_BREAK`) of each total is the mean,
+
+$ (1 - epsilon) T_i + epsilon sum_k S_i (k), $
+
+still continuous and in the same bounds, and those ties go by the mean, with a margin
+$epsilon$ times its lead. Elsewhere it moves a border only where the leads of the
+trimmed means are below $epsilon$ times those of the means. `tests/test_trimmed.py`
+checks the totals against this on $n$ explicit ballots, against the median near
+$t = 50$, and a tie of medians decided by the mean.
+
+*Strategy.* Burying moves a score of a frontrunner to 0, compromising to the top score:
+both move voters into a tail of its distribution. Under the mean a voter moved to 0
+takes off their whole score. Under a trimmed mean the lowest share $a$ of the voters is
+not counted, so the voters moved there only push the others up the order: the total
+drops by the scores of the voters who pass the quantile $a$ into the trimmed tail, not
+by those of the strategic voters themselves, by less the more the trim. The same holds
+for compromise at the upper end.
 
 == D21 (`d21`) <sec-d21>
 

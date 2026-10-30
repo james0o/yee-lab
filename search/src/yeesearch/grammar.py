@@ -331,7 +331,7 @@ def _from_block(block, slot: str) -> Node:  # noqa: C901 -- one case per block
             return Node("borda_count")
         case Score() if type(block) is Score and SCORE_BALLOTS.get(block.levels) == block:
             return Node("score", (block.levels,))
-        case Tally(statistic="mean"):
+        case Tally(statistic="mean", trim=0):
             return Node("tally", (), (_from_block(block.ballot, "ballot"),))
         case Tally(statistic="median"):
             return Node("median", (), (_from_block(block.ballot, "score"),))

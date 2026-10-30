@@ -745,3 +745,34 @@ def test_api_tilts_every_strategy_to_the_left():
     for tilt in (-0.5, MAX_TILT + 0.5, "x"):
         request = {"candidates": CANDIDATES.tolist(), "method": "borda", "burial": 0.5, "tilt": tilt}
         assert client.post("/api/regions", json=request).status_code == 422, tilt
+
+
+def test_api_builds_the_trimmed_mean_from_the_trim_slider():
+    """The trimmed mean takes the trim slider, and the score sliders like Score: 0 is
+    Score and 50 majority judgment, on the same ballot. Strategic voters vote in it."""
+    client = TestClient(app)
+
+    def shapes(method="trimmed", **settings):
+        request = {"candidates": CANDIDATES.tolist(), "method": method, "grid": 64, **settings}
+        response = client.post("/api/regions", json=request)
+        assert response.status_code == 200
+        return response.json()["regions"]
+
+    assert shapes() == shapes(trim=25, levels=6, power=1.5)
+    assert shapes(trim=0) == shapes("score") and shapes(trim=50) == shapes("mj")
+    assert shapes(trim=0, levels=4, power=2) == shapes("score", levels=4, power=2)
+    expected = Highest(Tally(Score(4, power=2), trim=10))
+    assert shapes(trim=10, levels=4, power=2) == json.loads(json.dumps(regions(expected, CANDIDATES.tolist(),
+                                                                               MODELS[0], 64)))
+    for bad in (-1, 51):
+        request = {"candidates": CANDIDATES.tolist(), "method": "trimmed", "grid": 64, "trim": bad}
+        assert client.post("/api/regions", json=request).status_code == 422
+    config = client.get("/api/config").json()
+    assert config["trims"] == ["trimmed", "coarse_3", "coarse_2"] and config["trim"] == 25
+    assert (config["max_trim"], config["trim_step"]) == (50, 1)
+    assert "trimmed" in config["scores"] and "trimmed" in config["score_levels"]
+    assert not any("trimmed" in config["unsupported"][name] for name in ("bullet", "burial", "compromise"))
+    method = next(option for option in config["methods"] if option["name"] == "trimmed")
+    assert method["label"] == "Trimmed mean"
+    assert method["description"].endswith("\nHighest(Tally(Score(6, power=1.5), trim=25))")
+    assert shapes(burial=0.5) != shapes()

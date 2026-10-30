@@ -388,12 +388,16 @@ def test_bullet_ballots_are_tallied_with_equal_candidates_sharing(profile):
 def test_where_all_voters_bullet_vote_the_most_first_choices_win(profile):
     """Every bullet ballot ranks its first choice above all others and the others equal,
     so the candidate with the most first choices beats every other head to head, has
-    the most points and the highest mean score, and outlasts every elimination."""
+    the most points and the highest mean score, and outlasts every elimination. Not the
+    trimmed mean: of a candidate fewer than its trim give the top score, so all of them
+    are 0 where no one has that many first choices."""
     voters = _every_share(*profile)
     fptp, lead = METHODS["fptp"].evaluate(voters)
     clear = lead > TOLERANCE
     assert clear.mean() > 0.9  # not vacuous
     for name, method in TESTED_METHODS.items():
+        if name == "trimmed":
+            continue
         np.testing.assert_array_equal(Bullet(method, 1).evaluate(voters)[0][clear], fptp[clear], err_msg=name)
 
 

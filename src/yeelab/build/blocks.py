@@ -10,11 +10,12 @@ Every block has one type of output:
                      BordaCount(),
                      Score(levels, power=...), ScoreAvg(levels), ScoreDH(levels, delta=...),
                      ScoreHybrid(levels, delta=...), ScoreCluster(levels, mu=..., kappa=...),
+                     Coarse(levels, power=...),
                      D21(max_positive=..., max_negative=..., negative_after=..., power=...),
                      D21(max_positive=..., max_negative=..., ordinal=True),
                      Mix(first, second, share=...)
     CandidateTotals  Tally(ballot), Weakest(diffs),     a total of each candidate at a point
-                     Tally(ballot, statistic="median")
+                     Tally(ballot, statistic="median"), Tally(ballot, trim=...)
     PairShares       Pairwise()                         share of the voters ranking c above e
     PairDiffs        Margins(shares),                   how strongly c beats e (antisymmetric)
                      StrongestPaths(diffs), ScoreComparisons(Score(...))
@@ -44,8 +45,9 @@ gap / (its steps + delta), D'Hondt's rule at delta = 1; ScoreHybrid(levels, delt
 does that for the candidates closer than halfway, on the upper half of the scale, and
 Score's for the others, on the lower half; ScoreCluster(levels, mu=..., kappa=...)
 gives Score's scores unless that splits a cluster of candidates at nearly the same
-distance, at a cost of mu, kappa setting how far a cluster must stand apart. With two levels
-each is an approval ballot. D21(max_positive=..., max_negative=..., negative_after=...,
+distance, at a cost of mu, kappa setting how far a cluster must stand apart.
+Coarse(levels, power=...) is Score(6, power=...)'s ballot counted in `levels` groups of
+its scores, levels 2 or 3. With two levels each is an approval ballot. D21(max_positive=..., max_negative=..., negative_after=...,
 power=...) is Janeček's D21, plus votes, minus votes and none, from Score's ballots of
 three and two levels: at most max_positive plus votes to the closest candidates, at most
 max_negative minus votes to the farthest, and a minus vote only after negative_after plus
@@ -61,6 +63,11 @@ Tally(ballot, statistic="median") takes a score ballot's majority judgment inste
 Laraki's tie-break, for the voters of a point as a distribution, not n ballots. Its
 totals are the candidates in that order, the first 0 and each next one lower by the gap
 of its place, so that Highest(Tally(ballot, statistic="median")) is majority judgment.
+Tally(ballot, trim=t) takes a score ballot's trimmed mean: the mean score of the voters
+left when t percent of them are taken off each end, in the order of the score they give
+the candidate; trim=0 is the mean, and towards 50 it nears the median score (without
+majority judgment's tie-break, which statistic="median" is). Its totals are those of the
+mean, -1 to 0, a statistic between Score and majority judgment.
 
 A diff s[c, e] = -s[e, c] says that c beats e where it is positive. PairDiffs are
 transitive (PairDiffs.transitive) if the candidates that beat each other cannot form a
@@ -135,13 +142,16 @@ import numpy as np
 from yeelab.build.judgment import majority_totals
 from yeelab.build.rounds import drop_below_mean, drop_lowest
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Graded, Scored, ScoredPairwise, Share, Voters
-from yeelab.score import AVG, CLUSTER, DELTA, DHONDT, HYBRID, KAPPA, MU, POWER, RANGE, VOTES
+from yeelab.score import AVG, CLUSTER, COARSE, DELTA, DHONDT, FINE, HYBRID, KAPPA, MU, POWER, RANGE, VOTES
 from yeelab.score import D21 as D21_RULE, D21_ORDINAL
 from yeelab.voting import CYCLE, descending_coalitions, irv_rounds
 
 Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) or (chosen, margin) at every point
 HOW = ("min", "mean", "all")  # what Eliminate drops each round
 STATISTICS = ("mean", "median")  # what Tally takes of the points the voters give
+# the weight of the mean in a trimmed mean, its tie-break: two candidates with the same
+# median and no threshold inside the trim tie exactly, over whole areas, without it
+TRIM_TIE_BREAK = 1e-3
 
 
 class Block:
@@ -168,6 +178,27 @@ def _top_two(totals: np.ndarray) -> Result:
     """Highest total (winner; ties: the lowest index) and its lead over the second."""
     top = np.partition(totals, -2, axis=-1)
     return totals.argmax(axis=-1), top[..., -1] - top[..., -2]
+
+
+def _trimmed(grades: np.ndarray, trim: float, alive: np.ndarray | None) -> np.ndarray:
+    """The trimmed means of the shares grades (..., C, levels) of each score, (..., C),
+    as Score.tally: the mean part of the top score minus 1, -1 for the candidates not
+    marked in alive. With a = trim / 100 and F(k) the part of c's voters giving at most
+    k, a voter's score is the number of thresholds k = 0 ... levels - 2 it is above, so
+    the mean of the middle 1 - 2a of the voters is that of each threshold,
+
+        1 - sum_k clip(F(k) - a, 0, 1 - 2a) / ((1 - 2a) (levels - 1)),
+
+    continuous in the shares. Where every F(k) of two candidates is outside the trim,
+    below a or above 1 - a, both are their median score and tie, at every point around:
+    so TRIM_TIE_BREAK of the total is the mean, 1 - sum_k F(k) / (levels - 1), and a tie
+    goes by it. F is summed from the bottom, so that the few voters of the lower tail stay
+    exact, and the lead of the few who do not give the top score is kept."""
+    a = trim / 100
+    at_most = np.cumsum(grades[..., :-1], axis=-1) / grades.sum(axis=-1, keepdims=True)
+    trimmed = np.clip(at_most - a, 0.0, 1 - 2 * a) / (1 - 2 * a)
+    missing = ((1 - TRIM_TIE_BREAK) * trimmed + TRIM_TIE_BREAK * at_most).sum(axis=-1) / (grades.shape[-1] - 1)
+    return -missing if alive is None else np.where(alive, -missing, -1.0)
 
 
 def _off_diagonal(diffs: np.ndarray, fill: float) -> np.ndarray:
@@ -431,8 +462,8 @@ class Score(Ballot):
             raise ValueError(f"{type(self).__name__} power must be a number above 0, got {power!r}")
         if not isinstance(self.fixed, bool):
             raise TypeError(f"{type(self).__name__} fixed must be a bool, got {self.fixed!r}")
-        if self.rule not in (RANGE, D21_RULE) and power != POWER:  # as for any keyword the block does not take
-            raise TypeError(f"{type(self).__name__} has no power; only Score and D21 have")
+        if self.rule not in (RANGE, D21_RULE, COARSE) and power != POWER:  # as for any keyword the block does not take
+            raise TypeError(f"{type(self).__name__} has no power; only Score, D21 and Coarse have")
 
     @property
     def scored(self) -> Scored:
@@ -570,6 +601,33 @@ class ScoreCluster(Score):
 
     def __repr__(self):
         return f"{type(self).__name__}({self.levels}, mu={self.mu!r}, kappa={self.kappa!r})"
+
+
+@dataclass(frozen=True, repr=False)
+class Coarse(Score):
+    """Score(6)'s ballot at the power `power`, scores 0 to 5, counted in `levels` groups
+    of the same size (score.COARSE): the score floor(s * levels / 6) of Score(6)'s s.
+    Coarse(3) is the groups 0-1, 2-3 and 4-5, and Coarse(2) the groups 0-2 and 3-5,
+    Score(2)'s approval ballot. The voter marks the one ballot of six scores; only the
+    count is coarser. Its thresholds are those of Score(6) between the groups, not those
+    of Score(levels): for Coarse(3) at 0.3 and 0.7 of the way to the power, not 0.25 and
+    0.75. levels is the count's and the UI's categories slider does not change it
+    (fixed); the power slider does.
+
+    The total is that of Score: the mean score of the groups as a part of the top one."""
+
+    fixed: bool = field(default=True, init=False)
+    rule = COARSE
+
+    def __post_init__(self):
+        super().__post_init__()
+        if not (self.levels < FINE and FINE % self.levels == 0):
+            raise ValueError(f"Coarse counts the {FINE} scores of Score({FINE}) in groups of the same size: "
+                             f"levels must divide {FINE} and be below it, 2 or 3, got {self.levels!r}")
+
+    def __repr__(self):
+        power = f", power={self.power!r}" if self.power != POWER else ""
+        return f"Coarse({self.levels}{power})"
 
 
 @dataclass(frozen=True, repr=False)
@@ -878,35 +936,58 @@ class Tally(CandidateTotals):
     the first 0 and each next one lower by the gap of its place, so that Highest elects
     the candidate ahead with its gap as the margin; the candidates not remaining get -C.
     A voter marks the ballot once, among all candidates, so the remaining ones of an
-    elimination keep their scores; only their order is among them."""
+    elimination keep their scores; only their order is among them.
+
+    With trim=t, from 0 up to 50 (not included), the mean is a score ballot's trimmed
+    mean (_trimmed): t percent of the voters taken off each end, by the score they give
+    the candidate. trim=0 is the mean itself, by Ballot.tally; towards 50 it nears the
+    median score, and more and more candidates with the same median would tie exactly:
+    TRIM_TIE_BREAK of the total is the mean, which decides those ties (majority
+    judgment's tie-break is statistic="median"). The totals stay those of the mean, -1 to
+    0, and continuous in the shares, so Top, Lead and Eliminate(how="mean") take them."""
 
     ballot: Ballot
     statistic: Literal["mean", "median"] = field(default="mean", kw_only=True)
+    trim: float = field(default=0, kw_only=True)
 
     def __post_init__(self):
         _expect(self, self.ballot, Ballot, "a Ballot")
         if not isinstance(self.statistic, str) or self.statistic not in STATISTICS:
             raise ValueError(f'Tally statistic must be "mean" or "median", got {self.statistic!r}')
-        if self.statistic == "median":
+        trim = self.trim
+        if isinstance(trim, bool) or not isinstance(trim, int | float) or not 0 <= trim < 50:
+            raise ValueError(f"Tally trim must be a number from 0 up to 50 (not included), got {trim!r}; "
+                             f'50, the median, is statistic="median"')
+        if trim and self.statistic != "mean":
+            raise ValueError(f'Tally trims only the mean, not statistic="{self.statistic}"')
+        if self.graded:
             _ = self.ballot.needs_graded  # a ballot without scores, or with two scales, fails here
 
     @property
+    def graded(self) -> bool:
+        """Whether the totals read the shares of every score (Ballot.grades), not the mean."""
+        return self.statistic == "median" or self.trim != 0
+
+    @property
     def needs(self) -> frozenset[Share]:
-        return self.ballot.needs if self.statistic == "mean" else self.ballot.needs_graded
+        return self.ballot.needs_graded if self.graded else self.ballot.needs
 
     @property
     def needs_remaining(self) -> frozenset[Share]:
-        return self.ballot.needs_remaining if self.statistic == "mean" else self.ballot.needs_graded
+        return self.ballot.needs_graded if self.graded else self.ballot.needs_remaining
 
     def evaluate(self, voters: Voters, alive: np.ndarray | None = None) -> np.ndarray:
         """CandidateTotals (..., C) among the candidates marked in alive (..., C), all for None."""
-        if self.statistic == "mean":
-            return self.ballot.tally(voters, alive)
-        return majority_totals(self.ballot.grades(voters), alive)
+        if self.statistic == "median":
+            return majority_totals(self.ballot.grades(voters), alive)
+        if self.trim:
+            return _trimmed(self.ballot.grades(voters), self.trim, alive)
+        return self.ballot.tally(voters, alive)
 
     def __repr__(self):
         statistic = f', statistic="{self.statistic}"' if self.statistic != "mean" else ""
-        return f"Tally({self.ballot!r}{statistic})"
+        trim = f", trim={self.trim!r}" if self.trim else ""
+        return f"Tally({self.ballot!r}{statistic}{trim})"
 
 
 @dataclass(frozen=True)
@@ -956,7 +1037,8 @@ class _Normalised(Measure):
     """A measure of the totals of a Tally of the mean, normalised by its ballot to 0 to
     1 (Ballot.bounds): a share of the voters for Plurality, the Borda count over C - 1,
     the mean part of the top score for a score ballot. So a threshold means the same for
-    any ballot and number of candidates. The totals of a median are only an order."""
+    any ballot and number of candidates; a trimmed mean is a mean. The totals of a
+    median are only an order."""
 
     totals: Tally
 
@@ -1302,7 +1384,7 @@ class Eliminate(Winner):
         if self.how == "all":
             return _top_two(self.totals.evaluate(voters))
         # the ballot's own formula is of its mean
-        result = self.totals.ballot.eliminate(voters, self.how) if self.totals.statistic == "mean" else None
+        result = None if self.totals.graded else self.totals.ballot.eliminate(voters, self.how)
         return self.rounds(voters) if result is None else result
 
     def select(self, voters: Voters) -> Result:

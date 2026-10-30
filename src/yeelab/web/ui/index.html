@@ -83,6 +83,7 @@
       <div class="choices"><span>Score categories:</span><input type="range" id="levels" min="2" step="1"><output id="levelsValue"></output></div>
       <div class="choices"><span>Score power p:</span><input type="range" id="power"><output id="powerValue"></output></div>
       <div class="choices"><span>Runoff tie weight:</span><input type="range" id="tieWeight"><output id="tieWeightValue"></output></div>
+      <div class="choices"><span>Trim %:</span><input type="range" id="trim"><output id="trimValue"></output></div>
       <div id="strategies"></div>
       <div class="choices" id="ideals"><span>Ideal scenario:</span></div>
       <p>Drag a candidate to move it · click empty space to add one · right-click to remove</p>
@@ -131,6 +132,8 @@
     const powerValue = document.getElementById("powerValue");
     const tieWeightSlider = document.getElementById("tieWeight");
     const tieWeightValue = document.getElementById("tieWeightValue");
+    const trimSlider = document.getElementById("trim");
+    const trimValue = document.getElementById("trimValue");
     const strategies = document.getElementById("strategies");  // a row with a slider per strategy
     const joint = document.getElementById("joint");
     const votersText = document.getElementById("voters");
@@ -196,6 +199,9 @@
     let power = 0;           // their part of the way is raised to this power
     let tieWeightMethods = []; // methods with score comparisons in their runoff
     let tieWeight = 0;       // ordinal weight of voters who tie on score in a runoff
+    let trimMethods = [];    // methods with a trimmed mean of the scores
+    let trim = 0;            // the percent of the voters it takes off each end; maxTrim is the median
+    let maxTrim = 50;
     let shares = {};         // strategy name -> the share of the voters who vote by it, from 0 to 1,
                              // of those who vote by none of the strategies above it
     let strategyPhrases = {}; // strategy name -> what the status line says of it
@@ -749,7 +755,7 @@
     // other settings (or to a candidate added or removed since, whose colours shifted) is not drawn;
     // one to an older slider value is, so sliding it shows the newest diagram it can, like a drag.
     const settings = () => JSON.stringify([method, distribution, pixelMedian, candidates.length, tieWeight,
-                                           deviation, spreadPower]);
+                                           trim, deviation, spreadPower]);
 
     // The shares of the strategies that apply to the method: none in the Voronoi diagram,
     // which has no election, nor in a method a strategy cannot do.
@@ -781,10 +787,10 @@
       // grid, so that showing them later draws them at once.
       const measured = grid === finalGrid;
       const part = shift();
-      const asked = settings(), sliders = [deviation, levels, power, tieWeight, applied(), spreadPower];
+      const asked = settings(), sliders = [deviation, levels, power, tieWeight, applied(), trim, spreadPower];
       const leaning = tilt;
       const key = JSON.stringify([candidates, distribution, deviation, spreadPower, levels, power,
-                                  tieWeight, shares, leaning, part]);
+                                  tieWeight, trim, shares, leaning, part]);
       if (grid === finalGrid) message.textContent = `Computing ${labels[method]}…`;
       const start = performance.now();
       try {
@@ -793,7 +799,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             candidates, method, distribution, deviation, spread_power: spreadPower, levels, power,
-            tie_weight: tieWeight, ...sliders[4], tilt: leaning, grid,
+            tie_weight: tieWeight, trim, ...sliders[4], tilt: leaning, grid,
             pixel_median: part > 0 ? "geometric" : "marginal", shift: part,
             metrics: measured, overlay: measured || showBoundaries.checked,
           }),
@@ -808,7 +814,7 @@
           focusOutline = answer.overlays.focus;
           boundaryPath = null;
           draw();
-          describe(...sliders.slice(0, 5), Math.round(performance.now() - start), Math.round(answer.ms), leaning);
+          describe(...sliders.slice(0, 6), Math.round(performance.now() - start), Math.round(answer.ms), leaning);
           let errors = null;  // a coarse drag has none, and is not compared
           if (measured) {
             errors = [answer.metrics.diagram.relative, answer.metrics.region.relative];
@@ -854,7 +860,7 @@
     }
 
     // What the diagram shows, and how long it took (round trip, and computing it on the backend).
-    function describe(deviation, levels, power, tieWeight, applies, total, server, leaning) {
+    function describe(deviation, levels, power, tieWeight, applies, trim, total, server, leaning) {
       const tail = ` · ${candidates.length} candidates · ${total} ms (${server} ms computing)`;
       let name = labels[method];
       if (scorePowerMethods.includes(method)) {
@@ -865,6 +871,8 @@
       }
       if (tieWeightMethods.includes(method))
         name += `, runoff tie weight = ${tieWeight.toFixed(2)}`;
+      if (trimMethods.includes(method))
+        name += trim >= maxTrim ? ", trim = 50% (majority judgment)" : `, trim = ${trim}%`;
       for (const [strategy, share] of Object.entries(applies)) {
         const others = applies[strategyOf[strategy]] > 0 ? "of the others " : "";
         if (share > 0) name += ` · ${Math.round(100 * share)}% ${others}${strategyPhrases[strategy]}`;
@@ -987,6 +995,7 @@
       levelsSlider.disabled = !scoreLevelMethods.includes(method);
       powerSlider.disabled = !scorePowerMethods.includes(method);
       tieWeightSlider.disabled = !tieWeightMethods.includes(method);
+      trimSlider.disabled = !trimMethods.includes(method);
       updateStrategies();
     }
 
@@ -1109,6 +1118,18 @@
       + "by their ordinal preference: 0 is STAR (they abstain), 1 is an ordinary pairwise runoff.";
     tieWeightSlider.addEventListener("input", () => { pickTieWeight(); compute(dragGrid); });
     tieWeightSlider.addEventListener("change", () => compute());
+    // The trim slider sets the trimmed mean between Score (0) and majority judgment (50).
+    trimMethods = config.trims;
+    maxTrim = config.max_trim;
+    Object.assign(trimSlider, { min: 0, max: maxTrim, step: config.trim_step, value: config.trim });
+    function pickTrim() {
+      trim = trimSlider.valueAsNumber;
+      trimValue.textContent = trim === 0 ? "0 (mean, Score)" : trim >= maxTrim ? "50 (median, MJ)" : `${trim}`;
+    }
+    trimSlider.title = "The percent of the voters of a candidate taken off each end, in the order of "
+      + "the score they give it, before the mean: 0 is Score, 50 majority judgment.";
+    trimSlider.addEventListener("input", () => { pickTrim(); compute(dragGrid); });
+    trimSlider.addEventListener("change", () => compute());
     // A slider for the share of the voters of each strategy, 0 at first: every voter sincere. Each
     // recomputes like the others.
     strategyPhrases = Object.fromEntries(config.strategies.map(({ name, phrase }) => [name, phrase]));
@@ -1175,6 +1196,7 @@
     pickSpreadPower();
     pickLevels();
     pickPower();
+    pickTrim();
     pickMethod(null);  // none yet: the categories and power sliders wait for Score
     updatePixelMedians();
     confineAll();  // the default pixels may be at geometric medians

@@ -2,7 +2,7 @@
 
 A score ballot has `levels` scores, 0 to levels - 1. A voter at v gives the closest
 candidate the top score and the farthest 0. Which score the others get depends on the
-distances r_i = |v - c_i|, in one of seven ways (`rule`):
+distances r_i = |v - c_i|, in one of eight ways (`rule`):
 
     RANGE   the score by where r_i is between the closest and the farthest, its part
             of the way to the power `power`, rounded to a whole score:
@@ -93,6 +93,12 @@ distances r_i = |v - c_i|, in one of seven ways (`rule`):
             closest candidates and a minus vote to the max_negative farthest of the
             others, every voter all of them; negative_after and the power do not count.
             With two levels it is the approval of the max_positive closest
+    COARSE  RANGE's ballot of FINE = 6 levels, 0 to 5, at the power `power`, counted
+            in `levels` groups of FINE / levels scores each: the score
+            floor(s * levels / FINE) of RANGE's s. levels divides FINE: 3 is the
+            groups 0-1, 2-3 and 4-5, and 2 the groups 0-2 and 3-5, the approval of
+            the scores 3 to 5, which is RANGE's approval ballot. The voter marks one
+            ballot of six scores, and only the count is coarser
 
 Nothing changes when all distances are scaled. With two levels every rule is an approval
 ballot: the voter approves the candidates with the top score, from the closest alone to
@@ -121,7 +127,8 @@ any number of levels, so as a part of the top score their advantage fades. HYBRI
 halves are the two halves of that part of the way.
 
 Borders. A RANGE score changes where its part of the way is half a score,
-r_max - r_i = ((k + 1/2) / (levels - 1))^(1 / power) * (r_max - r_min), an AVG score likewise with
+r_max - r_i = ((k + 1/2) / (levels - 1))^(1 / power) * (r_max - r_min), a COARSE score
+where its RANGE score of FINE levels changes from one group to the next, an AVG score likewise with
 rbar for one end of its part of the way; a DHONDT step moves where two gaps tie,
 (l + delta) (r_a - r_b) = (k + delta) (r_c - r_d). A HYBRID score changes where one of
 its DHONDT steps moves, with m for r_a or r_c at the gap to the midrange, where a
@@ -157,8 +164,10 @@ HYBRID = "hybrid"
 CLUSTER = "cluster"
 D21 = "d21"
 D21_ORDINAL = "d21_ordinal"
-Rule = Literal["range", "dhondt", "avg", "hybrid", "cluster", "d21", "d21_ordinal"]
-RULES: tuple[Rule, ...] = (RANGE, DHONDT, AVG, HYBRID, CLUSTER, D21, D21_ORDINAL)
+COARSE = "coarse"
+Rule = Literal["range", "dhondt", "avg", "hybrid", "cluster", "d21", "d21_ordinal", "coarse"]
+RULES: tuple[Rule, ...] = (RANGE, DHONDT, AVG, HYBRID, CLUSTER, D21, D21_ORDINAL, COARSE)
+FINE = 6  # of COARSE: the levels of the RANGE ballot it counts in groups
 BITS = 4  # of each candidate in the code of a ballot: its points below the top score
 MASK = (1 << BITS) - 1
 MAX_CANDIDATES = 63 // BITS  # a ballot is a code in an int64
@@ -199,6 +208,9 @@ def _check(rule, delta, mu=MU, kappa=KAPPA, power=POWER, votes=VOTES, levels=Non
         raise ValueError("votes must be whole numbers (max_positive, max_negative, negative_after) with "
                          f"max_positive >= 1, max_negative >= 0 and negative_after from 0 to max_positive, "
                          f"got {votes!r}")
+    if rule == COARSE and levels is not None and not (levels < FINE and FINE % levels == 0):
+        raise ValueError(f"a COARSE ballot counts the {FINE} scores of RANGE in groups of the same size: "
+                         f"its levels must divide {FINE} and be below it, got {levels}")
     if rule in (D21, D21_ORDINAL) and levels is not None and levels != (3 if votes[1] else 2):
         raise ValueError(f"a D21 ballot has {3 if votes[1] else 2} levels with {votes[1]} minus votes, "
                          f"got {levels}")
@@ -239,6 +251,8 @@ def from_distances(r, levels: int, rule: Rule = RANGE, delta: float = DELTA, *, 
     far = r.max(axis=-1, keepdims=True)
     span = far - r.min(axis=-1, keepdims=True)
     part = np.divide(far - r, span, out=np.ones_like(r), where=span > 0)
+    if rule == COARSE:
+        return np.rint(part ** power * (FINE - 1)).astype(np.int64) * levels // FINE
     return np.rint(part ** power * (levels - 1)).astype(np.int64)
 
 
@@ -519,6 +533,12 @@ def _ballot(x, y, candidates, top, rule, delta, mu, kappa, power, votes, r, orde
             else:
                 part = 0.0
             code |= (top - np.int64(np.rint(part * top))) << (BITS * c)
+    elif span > 0 and rule == 7:  # COARSE: RANGE's FINE levels in top + 1 groups
+        for c in range(n):
+            part = (far - r[c]) / span
+            if power != 1.0:
+                part = part ** power
+            code |= (top - np.int64(np.rint(part * (FINE - 1))) * (top + 1) // FINE) << (BITS * c)
     elif span > 0:
         for c in range(n):
             part = (far - r[c]) / span

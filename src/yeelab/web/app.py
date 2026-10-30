@@ -18,8 +18,8 @@ from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
-from yeelab.build import (D21, Bullet, Burial, Compromise, Score, ScoreComparisons, Winner)
-from yeelab.build.methods import FOUND, SCORE_POWER
+from yeelab.build import (D21, Bullet, Burial, Coarse, Compromise, Score, ScoreComparisons, Tally, Winner)
+from yeelab.build.methods import FOUND, SCORE_POWER, TRIM
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
 from yeelab.margin.metrics import borders, focus_outline, voronoi_agreement
@@ -64,12 +64,15 @@ MAX_LEVELS = 11
 MIN_POWER, MAX_POWER, POWER_STEP = 1.0, 2.0, 0.05
 TIE_WEIGHT = 0.0
 TIE_WEIGHT_STEP = 0.05
+# The trim slider of the trimmed means: the percent of the voters taken off each end,
+# from 0 (the mean, Score) to MAX_TRIM, where it is majority judgment (Tally's median).
+MAX_TRIM, TRIM_STEP = 50, 1
 
 
 def _score_ballots(block) -> list[Score]:
-    """Find Score and D21 ballots nested in a built method: the ballots with a power (an
-    ordinal D21 has none)."""
-    if type(block) is Score or (type(block) is D21 and not block.ordinal):
+    """Find Score, Coarse and D21 ballots nested in a built method: the ballots with a
+    power (an ordinal D21 has none)."""
+    if type(block) in (Score, Coarse) or (type(block) is D21 and not block.ordinal):
         return [block]
     if not is_dataclass(block):
         return []
@@ -81,7 +84,7 @@ def _score_ballot_settings(block, levels: int, power: float):
     """Replace adjustable Score settings while preserving fixed levels and block structure."""
     if type(block) is Score:
         return Score(block.levels if block.fixed else levels, power=power, fixed=block.fixed)
-    if type(block) is D21 and not block.ordinal:  # its levels follow from its votes
+    if type(block) is Coarse or (type(block) is D21 and not block.ordinal):  # fixed levels
         return replace(block, power=power)
     if not is_dataclass(block):
         return block
@@ -123,12 +126,42 @@ def _score_comparison_settings(block, tie_weight: float):
     return updated_block if changed else block
 
 
+def _trims(block) -> list[Tally]:
+    """Find the trimmed means (Tally with a trim) nested in a built method."""
+    if isinstance(block, Tally) and block.trim:
+        return [block]
+    if not is_dataclass(block):
+        return []
+    return [tally for field in fields(block) for tally in _trims(getattr(block, field.name))]
+
+
+def _trim_settings(block, trim: float):
+    """Replace the trim of the trimmed means while preserving the built method's
+    structure; MAX_TRIM is the median, majority judgment."""
+    if isinstance(block, Tally) and block.trim:
+        if trim >= MAX_TRIM:
+            return Tally(block.ballot, statistic="median")
+        return Tally(block.ballot, trim=trim)
+    if not is_dataclass(block):
+        return block
+    updated_block = copy(block)
+    changed = False
+    for field in fields(block):
+        value = getattr(block, field.name)
+        updated = _trim_settings(value, trim)
+        if updated is not value:
+            object.__setattr__(updated_block, field.name, updated)
+            changed = True
+    return updated_block if changed else block
+
+
 # Whether the UI sliders apply is derived from each method's built blocks.
 SCORE_METHODS = {name: _score_ballots(method) for name, method in MARGINS.items()}
 SCORE_METHODS = {name: ballots for name, ballots in SCORE_METHODS.items() if ballots}
 SCORE_COMPARISON_METHODS = {name: _score_comparisons(method) for name, method in MARGINS.items()}
 SCORE_COMPARISON_METHODS = {name: comparisons for name, comparisons in SCORE_COMPARISON_METHODS.items()
                             if comparisons}
+TRIM_METHODS = [name for name, method in MARGINS.items() if _trims(method)]
 SCORE_LEVEL_METHODS = [name for name, ballots in SCORE_METHODS.items()
                        if any(not ballot.fixed for ballot in ballots)]
 SCORE_POWER_METHODS = list(SCORE_METHODS)
@@ -267,6 +300,25 @@ METHOD_INFO = {
            "taken out and the medians of the rest compared, here a share of the voters at a "
            "time, since the voters of a pixel are a distribution. With two categories it is "
            "approval voting. The score categories and power use the same sliders as Score."},
+    "trimmed": {"label": "Trimmed mean", "description": "Trimmed mean: a voter scores every "
+                "candidate on the Score ballot. Of the voters of a candidate, in the order of the "
+                "score they give it, the trim slider's percent are taken off each end, and the "
+                "highest mean score of the rest wins: 0 is Score, 25 the interquartile mean, and "
+                "50 majority judgment, the median with its tie-break. The score categories and "
+                "power use the same sliders as Score."},
+    "coarse_3": {"label": "Score 6 → 3", "description": "The trimmed mean counted in three groups: "
+                 "a voter marks the Score ballot of 6 categories (scores 0 to 5), and the scores 0-1, "
+                 "2-3 and 4-5 count as 0, 1 and 2. The highest trimmed mean of the groups wins, as "
+                 "for Trimmed mean, by the same trim slider: 0 is the mean. The thresholds are those "
+                 "of the six scores, 0.3 and 0.7 of the way to the power p, not those of Score with "
+                 "3 categories (0.25 and 0.75). The power uses the same slider as Score; the "
+                 "categories are fixed."},
+    "coarse_2": {"label": "Score 6 → 2", "description": "The trimmed mean counted in two groups: a "
+                 "voter marks the Score ballot of 6 categories (scores 0 to 5), and the scores 3 to 5 "
+                 "count as an approval, which is Score's approval ballot of 2 categories. The highest "
+                 "trimmed mean of the approvals wins, by the same trim slider as Trimmed mean: at 0 "
+                 "it is approval voting. The power uses the same slider as Score; the categories are "
+                 "fixed."},
     "voronoi": {"label": "Voronoi", "description": "The nearest candidate to the pixel, without "
                 "voters: what the ranked methods draw when all voters are at their pixel. With "
                 "pixels at geometric medians it is drawn only where the voters above have one, "
@@ -362,6 +414,7 @@ class DiagramRequest(BaseModel):
     levels: int = Field(SCORE_LEVELS, ge=2, le=MAX_LEVELS)  # SCORES only
     power: float = Field(SCORE_POWER, ge=MIN_POWER, le=MAX_POWER)  # SCORES only
     tie_weight: float = Field(TIE_WEIGHT, ge=0, le=1)  # ScoreComparisons only
+    trim: float = Field(TRIM, ge=0, le=MAX_TRIM)  # trimmed means only
     # the share of the voters of each strategy (STRATEGIES), of those not voting by the ones before
     bullet: float = Field(0.0, ge=0, le=1)
     burial: float = Field(0.0, ge=0, le=1)
@@ -479,6 +532,10 @@ def config():
         "power_step": POWER_STEP,
         "tie_weight": TIE_WEIGHT,
         "tie_weight_step": TIE_WEIGHT_STEP,
+        "trims": TRIM_METHODS,
+        "trim": TRIM,
+        "max_trim": MAX_TRIM,
+        "trim_step": TRIM_STEP,
         # a slider for the share of the voters of each strategy, and the methods it cannot do
         "strategies": [{"name": name, **info} for name, info in STRATEGIES.items()],
         "unsupported": UNSUPPORTED,
@@ -503,7 +560,8 @@ def diagram_regions(request: DiagramRequest):
     spread = _spread_rule(request.spread_power) if request.distribution == "beta" else None
     model = Model(request.distribution, request.deviation, spread)
     if request.method in SCORE_METHODS or request.method in SCORE_COMPARISON_METHODS:
-        method = _score_ballot_settings(MARGINS[request.method], request.levels, request.power)
+        method = _trim_settings(MARGINS[request.method], request.trim)
+        method = _score_ballot_settings(method, request.levels, request.power)
         method = _score_comparison_settings(method, request.tie_weight)
     else:
         method = request.method

@@ -4,6 +4,7 @@ lists them (margin/regions.py MARGINS)."""
 from yeelab.build.blocks import (
     AntiPlurality,
     BordaCount,
+    Coarse,
     D21,
     DescendingCoalitions,
     Conditional,
@@ -49,6 +50,10 @@ score = Highest(Tally(score_ballot))
 # majority judgment on the same ballot: the highest median score, a tie of medians by
 # Balinski and Laraki's tie-break for the voters of a point as a distribution
 mj = Highest(Tally(score_ballot, statistic="median"))
+# the trimmed mean of the same ballot: the mean score of the voters left when TRIM % of
+# them are taken off each end, between score (0) and majority judgment (50)
+TRIM = 25  # the web UI's default
+trimmed = Highest(Tally(score_ballot, trim=TRIM))
 # STAR: the two highest mean scores, head to head on the scores of each ballot (equal
 # scores abstain by default); a tie is a draw
 star = Unbeaten(ScoreComparisons(score_ballot), among=Highest(Tally(score_ballot), n=2))
@@ -63,6 +68,11 @@ d21 = Highest(Tally(D21(max_positive=2, max_negative=1, negative_after=2, power=
 
 #-----------------------------------experimental methods, do not tests-----------------------------------
 TESTED = frozenset(globals())  # the names above the wall: the tests check only the methods among them
+
+# the highest trimmed mean of score_ballot's six scores counted in three groups (0-1, 2-3,
+# 4-5) and in two (0-2, 3-5): the same ballot, a coarser count (tests/test_coarse.py)
+coarse_3 = Highest(Tally(Coarse(3, power=SCORE_POWER), trim=TRIM))
+coarse_2 = Highest(Tally(Coarse(2, power=SCORE_POWER), trim=TRIM))
 
 # found by the search (search/, run 2026-10-26: 0.4 sincere + 0.6 burial by 30 %), best
 # three on its test set; the web UI lists them in a row of their own (FOUND). Each is a
@@ -159,32 +169,72 @@ new = Conditional(
 
 three_round = Eliminate(Tally(Plurality()), how="min", among=top3)
 
+
+score_ballot_2 = Score(2, power=SCORE_POWER, fixed=True)
+score_ballot_3 = Score(3, power=SCORE_POWER, fixed=True)
+score_ballot_4 = Score(4, power=SCORE_POWER, fixed=True)
+score_ballot_6 = Score(6, power=SCORE_POWER, fixed=True)
+
+score_2 = Highest(Tally(score_ballot_2))
+score_4 = Highest(Tally(score_ballot_4))
+score_6 = Highest(Tally(score_ballot_6))
+
+mj_3 = Highest(Tally(score_ballot_3, statistic="median"))
+mj_6 = Highest(Tally(score_ballot_6, statistic="median"))
+anti = Highest(Tally(AntiPlurality()))
+und =  Undecided()
+
 adhoc = Conditional(
-    fptp == score,
-    when_true=score,
-    when_false=Conditional(
-        two_round == score,
-        when_true=score,
-        when_false= Conditional(
-            score == koth,
-            when_true=koth,
-            when_false=Undecided()
-        )
-    )
+   fptp == score_6,
+   when_true=score_6,
+   when_false=Conditional(
+       two_round == score_6,
+       when_true=score_6,
+       when_false=Conditional(
+          fptp == score_4,
+          when_true=score_4,
+          when_false=Conditional(
+              two_round == score_4,
+              when_true=score_4,
+              when_false=Conditional(
+                  fptp == score_2,
+                  when_true=score_2,
+                  when_false=Conditional(
+                      two_round == score_2,
+                      when_true=score_2,
+                      when_false= Conditional(
+                        fptp == mj_6,
+                        when_true=mj_6,
+                        when_false=Conditional(
+                            two_round == mj_6,
+                            when_true=mj_6,
+                            when_false=Conditional(
+                                fptp == mj_3,
+                                when_true=mj_3,
+                                when_false=Undecided()
+                            )
+                        )
+                      )
+                  )
+              )
+          )
+       )
+   )
 )
 
+
 con_fptp = Conditional(
-    condorcet == fptp,
-    when_true=fptp,
-    when_false=Conditional(
-        condorcet == two_round,
-        when_true=two_round,
-        when_false = Conditional(
-            (condorcet == d20),
-            when_true = condorcet,
-            when_false=Undecided()
-        )
-    )
+     (Highest(Tally(Plurality()), n=2)) == (Highest(Tally(score_ballot), n=2)),
+     when_true=Unbeaten(ScoreComparisons(score_ballot), among=(Highest(Tally(Plurality()), n=2))),
+     when_false=Conditional(
+         two_round == score_6,
+         two_round,
+         Conditional(
+             (dac == koth)&(koth==mj),
+             dac,
+             und
+         )
+     ),
 )
 
 METHODS: dict[str, Winner] = {
@@ -206,6 +256,9 @@ METHODS: dict[str, Winner] = {
     "star_two_round": star_two_round,
     "system321": system321,
     "mj": mj,
+    "trimmed": trimmed,
+    "coarse_3": coarse_3,
+    "coarse_2": coarse_2,
     "d21": d21,
     "d20": d20,
     "smj_two": smj_two,

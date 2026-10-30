@@ -56,7 +56,7 @@ from yeelab.margin import shares as shares_module
 from yeelab.margin.shares import (GRID_CELLS, GRID_SUB, Model, ScoreGrid, _grid_lines, _voter_grid, ballots,
                                   buried_shares, first_choice_shares, graded_shares, pairwise_shares, raised_shares,
                                   ranking_shares, score_comparison_shares, unscored_shares)
-from yeelab.score import (AVG, BITS, BallotTable, CLUSTER, COMPARISONS, D21, D21_ORDINAL, DELTA, DHONDT, GIVEN,
+from yeelab.score import (AVG, BITS, BallotTable, CLUSTER, COARSE, COMPARISONS, D21, D21_ORDINAL, DELTA, DHONDT, GIVEN,
                           GRADES, HYBRID, KAPPA, MAX_CANDIDATES, MAX_LEVELS, MU, POWER, RAISED, RANGE, RULES, UNSCORED, VOTES,
                           ballot_table, comparisons, distances, from_distances, given, graded, moved_comparisons,
                           moved_grades, raised, scored, tabulate, unscored)
@@ -66,8 +66,8 @@ CANDIDATES = {2: np.random.default_rng(5).random((2, 2)), 3: np.random.default_r
               4: np.random.default_rng(6).random((4, 2)), 5: FIVE,
               6: np.random.default_rng(4).random((6, 2)), 7: np.random.default_rng(1).random((7, 2))}
 LEVELS = [2, 3, 6, 11, 16]
-# of any number of levels; D21's follow from its votes
-SCALES = [rule for rule in RULES if rule not in (D21, D21_ORDINAL)]
+# of any number of levels; D21's follow from its votes, and COARSE's are 2 or 3 (test_coarse.py)
+SCALES = [rule for rule in RULES if rule not in (D21, D21_ORDINAL, COARSE)]
 DELTAS = [0.5, DELTA, 1.0]  # the range of the UI's slider and its default
 MODELS = [Model("beta", 0.2, "rms"), Model("beta", 0.05, "rms"), Model("beta", 0.35, "mean_abs"),
           Model("normal", 0.2), Model("normal", 0.05)]
