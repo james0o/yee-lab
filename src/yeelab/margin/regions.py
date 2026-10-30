@@ -73,12 +73,14 @@ def grid(size: int, pixels: int):
     return coords, np.clip(coords, 0.5 / pixels, 1 - 0.5 / pixels)
 
 
-def voters(needs: frozenset[Share], candidates, model: Model, size: int) -> Voters:
+def voters(needs: frozenset[Share], candidates, model: Model, size: int | None = None, *,
+           medians=None) -> Voters:
     """The shares in `needs` (yeelab.build.voters) at the points of grid(size),
     computed at the nodes and interpolated (score shares: at the points themselves);
-    [i, j] is the point (coordinates[i], coordinates[j]). With Striped in `needs`, also
-    every other share of the voters of each strip (_strips)."""
-    medians = grid(size, model.pixels)[1]
+    [i, j] is the point (coordinates[i], coordinates[j]). With `medians` instead of a
+    size, at their points: [i, j] has the median (medians[i], medians[j]). With Striped
+    in `needs`, also every other share of the voters of each strip (_strips)."""
+    medians = grid(size, model.pixels)[1] if medians is None else np.asarray(medians, dtype=np.float64)
     striped = [share for share in needs if isinstance(share, Striped)]
     if len(striped) > 1:
         raise ValueError(f"the voters can be cut into strips across one direction only, not {striped}")

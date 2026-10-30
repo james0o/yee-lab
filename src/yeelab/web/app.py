@@ -8,7 +8,7 @@ import json
 import threading
 import time
 from copy import copy
-from dataclasses import fields, is_dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
@@ -24,6 +24,7 @@ from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
 from yeelab.margin.metrics import borders, focus_outline, voronoi_agreement
 from yeelab.margin.regions import MARGINS, diagram, regions, voronoi_borders
+from yeelab.margin.regions import voters as voters_at
 from yeelab.margin.shares import PIXELS, Model
 from yeelab.normal import sigma_from_deviation
 from yeelab.ranking_cells import SPREAD, beta_params
@@ -634,6 +635,69 @@ def voter_parameters(
 ):
     """Beta parameters for the pixel medians at the selected deviation and Lp power."""
     return Response(_voters_at(deviation, spread_power), media_type="application/json")
+
+
+# The coarse-trim chart of the hovered pixel: for each row, a method of the trim slider
+# with the categories it shows (the trimmed mean of Score always at 6), its winner at every
+# trim from 0 to MAX_TRIM by TRIM_STEP.
+TRIM_ROWS = (("coarse_2", 2), ("coarse_3", 3), ("trimmed", 6))
+assert all(name in TRIM_METHODS for name, _ in TRIM_ROWS)
+TRIMS = tuple(range(0, MAX_TRIM + 1, TRIM_STEP))
+
+
+@dataclass(frozen=True, eq=False)
+class _Side(Winner):
+    """The winners of several methods side by side, (..., M), on the same voters: the
+    strategies around it move the voters once for all of them. Its margin is inf, so
+    theirs is the poll's."""
+
+    methods: tuple[Winner, ...]
+
+    @property
+    def needs(self):
+        return frozenset().union(*(method.needs for method in self.methods))
+
+    def evaluate(self, voters):
+        winners = np.stack([method.evaluate(voters)[0] for method in self.methods], axis=-1)
+        return winners, np.full(voters.shape, np.inf)
+
+
+class TrimRequest(BaseModel):
+    candidates: list[tuple[Coordinate, Coordinate]] = Field(min_length=2, max_length=MAX_CANDIDATES)
+    median: tuple[Coordinate, Coordinate]  # of the voters of the hovered pixel
+    distribution: Distribution = "beta"
+    deviation: float = DEVIATION
+    spread_power: SpreadPower = SPREAD_POWER
+    power: float = Field(SCORE_POWER, ge=MIN_POWER, le=MAX_POWER)
+    bullet: float = Field(0.0, ge=0, le=1)
+    burial: float = Field(0.0, ge=0, le=1)
+    compromise: float = Field(0.0, ge=0, le=1)
+    tilt: float = Field(0.0, ge=0, le=MAX_TILT)
+
+    @field_validator("deviation")
+    @classmethod
+    def offered(cls, deviation: float) -> float:
+        return _offered(deviation)
+
+
+@app.post("/api/trims")
+def trim_winners(request: TrimRequest):
+    """The winner of each row of TRIM_ROWS at every trim of TRIMS for the voters with
+    the median `median`, sincere or strategic as the sliders say: {"trims": [...], "rows":
+    [{"name": ..., "levels": ..., "winners": [...]}], "ms": ...}. At MAX_TRIM a row is the
+    median, majority judgment on its ballot."""
+    start = time.perf_counter()
+    spread = _spread_rule(request.spread_power) if request.distribution == "beta" else None
+    model = Model(request.distribution, request.deviation, spread)
+    methods = [_score_ballot_settings(_trim_settings(MARGINS[name], trim), levels, request.power)
+               for name, levels in TRIM_ROWS for trim in TRIMS]
+    shares = {name: getattr(request, name) for name in STRATEGIES}
+    method = strategic(_Side(tuple(methods)), shares, request.tilt)
+    x, y = request.median
+    winners = method.evaluate(voters_at(method.needs, request.candidates, model, medians=[x, y]))[0][0, 1]
+    rows = [{"name": name, "levels": levels, "winners": winners[k * len(TRIMS):(k + 1) * len(TRIMS)].tolist()}
+            for k, (name, levels) in enumerate(TRIM_ROWS)]
+    return {"trims": list(TRIMS), "rows": rows, "ms": round(1000 * (time.perf_counter() - start), 1)}
 
 
 # Last, so that /api/... is matched first; "/" serves ui/index.html.

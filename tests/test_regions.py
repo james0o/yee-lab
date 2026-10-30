@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from matplotlib.path import Path as MplPath
 from scipy.spatial import Voronoi
 
-from yeelab.build import (D21, METHODS, AntiPlurality, Bullet, Burial, Conditional, Highest, Mix, Plurality, Score,
+from yeelab.build import (D21, METHODS, AntiPlurality, Bullet, Burial, Coarse, Conditional, Highest, Mix, Plurality, Score,
                           ScoreAvg, ScoreCluster, ScoreComparisons, ScoreDH, ScoreHybrid, Tally, Unbeaten)
 from yeelab.margin.metrics import (FOCUS_REACH, FOCUS_ROUND, OUTLINE_STEPS, borders, convex_hull, focus_hull,
                                    focus_outline, hull_distance, voronoi_agreement)
@@ -776,3 +776,28 @@ def test_api_builds_the_trimmed_mean_from_the_trim_slider():
     assert method["label"] == "Trimmed mean"
     assert method["description"].endswith("\nHighest(Tally(Score(6, power=1.5), trim=25))")
     assert shapes(burial=0.5) != shapes()
+
+
+def test_api_gives_the_winners_of_a_pixel_by_trim():
+    """Each row of TRIM_ROWS at every trim, the trimmed mean of the Score ballot counted in
+    2, 3 or 6 categories, at 50 its median, for the voters of one median, sincere or
+    strategic: the winner each method has there when it is evaluated alone."""
+    from yeelab.margin.regions import voters
+    from yeelab.web.app import TRIM_ROWS, TRIMS, strategic
+
+    client = TestClient(app)
+    median = [0.772, 0.552]
+    request = {"candidates": CANDIDATES.tolist(), "median": median, "power": 1.5}
+    for shares in ({}, {"burial": 0.3}):
+        answer = client.post("/api/trims", json={**request, **shares})
+        assert answer.status_code == 200
+        answer = answer.json()
+        assert answer["trims"] == list(TRIMS) == list(range(51))
+        assert [(row["name"], row["levels"]) for row in answer["rows"]] == list(TRIM_ROWS)
+        for row, ballot in zip(answer["rows"], (Coarse(2, power=1.5), Coarse(3, power=1.5), Score(6, power=1.5))):
+            for trim in (0, 10, 25, 49, 50):
+                method = Highest(Tally(ballot, trim=trim) if trim < 50 else Tally(ballot, statistic="median"))
+                method = strategic(method, shares, 0.0)
+                winner = method.evaluate(voters(method.needs, CANDIDATES.tolist(), MODELS[0], medians=median))[0]
+                assert row["winners"][trim] == winner[0, 1], (row["name"], trim, shares)
+    assert client.post("/api/trims", json={**request, "median": [1.2, 0.5]}).status_code == 422

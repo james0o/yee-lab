@@ -40,6 +40,10 @@
     #metrics .better { color: #2a7d2e; }
     #metrics .worse { color: #c62828; }
     .katex { font-size: 1.05em; }
+    /* the winners of the hovered pixel by trim and categories, under the square */
+    #trimChart { margin: .5rem 0 1rem; }
+    #trimChart[hidden] { display: none; }
+    #trimCanvas { width: 100%; max-width: 420px; aspect-ratio: 1; display: block; }
   </style>
 </head>
 <body>
@@ -48,6 +52,10 @@
     <div class="diagram">
       <div class="joint" id="joint">
         <canvas id="square" width="1000" height="1000"></canvas>
+      </div>
+      <div id="trimChart" hidden>
+        <canvas id="trimCanvas" width="600" height="600"></canvas>
+        <p id="trimText"></p>
       </div>
       <table id="metrics" title="Lower is better.">
         <thead><tr><th>Voronoi disagreement</th><th>Error</th><th id="compared"></th></tr></thead>
@@ -70,6 +78,7 @@
       <div class="choices"><span>Show voters:</span>
         <label><input type="checkbox" id="showMarginal">marginal distribution of x</label>
         <label><input type="checkbox" id="showJoint">joint distribution</label>
+        <label title="The winner at the hovered pixel by the trim (0 to 50, across) of the trimmed mean of the Score ballot counted in 2, 3 or 6 categories (Score 6 → 2, Score 6 → 3, Trimmed mean): its own square under the diagram."><input type="checkbox" id="showTrims">winners by trim</label>
       </div>
       <div class="choices"><span>Show on diagram:</span>
         <label><input type="checkbox" id="showBoundaries">diagram + Voronoi boundaries</label>
@@ -139,6 +148,10 @@
     const votersText = document.getElementById("voters");
     const showMarginal = document.getElementById("showMarginal");  // the strip above the square
     const showJoint = document.getElementById("showJoint");        // the shade over it while hovering
+    const showTrims = document.getElementById("showTrims");        // the winners by trim under it
+    const trimChart = document.getElementById("trimChart");
+    const trimCanvas = document.getElementById("trimCanvas");
+    const trimText = document.getElementById("trimText");
     const showBoundaries = document.getElementById("showBoundaries");
     const showFocus = document.getElementById("showFocus");
     // each curve is scaled so its peak sits at 1 / HEADROOM of the strip, whatever its height
@@ -708,6 +721,109 @@
         densityCanvas.getContext("2d").clearRect(0, 0, DENSITY_SIZE, DENSITY_SIZE);
       }
       draw();
+      updateTrims();
+    }
+
+    // The winners of the hovered pixel by trim, /api/trims: a row per number of categories of
+    // the Score ballot (2 and 3 counted from its 6, and 6 itself), the trim across, 0 to 50 by
+    // its step, and 50, majority judgment, a column apart. The voters vote as the strategy
+    // sliders say, in every row; the power is the slider's. One request at a time: a move
+    // while it is on its way only asks for the newest pixel once it is back. Not while a
+    // candidate is dragged: the drop asks again.
+    let trimAnswer = null;   // {key, pixel, trims, rows, ms} of the chart shown
+    let trimWanted = null;   // {key, pixel} to ask for once the request on its way is back
+    let trimInFlight = false;
+    const trimKey = pixel => JSON.stringify([candidates, distribution, deviation, spreadPower, power, shares,
+                                             tilt, pixel]);
+
+    function updateTrims() {
+      trimChart.hidden = !showTrims.checked;
+      if (!showTrims.checked || dragged !== -1 || !pixels || !(voterKey() in voters)) return;
+      const pixel = pixelAt(hovered);
+      if (!pixel || candidates.length < 2) return;
+      const key = trimKey(pixel);
+      if (trimAnswer?.key === key) return;
+      trimWanted = { key, pixel };
+      if (!trimInFlight) askTrims();
+    }
+
+    async function askTrims() {
+      const { key, pixel } = trimWanted;
+      trimWanted = null;
+      trimInFlight = true;
+      try {
+        const response = await fetch("/api/trims", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            candidates, median: pixel.map(k => (k + 0.5) / pixels), distribution, deviation,
+            spread_power: spreadPower, power, ...shares, tilt,
+          }),
+        });
+        if (!response.ok) throw new Error(await response.text());
+        trimAnswer = { key, pixel, ...(await response.json()) };
+        drawTrims();
+      } catch (error) {
+        trimText.textContent = `Error: ${error.message}`;
+      }
+      trimInFlight = false;
+      if (trimWanted) askTrims();
+    }
+
+    const TRIM_FONT = "22px system-ui, sans-serif";
+    function drawTrims() {
+      if (!trimAnswer) return;
+      const ctx = trimCanvas.getContext("2d");
+      const [width, height] = [trimCanvas.width, trimCanvas.height];
+      const [left, right, top, bottom] = [56, 40, 12, 64];  // canvas px around the plot
+      const { trims, rows, pixel, ms } = trimAnswer;
+      const last = trims.length - 1;  // 50: majority judgment, a column apart
+      const gap = 10;
+      const cell = (width - left - right - gap) / trims.length;
+      const band = (height - top - bottom) / rows.length;
+      const at = k => left + k * cell + (k === last ? gap : 0);  // left edge of the column of trims[k]
+      ctx.clearRect(0, 0, width, height);
+      ctx.font = TRIM_FONT;
+      ctx.fillStyle = "#666";
+      ctx.textBaseline = "middle";
+      ctx.textAlign = "right";
+      rows.forEach((row, r) => {
+        const y = top + (rows.length - 1 - r) * band;  // the first row at the bottom
+        row.winners.forEach((winner, k) => {
+          ctx.fillStyle = COLORS[colorOf[winner]] ?? "#000";  // winner -1: no one
+          // a hair wider, so that neighbouring columns of a colour meet without a seam
+          ctx.fillRect(at(k), y + 3, cell + (k < last - 1 ? 0.6 : 0), band - 6);
+        });
+        ctx.fillStyle = "#666";
+        ctx.fillText(String(row.levels), left - 12, y + band / 2);
+      });
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      const bottomEdge = height - bottom;
+      for (const t of [0, 10, 20, 30, 40, 50]) {
+        const k = trims.indexOf(t);
+        if (k < 0) continue;
+        const x = at(k) + cell / 2;
+        ctx.fillRect(x - 1, bottomEdge, 2, 8);
+        ctx.fillText(t === trims[last] ? `${t} MJ` : String(t), x, bottomEdge + 12);
+      }
+      ctx.fillText("trim %", left + (width - left - right) / 2, bottomEdge + 38);
+      // the trim slider's value
+      const k = trims.indexOf(trim);
+      if (k >= 0) {
+        const x = at(k) + cell / 2;
+        ctx.strokeStyle = "#222";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 5]);
+        ctx.beginPath();
+        ctx.moveTo(x, top);
+        ctx.lineTo(x, bottomEdge);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      const median = pixel.map(k => ((k + 0.5) / pixels).toFixed(3)).join(", ");
+      trimText.textContent = `Winners for the voters with median (${median}), by trim; rows: the Score ballot `
+        + `of 6 counted in 2, 3 and 6 categories · ${ms} ms`;
     }
 
     // Place the square and the strip so that the strip's 0 and 1 line up with the square's edges.
@@ -731,6 +847,7 @@
     }
     new ResizeObserver(layout).observe(joint);
     showMarginal.addEventListener("change", layout);
+    showTrims.addEventListener("change", updateTrims);
     showJoint.addEventListener("change", () => {
       if (!showJoint.checked) showDensity = false;  // checking it again shows it from the next move
       draw();
@@ -766,6 +883,7 @@
     // on its way, only remember that another is needed: it is asked for as soon as the answer is
     // back, with the candidates as they are then, so a drag shows the newest positions it can.
     function compute(grid = finalGrid) {
+      updateTrims();  // the hovered pixel's winners by trim, for the candidates and sliders as they are
       if (!method) return;
       if (candidates.length < 2) {
         message.textContent = "Add at least 2 candidates.";
@@ -1125,6 +1243,7 @@
     function pickTrim() {
       trim = trimSlider.valueAsNumber;
       trimValue.textContent = trim === 0 ? "0 (mean, Score)" : trim >= maxTrim ? "50 (median, MJ)" : `${trim}`;
+      drawTrims();  // its line
     }
     trimSlider.title = "The percent of the voters of a candidate taken off each end, in the order of "
       + "the score they give it, before the mean: 0 is Score, 50 majority judgment.";

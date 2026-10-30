@@ -156,6 +156,7 @@ smj_fin = Conditional(
     when_false=score
 
 )
+und = Undecided()
 smj_two = Unbeaten(ScoreComparisons(score_ballot), among= smj_fin | two_round)
 new = Conditional(
     (Highest(Tally(Plurality()), n=2)) == (Highest(Tally(score_ballot), n=2)),
@@ -163,8 +164,20 @@ new = Conditional(
     when_false = Conditional(
         (score == fptp) & (score == condorcet),
         when_true=score,
-        when_false=Undecided()
+        when_false=Conditional(
+            trimmed == two_round,
+            two_round,
+            und
+        )
     )
+)
+
+
+
+exp =  Conditional(
+    (coarse_2 == coarse_3) & (coarse_3 == trimmed) & (score == trimmed)&(score==two_round),
+    trimmed,
+    und
 )
 
 three_round = Eliminate(Tally(Plurality()), how="min", among=top3)
@@ -232,7 +245,7 @@ con_fptp = Conditional(
          Conditional(
              (dac == koth)&(koth==mj),
              dac,
-             und
+             exp
          )
      ),
 )
@@ -264,6 +277,7 @@ METHODS: dict[str, Winner] = {
     "smj_two": smj_two,
     "new": new,
     "adhoc": adhoc,
+    'exp': exp,
     "con_fptp": con_fptp,
     "search_1": search_1,
     "search_2": search_2,
