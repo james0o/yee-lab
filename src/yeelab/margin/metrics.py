@@ -3,6 +3,8 @@
 import numpy as np
 from scipy.spatial import QhullError, Voronoi
 
+from yeelab.voting import CYCLE, drawn
+
 # The metrics average over the focus region (focus_distance): the points within FOCUS_ROUND
 # deviations of the hull of the candidates and of the Voronoi vertices that are within
 # FOCUS_REACH deviations of that hull.
@@ -26,15 +28,18 @@ def _area_weights(points):
 def _losses(candidates, points, assigned, scale):
     """(loss of the assigned candidate, mean loss of all candidates, decided) at each point:
     the loss of a candidate is r / (r + L), r how much farther it is from the point than the
-    nearest one, L the median distance between two candidates. decided is False where no
-    candidate is assigned (a Condorcet cycle, Undecided): there the loss is undefined."""
+    nearest one, L the median distance between two candidates. A draw (voting.draw) is a
+    candidate drawn at random among its own: the mean loss of them. decided is False where
+    no candidate is assigned (a Condorcet cycle, Undecided): there the loss is undefined."""
     distances = np.linalg.norm(points[..., None, :] - candidates, axis=-1)
     regrets = distances - distances.min(axis=-1, keepdims=True)
     every = regrets / (regrets + scale)
-    valid = (assigned >= 0) & (assigned < len(candidates))
-    loss = np.full(assigned.shape, np.nan)
-    rows, columns = np.nonzero(valid)
-    loss[rows, columns] = every[rows, columns, assigned[rows, columns]]
+    assigned = np.where(assigned < len(candidates), assigned, CYCLE)
+    chosen = drawn(assigned, len(candidates))
+    count = chosen.sum(axis=-1)
+    valid = count > 0
+    with np.errstate(invalid="ignore"):
+        loss = np.where(valid, (every * chosen).sum(axis=-1) / count, np.nan)
     return loss, every.mean(axis=-1), valid
 
 
@@ -143,7 +148,8 @@ def voronoi_agreement(candidates, points, winner, deviation, cycles="skip"):
     {"error": e, "random": e_random, "relative": sqrt(e / e_random)}, e the mean loss of the
     winners (_losses) and e_random that of a candidate drawn at random at every point, both
     over the decided points only: a cycle (Undecided) is no result, so its points are left out
-    of the diagram, as if they were not part of it. The scores are None where nothing is
+    of the diagram, as if they were not part of it; a draw is a candidate drawn at random
+    among those of the draw (_losses). The scores are None where nothing is
     decided in the area. relative is 0 where the nearest candidate wins everywhere and 1 for
     no better than chance, the square root stretching the small errors; it depends on the
     candidates less than e does, and e_random > 0 for two candidates or more. All three in

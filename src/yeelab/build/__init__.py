@@ -41,6 +41,9 @@
     mj    = Highest(Tally(ballot, statistic="median"))
     # the mean score of the voters left when 25% are taken off each end: between the two
     iqm   = Highest(Tally(ballot, trim=25))
+    # the same, but where the trimmed means tie exactly (the same median, no threshold
+    # inside the trim) a draw among them (voting.draw), not the highest mean
+    Drawn(Tally(ballot, trim=40))
     star  = Unbeaten(ScoreComparisons(ballot), among=Highest(Tally(ballot), n=2))
     smith_score = Highest(Tally(ballot), among=Smith(M))  # the highest mean score in the Smith set
     # any of them where 30% of the voters bullet vote: their first choice first and all
@@ -82,6 +85,7 @@ from yeelab.build.blocks import (
     Coarse,
     D21,
     DescendingCoalitions,
+    Drawn,
     Eliminate,
     Conditional,
     Highest,
@@ -116,7 +120,7 @@ from yeelab.build.voters import (FIRST, PAIRWISE, PROFILE, Ballots, Graded, Scor
 
 __all__ = [
     "AntiPlurality", "Ballot", "Ballots", "BordaCount", "Bullet", "Burial", "CandidateTotals", "Coarse", "Compromise",
-    "D21", "DescendingCoalitions",
+    "D21", "DescendingCoalitions", "Drawn",
     "Conditional", "Eliminate", "Highest", "Lead", "Margins", "Measure", "Mix", "PairDiffs", "PairShares",
     "Pairwise", "Plurality", "Score", "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH",
     "ScoreHybrid", "Smith", "StrongestPaths", "Tally", "Top", "Unbeaten", "Undecided", "Union", "Weakest",

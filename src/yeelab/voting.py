@@ -14,6 +14,22 @@ CYCLE = -1  # winner where there is no Condorcet winner
 CHUNK = 4096  # points per task of the compiled loop (threads.py)
 
 
+# A draw among several candidates is a winner too: -1 - m, m the bits of the candidates
+# (1 << c), at most -4 for two or more. A draw among no one, m = 0, is CYCLE.
+def draw(chosen: np.ndarray) -> np.ndarray:
+    """The winner of a draw among the candidates marked in chosen (..., C)."""
+    return -1 - (chosen.astype(np.int64) << np.arange(chosen.shape[-1])).sum(axis=-1)
+
+
+def drawn(winner: np.ndarray, n_candidates: int) -> np.ndarray:
+    """The candidates (..., C) of the winners, a draw among several or one: for a
+    candidate c only c, for CYCLE no one."""
+    winner = np.asarray(winner)
+    bits = np.where(winner < CYCLE, -1 - winner, 0)
+    one = winner[..., None] == np.arange(n_candidates)
+    return one | ((bits[..., None] >> np.arange(n_candidates)) & 1).astype(bool)
+
+
 @njit(cache=True, nogil=True, error_model="numpy")
 def _irv_points(rankings, probs, bullet, winner, margin):
     """irv_rounds for probs (P, R) and bullet (P, C), or (P, 0) for none, into winner

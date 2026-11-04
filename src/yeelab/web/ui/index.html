@@ -40,10 +40,12 @@
     #metrics .better { color: #2a7d2e; }
     #metrics .worse { color: #c62828; }
     .katex { font-size: 1.05em; }
-    /* the winners of the hovered pixel by trim and categories, under the square */
-    #trimChart { margin: .5rem 0 1rem; }
+    /* the winners of the hovered pixel by trim and categories: to the lower right of the pointer
+       while hovering the square, placed by placeTrims(); the pointer goes through it, to the candidates */
+    #trimChart { pointer-events: none; background: rgba(255, 255, 255, .9); border: 1px solid #bbb; border-radius: 4px; }
     #trimChart[hidden] { display: none; }
-    #trimCanvas { width: 100%; max-width: 420px; aspect-ratio: 1; display: block; }
+    #trimCanvas { width: 100%; height: 100%; display: block; }
+    #trimText[hidden] { display: none; }
   </style>
 </head>
 <body>
@@ -52,11 +54,9 @@
     <div class="diagram">
       <div class="joint" id="joint">
         <canvas id="square" width="1000" height="1000"></canvas>
+        <div id="trimChart" hidden><canvas id="trimCanvas" width="600" height="600"></canvas></div>
       </div>
-      <div id="trimChart" hidden>
-        <canvas id="trimCanvas" width="600" height="600"></canvas>
-        <p id="trimText"></p>
-      </div>
+      <p id="trimText" hidden></p>
       <table id="metrics" title="Lower is better.">
         <thead><tr><th>Voronoi disagreement</th><th>Error</th><th id="compared"></th></tr></thead>
         <tbody>
@@ -66,7 +66,7 @@
       </table>
       <details class="metric-help">
         <summary>How the metrics are calculated</summary>
-        <p>At every point x of the diagram, let d<sub>min</sub>(x) be the distance to the nearest candidate, d<sub>a</sub>(x) the distance to the candidate the method elects, r(x) = d<sub>a</sub>(x) − d<sub>min</sub>(x), and L the median distance between two candidates. The loss is ℓ(x) = r(x)/(r(x)+L): 0 where the nearest candidate wins, near 1 where a far one does. Points where no candidate wins (a Condorcet cycle) are no result and are left out.</p>
+        <p>At every point x of the diagram, let d<sub>min</sub>(x) be the distance to the nearest candidate, d<sub>a</sub>(x) the distance to the candidate the method elects, r(x) = d<sub>a</sub>(x) − d<sub>min</sub>(x), and L the median distance between two candidates. The loss is ℓ(x) = r(x)/(r(x)+L): 0 where the nearest candidate wins, near 1 where a far one does. Points where no candidate wins (a Condorcet cycle) are no result and are left out. A draw (“show draws”) is a candidate drawn at random among those of the draw: the mean of their losses.</p>
         <p>The error e is the mean of ℓ over an area, and e<sub>random</sub> the same for a candidate drawn at random at every point (the mean of ℓ over the candidates). The table shows √(e / e<sub>random</sub>): 0% where the nearest candidate wins everywhere, 100% for no better than chance. It does so twice, with the same formula over two areas: the whole diagram, and the region around the candidates (dashed outline, “metrics region” under “Show on diagram”): the convex hull of the candidates and of the Voronoi vertices near them (where three cells or more meet), with a margin of a quarter of the deviation around it. Far from every candidate all methods agree, and those points dilute the whole-diagram error.</p>
         <p>The error is computed once a candidate is dropped or a slider let go, not while dragging (—).</p>
         <p>After switching to another method, the last column shows how many times smaller (green, ↓) or larger (red, ↑) the error e is than with the method shown before, for the same candidates and voters.</p>
@@ -78,7 +78,7 @@
       <div class="choices"><span>Show voters:</span>
         <label><input type="checkbox" id="showMarginal">marginal distribution of x</label>
         <label><input type="checkbox" id="showJoint">joint distribution</label>
-        <label title="The winner at the hovered pixel by the trim (0 to 50, across) of the trimmed mean of the Score ballot counted in 2, 3 or 6 categories (Score 6 → 2, Score 6 → 3, Trimmed mean): its own square under the diagram."><input type="checkbox" id="showTrims">winners by trim</label>
+        <label title="The winner at the hovered pixel by the trim (0 to 50, across) of the trimmed mean of the Score ballot counted in 2, 3 or 6 categories (Score 6 → 2, Score 6 → 3, Trimmed mean): a chart to the lower right of the pointer's crosshair while hovering the diagram."><input type="checkbox" id="showTrims">winners by trim</label>
       </div>
       <div class="choices"><span>Show on diagram:</span>
         <label><input type="checkbox" id="showBoundaries">diagram + Voronoi boundaries</label>
@@ -92,7 +92,8 @@
       <div class="choices"><span>Score categories:</span><input type="range" id="levels" min="2" step="1"><output id="levelsValue"></output></div>
       <div class="choices"><span>Score power p:</span><input type="range" id="power"><output id="powerValue"></output></div>
       <div class="choices"><span>Runoff tie weight:</span><input type="range" id="tieWeight"><output id="tieWeightValue"></output></div>
-      <div class="choices"><span>Trim %:</span><input type="range" id="trim"><output id="trimValue"></output></div>
+      <div class="choices"><span>Trim %:</span><input type="range" id="trim"><output id="trimValue"></output>
+        <label title="Where the trimmed means of two or more candidates are exactly equal, a draw among them, hatched in their colours, instead of breaking the tie by the mean. They tie where they have the same median score and none of their voters is within the trim between two scores, which over whole areas towards a trim of 50. For Trimmed mean, Score 6 → 3 and Score 6 → 2, and in the winners-by-trim chart; not at 50, majority judgment, which has a tie-break of its own."><input type="checkbox" id="showDraws">show draws</label></div>
       <div id="strategies"></div>
       <div class="choices" id="ideals"><span>Ideal scenario:</span></div>
       <p>Drag a candidate to move it · click empty space to add one · right-click to remove</p>
@@ -143,6 +144,7 @@
     const tieWeightValue = document.getElementById("tieWeightValue");
     const trimSlider = document.getElementById("trim");
     const trimValue = document.getElementById("trimValue");
+    const showDraws = document.getElementById("showDraws");  // exact ties of the trimmed means as draws
     const strategies = document.getElementById("strategies");  // a row with a slider per strategy
     const joint = document.getElementById("joint");
     const votersText = document.getElementById("voters");
@@ -215,6 +217,7 @@
     let trimMethods = [];    // methods with a trimmed mean of the scores
     let trim = 0;            // the percent of the voters it takes off each end; maxTrim is the median
     let maxTrim = 50;
+    let drawMethods = [];    // methods that show the draws of their trimmed means, with showDraws
     let shares = {};         // strategy name -> the share of the voters who vote by it, from 0 to 1,
                              // of those who vote by none of the strategies above it
     let strategyPhrases = {}; // strategy name -> what the status line says of it
@@ -351,6 +354,54 @@
       colorOf = bestColors;
     }
 
+    // The candidates a winner of the backend elects: c itself, none for -1 (a Condorcet cycle), and
+    // for a draw, below -1, those of the bits of -1 - winner.
+    function elected(winner) {
+      if (winner >= 0) return [winner];
+      const bits = -1 - winner;
+      return candidates.map((_, c) => c).filter(c => (bits >> c) & 1);
+    }
+
+    // What a winner is filled with: its candidate's colour, black for no one, and for a draw
+    // diagonal stripes of the colours of its candidates in turn, each `stripe` canvas px wide
+    // along x. A pattern is made once per context and colours; `matrix` maps canvas px to the
+    // context's units (the diagram draws in the unit square).
+    function fillOf(context, winner, stripe, matrix = null) {
+      const chosen = elected(winner);
+      if (chosen.length < 2) return COLORS[colorOf[chosen[0]]] ?? "#000";
+      const colors = chosen.map(c => COLORS[colorOf[c]] ?? "#000");
+      const key = `${colors.join()}:${stripe}`;
+      context.hatches ??= new Map();
+      if (!context.hatches.has(key)) {
+        const size = colors.length * stripe;  // x + y repeats every size px: the tile is seamless
+        const rgb = colors.map(hex => [1, 3, 5].map(k => parseInt(hex.slice(k, k + 2), 16)));
+        const tile = document.createElement("canvas");
+        tile.width = tile.height = size;
+        const image = new ImageData(size, size);
+        const SUB = 4;  // samples per px along each axis, for smooth edges
+        for (let y = 0; y < size; y++) {
+          for (let x = 0; x < size; x++) {
+            const sum = [0, 0, 0];
+            for (let i = 0; i < SUB; i++) {
+              for (let j = 0; j < SUB; j++) {
+                const along = (x + (i + 0.5) / SUB + y + (j + 0.5) / SUB) % size;
+                rgb[Math.floor(along / stripe)].forEach((v, k) => { sum[k] += v; });
+              }
+            }
+            image.data.set([...sum.map(v => v / SUB ** 2), 255], 4 * (y * size + x));
+          }
+        }
+        tile.getContext("2d").putImageData(image, 0, 0);
+        const pattern = context.createPattern(tile, "repeat");
+        if (matrix) pattern.setTransform(matrix);
+        context.hatches.set(key, pattern);
+      }
+      return context.hatches.get(key);
+    }
+    // canvas px to the unit square (y up), as draw() draws the diagram
+    const UNIT = () => new DOMMatrix([1 / canvas.width, 0, 0, -1 / canvas.height, 0, 1]);
+    const STRIPE = 20, TRIM_STRIPE = 14;  // canvas px of a stripe of a draw: the diagram, the chart
+
     function pathOfBoundaries(regions) {
       const path = new Path2D();
       const segments = new Map();
@@ -412,7 +463,8 @@
         ctx.lineWidth = 1.5 / canvas.width;
         ctx.lineJoin = "round";
         for (const { winner, path } of regions) {
-          ctx.fillStyle = ctx.strokeStyle = COLORS[colorOf[winner]] ?? "#000";  // winner -1: Condorcet cycle
+          // winner -1: Condorcet cycle, black; below: a draw, hatched
+          ctx.fillStyle = ctx.strokeStyle = fillOf(ctx, winner, STRIPE, UNIT());
           ctx.fill(path, "evenodd");  // holes are further rings; even-odd ignores their orientation
           ctx.stroke(path);
         }
@@ -733,12 +785,35 @@
     let trimAnswer = null;   // {key, pixel, trims, rows, ms} of the chart shown
     let trimWanted = null;   // {key, pixel} to ask for once the request on its way is back
     let trimInFlight = false;
+    let overSquare = false;  // the pointer is over the square
+    let squareBox = null;    // {left, top, side} of the square in the joint box, from layout()
     const trimKey = pixel => JSON.stringify([candidates, distribution, deviation, spreadPower, power, shares,
-                                             tilt, pixel]);
+                                             tilt, showDraws.checked, pixel]);
+
+    // The chart follows the pointer, to the lower right of its crosshair; to the left of it where
+    // it would leave the square on the right, and above it where it would leave it below. The
+    // pointer goes through it, to the candidates.
+    function placeTrims() {
+      if (!squareBox) return;
+      const { left, top, side } = squareBox;
+      const size = 0.38 * side, offset = 16;  // CSS px between the crosshair and the chart
+      const [x, y] = hovered;  // y points up
+      const px = left + x * side, py = top + (1 - y) * side;
+      const right = px + offset + size <= left + side;
+      const below = py + offset + size <= top + side;
+      Object.assign(trimChart.style, {
+        left: `${right ? px + offset : px - offset - size}px`,
+        top: `${below ? py + offset : py - offset - size}px`,
+        width: `${size}px`, height: `${size}px`,
+      });
+    }
 
     function updateTrims() {
-      trimChart.hidden = !showTrims.checked;
-      if (!showTrims.checked || dragged !== -1 || !pixels || !(voterKey() in voters)) return;
+      const shown = showTrims.checked && overSquare && dragged === -1;
+      trimChart.hidden = !shown;
+      trimText.hidden = !shown;
+      if (!shown || !pixels || !(voterKey() in voters)) return;
+      placeTrims();
       const pixel = pixelAt(hovered);
       if (!pixel || candidates.length < 2) return;
       const key = trimKey(pixel);
@@ -757,7 +832,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             candidates, median: pixel.map(k => (k + 0.5) / pixels), distribution, deviation,
-            spread_power: spreadPower, power, ...shares, tilt,
+            spread_power: spreadPower, power, ...shares, tilt, draws: showDraws.checked,
           }),
         });
         if (!response.ok) throw new Error(await response.text());
@@ -770,12 +845,12 @@
       if (trimWanted) askTrims();
     }
 
-    const TRIM_FONT = "22px system-ui, sans-serif";
+    const TRIM_FONT = "32px system-ui, sans-serif";
     function drawTrims() {
       if (!trimAnswer) return;
       const ctx = trimCanvas.getContext("2d");
       const [width, height] = [trimCanvas.width, trimCanvas.height];
-      const [left, right, top, bottom] = [56, 40, 12, 64];  // canvas px around the plot
+      const [left, right, top, bottom] = [64, 60, 16, 100];  // canvas px around the plot
       const { trims, rows, pixel, ms } = trimAnswer;
       const last = trims.length - 1;  // 50: majority judgment, a column apart
       const gap = 10;
@@ -790,12 +865,12 @@
       rows.forEach((row, r) => {
         const y = top + (rows.length - 1 - r) * band;  // the first row at the bottom
         row.winners.forEach((winner, k) => {
-          ctx.fillStyle = COLORS[colorOf[winner]] ?? "#000";  // winner -1: no one
+          ctx.fillStyle = fillOf(ctx, winner, TRIM_STRIPE);  // winner -1: no one; below: a draw, hatched
           // a hair wider, so that neighbouring columns of a colour meet without a seam
           ctx.fillRect(at(k), y + 3, cell + (k < last - 1 ? 0.6 : 0), band - 6);
         });
         ctx.fillStyle = "#666";
-        ctx.fillText(String(row.levels), left - 12, y + band / 2);
+        ctx.fillText(String(row.levels), left - 14, y + band / 2);
       });
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
@@ -804,17 +879,17 @@
         const k = trims.indexOf(t);
         if (k < 0) continue;
         const x = at(k) + cell / 2;
-        ctx.fillRect(x - 1, bottomEdge, 2, 8);
-        ctx.fillText(t === trims[last] ? `${t} MJ` : String(t), x, bottomEdge + 12);
+        ctx.fillRect(x - 1.5, bottomEdge, 3, 10);
+        ctx.fillText(t === trims[last] ? `${t} MJ` : String(t), x, bottomEdge + 16);
       }
-      ctx.fillText("trim %", left + (width - left - right) / 2, bottomEdge + 38);
+      ctx.fillText("trim %", left + (width - left - right) / 2, bottomEdge + 58);
       // the trim slider's value
       const k = trims.indexOf(trim);
       if (k >= 0) {
         const x = at(k) + cell / 2;
         ctx.strokeStyle = "#222";
-        ctx.lineWidth = 2;
-        ctx.setLineDash([6, 5]);
+        ctx.lineWidth = 3;
+        ctx.setLineDash([9, 7]);
         ctx.beginPath();
         ctx.moveTo(x, top);
         ctx.lineTo(x, bottomEdge);
@@ -822,8 +897,9 @@
         ctx.setLineDash([]);
       }
       const median = pixel.map(k => ((k + 0.5) / pixels).toFixed(3)).join(", ");
+      const draws = rows.some(row => row.winners.some(winner => winner < -1)) ? " · hatched: a draw" : "";
       trimText.textContent = `Winners for the voters with median (${median}), by trim; rows: the Score ballot `
-        + `of 6 counted in 2, 3 and 6 categories · ${ms} ms`;
+        + `of 6 counted in 2, 3 and 6 categories${draws} · ${ms} ms`;
     }
 
     // Place the square and the strip so that the strip's 0 and 1 line up with the square's edges.
@@ -840,6 +916,8 @@
       const place = (element, left, top, width, height) =>
         Object.assign(element.style, { left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
       place(canvas, gap, top + gap, side, side);
+      squareBox = { left: gap, top: top + gap, side };
+      placeTrims();
       place(densityCanvas, 0, top, span, span);
       place(stripX.plot.root, 0, 0, span, thick);
       stripX.plot.setSize({ width: span, height: thick });
@@ -848,6 +926,7 @@
     new ResizeObserver(layout).observe(joint);
     showMarginal.addEventListener("change", layout);
     showTrims.addEventListener("change", updateTrims);
+    showDraws.addEventListener("change", () => compute());  // the diagram, if its method has draws, and the chart
     showJoint.addEventListener("change", () => {
       if (!showJoint.checked) showDensity = false;  // checking it again shows it from the next move
       draw();
@@ -872,7 +951,10 @@
     // other settings (or to a candidate added or removed since, whose colours shifted) is not drawn;
     // one to an older slider value is, so sliding it shows the newest diagram it can, like a drag.
     const settings = () => JSON.stringify([method, distribution, pixelMedian, candidates.length, tieWeight,
-                                           trim, deviation, spreadPower]);
+                                           trim, drawn(), deviation, spreadPower]);
+
+    // Whether the diagram shows the draws of the trimmed means: only a method that has them.
+    const drawn = () => showDraws.checked && drawMethods.includes(method);
 
     // The shares of the strategies that apply to the method: none in the Voronoi diagram,
     // which has no election, nor in a method a strategy cannot do.
@@ -907,8 +989,9 @@
       const part = shift();
       const asked = settings(), sliders = [deviation, levels, power, tieWeight, applied(), trim, spreadPower];
       const leaning = tilt;
+      const draws = drawn();
       const key = JSON.stringify([candidates, distribution, deviation, spreadPower, levels, power,
-                                  tieWeight, trim, shares, leaning, part]);
+                                  tieWeight, trim, draws, shares, leaning, part]);
       if (grid === finalGrid) message.textContent = `Computing ${labels[method]}…`;
       const start = performance.now();
       try {
@@ -917,7 +1000,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             candidates, method, distribution, deviation, spread_power: spreadPower, levels, power,
-            tie_weight: tieWeight, trim, ...sliders[4], tilt: leaning, grid,
+            tie_weight: tieWeight, trim, draws, ...sliders[4], tilt: leaning, grid,
             pixel_median: part > 0 ? "geometric" : "marginal", shift: part,
             metrics: measured, overlay: measured || showBoundaries.checked,
           }),
@@ -932,7 +1015,8 @@
           focusOutline = answer.overlays.focus;
           boundaryPath = null;
           draw();
-          describe(...sliders.slice(0, 6), Math.round(performance.now() - start), Math.round(answer.ms), leaning);
+          describe(...sliders.slice(0, 6), Math.round(performance.now() - start), Math.round(answer.ms), leaning,
+                   draws);
           let errors = null;  // a coarse drag has none, and is not compared
           if (measured) {
             errors = [answer.metrics.diagram.relative, answer.metrics.region.relative];
@@ -978,7 +1062,7 @@
     }
 
     // What the diagram shows, and how long it took (round trip, and computing it on the backend).
-    function describe(deviation, levels, power, tieWeight, applies, trim, total, server, leaning) {
+    function describe(deviation, levels, power, tieWeight, applies, trim, total, server, leaning, draws) {
       const tail = ` · ${candidates.length} candidates · ${total} ms (${server} ms computing)`;
       let name = labels[method];
       if (scorePowerMethods.includes(method)) {
@@ -990,7 +1074,8 @@
       if (tieWeightMethods.includes(method))
         name += `, runoff tie weight = ${tieWeight.toFixed(2)}`;
       if (trimMethods.includes(method))
-        name += trim >= maxTrim ? ", trim = 50% (majority judgment)" : `, trim = ${trim}%`;
+        name += trim >= maxTrim ? ", trim = 50% (majority judgment)" : `, trim = ${trim}%`
+          + (draws ? ", draws hatched" : "");
       for (const [strategy, share] of Object.entries(applies)) {
         const others = applies[strategyOf[strategy]] > 0 ? "of the others " : "";
         if (share > 0) name += ` · ${Math.round(100 * share)}% ${others}${strategyPhrases[strategy]}`;
@@ -1037,6 +1122,7 @@
 
     canvas.addEventListener("pointermove", event => {
       hovered = toUnit(event);
+      overSquare = true;
       if (dragged !== -1) {
         candidates[dragged] = confine(hovered);
         leaveSetup();
@@ -1048,6 +1134,8 @@
 
     canvas.addEventListener("pointerleave", () => {
       showDensity = false;
+      overSquare = false;
+      updateTrims();
       draw();
     });
 
@@ -1238,6 +1326,7 @@
     tieWeightSlider.addEventListener("change", () => compute());
     // The trim slider sets the trimmed mean between Score (0) and majority judgment (50).
     trimMethods = config.trims;
+    drawMethods = config.draws;
     maxTrim = config.max_trim;
     Object.assign(trimSlider, { min: 0, max: maxTrim, step: config.trim_step, value: config.trim });
     function pickTrim() {

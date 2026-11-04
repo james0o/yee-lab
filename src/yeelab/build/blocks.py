@@ -144,7 +144,7 @@ from yeelab.build.rounds import drop_below_mean, drop_lowest
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Graded, Scored, ScoredPairwise, Share, Voters
 from yeelab.score import AVG, CLUSTER, COARSE, DELTA, DHONDT, FINE, HYBRID, KAPPA, MU, POWER, RANGE, VOTES
 from yeelab.score import D21 as D21_RULE, D21_ORDINAL
-from yeelab.voting import CYCLE, descending_coalitions, irv_rounds
+from yeelab.voting import CYCLE, descending_coalitions, draw, irv_rounds
 
 Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) or (chosen, margin) at every point
 HOW = ("min", "mean", "all")  # what Eliminate drops each round
@@ -180,7 +180,8 @@ def _top_two(totals: np.ndarray) -> Result:
     return totals.argmax(axis=-1), top[..., -1] - top[..., -2]
 
 
-def _trimmed(grades: np.ndarray, trim: float, alive: np.ndarray | None) -> np.ndarray:
+def _trimmed(grades: np.ndarray, trim: float, alive: np.ndarray | None,
+             tie_break: float = TRIM_TIE_BREAK) -> np.ndarray:
     """The trimmed means of the shares grades (..., C, levels) of each score, (..., C),
     as Score.tally: the mean part of the top score minus 1, -1 for the candidates not
     marked in alive. With a = trim / 100 and F(k) the part of c's voters giving at most
@@ -193,12 +194,21 @@ def _trimmed(grades: np.ndarray, trim: float, alive: np.ndarray | None) -> np.nd
     below a or above 1 - a, both are their median score and tie, at every point around:
     so TRIM_TIE_BREAK of the total is the mean, 1 - sum_k F(k) / (levels - 1), and a tie
     goes by it. F is summed from the bottom, so that the few voters of the lower tail stay
-    exact, and the lead of the few who do not give the top score is kept."""
+    exact, and the lead of the few who do not give the top score is kept. With tie_break
+    0 the totals are the trimmed means alone, and those ties exact (Drawn)."""
     a = trim / 100
-    at_most = np.cumsum(grades[..., :-1], axis=-1) / grades.sum(axis=-1, keepdims=True)
+    at_most = _at_most(grades)
     trimmed = np.clip(at_most - a, 0.0, 1 - 2 * a) / (1 - 2 * a)
-    missing = ((1 - TRIM_TIE_BREAK) * trimmed + TRIM_TIE_BREAK * at_most).sum(axis=-1) / (grades.shape[-1] - 1)
+    if tie_break:
+        trimmed = (1 - tie_break) * trimmed + tie_break * at_most
+    missing = trimmed.sum(axis=-1) / (grades.shape[-1] - 1)
     return -missing if alive is None else np.where(alive, -missing, -1.0)
+
+
+def _at_most(grades: np.ndarray) -> np.ndarray:
+    """F (..., C, levels - 1) of the shares grades (..., C, levels): F[..., c, k] the part
+    of c's voters giving at most k."""
+    return np.cumsum(grades[..., :-1], axis=-1) / grades.sum(axis=-1, keepdims=True)
 
 
 def _off_diagonal(diffs: np.ndarray, fill: float) -> np.ndarray:
@@ -1481,6 +1491,59 @@ class Highest(Eliminate):
         n = f", n={self.n!r}" if self.n != 1 else ""
         among = f", among={self.among!r}" if self.among is not None else ""
         return f"Highest({self.totals!r}{n}{among})"
+
+
+@dataclass(frozen=True)
+class Drawn(Winner):
+    """The highest trimmed mean of a score ballot, Highest(totals) for a Tally with a
+    trim, but with its exact ties a draw (voting.draw) instead of going by the mean
+    (TRIM_TIE_BREAK): where every threshold of two candidates is outside the trim, both
+    are their median score, so the draws are whole areas of the diagram. select()
+    chooses every candidate of a draw.
+
+    The margin of a winner is its lead over the second trimmed mean. That of a draw is
+    the smaller of its lead over the highest trimmed mean outside it and how far the
+    thresholds of its candidates are from entering the trim, min over them of
+    max(a - F(k), F(k) - (1 - a)) / ((1 - 2a) (levels - 1)): by as much the trimmed
+    mean of the candidate changes once one does (_trimmed). Both are 0 where the draw
+    ends, and the lead of the winner there too."""
+
+    totals: Tally
+
+    def __post_init__(self):
+        _expect(self, self.totals, Tally, "a Tally with a trim")
+        if self.totals.statistic != "mean":
+            raise ValueError(f"Drawn takes a trimmed mean, not the median: {self.totals!r}")
+        _ = self.totals.ballot.needs_graded  # a ballot without scores fails here
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return self.totals.ballot.needs_graded
+
+    def _draws(self, voters: Voters) -> tuple[np.ndarray, np.ndarray]:
+        """(the candidates of the highest trimmed mean (..., C), the margin (...))."""
+        grades = self.totals.ballot.grades(voters)
+        a, steps = self.totals.trim / 100, grades.shape[-1] - 1
+        totals = _trimmed(grades, self.totals.trim, None, tie_break=0)
+        top = totals.max(axis=-1, keepdims=True)
+        chosen = totals == top
+        lead = (top[..., 0] - np.where(chosen, -np.inf, totals).max(axis=-1))  # inf if all tie
+        at_most = _at_most(grades)
+        outside = np.maximum(a - at_most, at_most - (1 - a)).min(axis=-1) / ((1 - 2 * a) * steps)
+        slack = np.maximum(np.where(chosen, outside, np.inf).min(axis=-1), 0.0)
+        several = chosen.sum(axis=-1) > 1
+        return chosen, np.where(several, np.minimum(lead, slack), lead)
+
+    def select(self, voters: Voters) -> Result:
+        return self._draws(voters)
+
+    def evaluate(self, voters: Voters) -> Result:
+        chosen, margin = self._draws(voters)
+        one = chosen.sum(axis=-1) == 1
+        return np.where(one, chosen.argmax(axis=-1), draw(chosen)), margin
+
+    def __repr__(self):
+        return f"Drawn({self.totals!r})"
 
 
 @dataclass(frozen=True, eq=False)

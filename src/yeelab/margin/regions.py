@@ -217,7 +217,8 @@ def _area(points):
 
 def contour_regions(coords, winner, margin, points=None):
     """[{"winner": c, "polygons": [[outer, hole, ...], ...]}] per winner, each ring
-    flat [x0, y0, x1, y1, ...], from winner and margin on the grid of coords. With
+    flat [x0, y0, x1, y1, ...], from winner and margin on the grid of coords; a draw is
+    a winner of its own (voting.draw), and so is a cycle. With
     `points` (G, G, 2) the grid point [i, j] is drawn at points[i, j] instead of
     (coords[i], coords[j]): a grid of quadrilaterals, which must not fold over."""
     x, y = (coords, coords) if points is None else (points[..., 0].T, points[..., 1].T)

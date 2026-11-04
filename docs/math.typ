@@ -1633,6 +1633,25 @@ trimmed means are below $epsilon$ times those of the means. `tests/test_trimmed.
 checks the totals against this on $n$ explicit ballots, against the median near
 $t = 50$, and a tie of medians decided by the mean.
 
+*Draws.* `Drawn(Tally(ballot, trim=t))` leaves those ties as they are: the candidates
+whose $T_i$ (without $epsilon$) equal the highest one exactly draw, a winner of its own
+for every set of two or more, $-1 - sum_(i in D) 2^i$ for the draw $D$ (`voting.draw`;
+$-1$, the cycle, is the draw among no one). Outside a tie the winner is the highest
+$T_i$, with its lead as the margin. In a draw the margin is the smaller of its lead over
+the highest $T_j$ outside it and how far its thresholds are from entering the trim,
+
+$ min_(i in D, k) max(a - S_i (k), S_i (k) - (1 - a)) / ((1 - 2a)(L - 1)), $
+
+the change of $T_i$ once one does (@eq-trimmed); both are 0 where the draw ends, and so
+is the lead of the winner on the other side, so the borders of a draw are traced like
+any other. The web UI's "show draws" takes it for Trimmed mean, Score 6 → 3 and
+Score 6 → 2 and in the chart of winners by trim, and hatches a draw in the colours of
+its candidates; not at $t = 50$, majority judgment, nor where a method only compares a
+trimmed mean in a condition. In the metrics (@ch-metrics) a draw is a candidate drawn
+at random among its own: the mean loss of them. `tests/test_draws.py` checks the
+margin on explicit shares, that it meets the winner's where a draw begins, and the
+draws of the API.
+
 *Strategy.* Burying moves a score of a frontrunner to 0, compromising to the top score:
 both move voters into a tail of its distribution. Under the mean a voter moved to 0
 takes off their whole score. Under a trimmed mean the lowest share $a$ of the voters is
@@ -4084,7 +4103,7 @@ What all metrics share:
   (@sec-metric-region). Every grid point of the area counts with the area it represents (the trapezoidal weights of the grid, which follow the moved grid when pixels
   are at geometric medians, @ch-geometric). Points where no candidate wins, a Condorcet
   cycle or `Undecided()`, are no result and are left out, as if they were not part of the
-  diagram.
+  diagram. A draw (@sec-trimmed) is a candidate drawn at random among its own.
 - *Comparing methods.* The errors have a true zero, so two methods are compared by their
   ratio: an error of 2 % against 6 % is three times smaller. After switching methods the UI
   shows that ratio for the same candidates and voters. Errors near zero are dominated by

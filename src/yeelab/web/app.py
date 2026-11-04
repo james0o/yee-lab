@@ -18,7 +18,8 @@ from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
-from yeelab.build import (D21, Bullet, Burial, Coarse, Compromise, Score, ScoreComparisons, Tally, Winner)
+from yeelab.build import (D21, Bullet, Burial, Coarse, Compromise, Drawn, Highest, Score, ScoreComparisons, Tally,
+                           Winner)
 from yeelab.build.methods import FOUND, SCORE_POWER, TRIM
 from yeelab.distributions import DISTRIBUTIONS, Distribution
 from yeelab.margin.geometric import PIXEL_MEDIAN, PIXEL_MEDIANS, PixelMedian, outline, pixels_at
@@ -156,6 +157,16 @@ def _trim_settings(block, trim: float):
     return updated_block if changed else block
 
 
+def _drawn(method: Winner) -> Winner:
+    """The method with the exact ties of its trimmed means a draw (Drawn), where it is the
+    highest trimmed mean itself; anything else as it is, such as majority judgment at
+    MAX_TRIM, which has a tie-break of its own."""
+    if (type(method) is Highest and method.n == 1 and method.among is None
+            and isinstance(method.totals, Tally) and method.totals.statistic == "mean"):
+        return Drawn(method.totals)
+    return method
+
+
 # Whether the UI sliders apply is derived from each method's built blocks.
 SCORE_METHODS = {name: _score_ballots(method) for name, method in MARGINS.items()}
 SCORE_METHODS = {name: ballots for name, ballots in SCORE_METHODS.items() if ballots}
@@ -163,6 +174,9 @@ SCORE_COMPARISON_METHODS = {name: _score_comparisons(method) for name, method in
 SCORE_COMPARISON_METHODS = {name: comparisons for name, comparisons in SCORE_COMPARISON_METHODS.items()
                             if comparisons}
 TRIM_METHODS = [name for name, method in MARGINS.items() if _trims(method)]
+# the methods that can show the draws of their trimmed means (_drawn): those that are the
+# highest trimmed mean itself, not those that take one in a condition
+DRAW_METHODS = [name for name in TRIM_METHODS if _drawn(MARGINS[name]) is not MARGINS[name]]
 SCORE_LEVEL_METHODS = [name for name, ballots in SCORE_METHODS.items()
                        if any(not ballot.fixed for ballot in ballots)]
 SCORE_POWER_METHODS = list(SCORE_METHODS)
@@ -416,6 +430,7 @@ class DiagramRequest(BaseModel):
     power: float = Field(SCORE_POWER, ge=MIN_POWER, le=MAX_POWER)  # SCORES only
     tie_weight: float = Field(TIE_WEIGHT, ge=0, le=1)  # ScoreComparisons only
     trim: float = Field(TRIM, ge=0, le=MAX_TRIM)  # trimmed means only
+    draws: bool = False  # DRAW_METHODS only: an exact tie of the trimmed means is a draw (_drawn)
     # the share of the voters of each strategy (STRATEGIES), of those not voting by the ones before
     bullet: float = Field(0.0, ge=0, le=1)
     burial: float = Field(0.0, ge=0, le=1)
@@ -537,6 +552,7 @@ def config():
         "trim": TRIM,
         "max_trim": MAX_TRIM,
         "trim_step": TRIM_STEP,
+        "draws": DRAW_METHODS,
         # a slider for the share of the voters of each strategy, and the methods it cannot do
         "strategies": [{"name": name, **info} for name, info in STRATEGIES.items()],
         "unsupported": UNSUPPORTED,
@@ -553,7 +569,8 @@ def diagram_regions(request: DiagramRequest):
     {"regions": [{"winner": c, "polygons": [[outer, hole, ...], ...]}], "metrics": {"diagram": ..., "region": ...},
     "overlays": {"focus": ..., "voronoi_boundaries": ...}, "ms": ...}, rings flat [x0, y0, x1, y1, ...],
     outer rings counter-clockwise and holes clockwise. winner is -1 (voting.CYCLE) for a
-    Condorcet cycle. `bullet` of the voters bullet vote, and of the others `burial` bury and
+    Condorcet cycle, and below it for a draw (voting.draw: the bits of -1 - winner are its
+    candidates), which a method of DRAW_METHODS has with `draws`. `bullet` of the voters bullet vote, and of the others `burial` bury and
     `compromise` compromise (strategic), more of them to the left by `tilt`. metrics is null unless `metrics`, and the
     overlays have no voronoi_boundaries unless `overlay`. focus is always there: the border
     of the region that the metrics of "region" average over, [x0, y0, x1, y1, ...] counter-clockwise."""
@@ -564,6 +581,8 @@ def diagram_regions(request: DiagramRequest):
         method = _trim_settings(MARGINS[request.method], request.trim)
         method = _score_ballot_settings(method, request.levels, request.power)
         method = _score_comparison_settings(method, request.tie_weight)
+        if request.draws and request.method in DRAW_METHODS:
+            method = _drawn(method)
     else:
         method = request.method
     shares = {name: getattr(request, name) for name in STRATEGIES}
@@ -641,7 +660,7 @@ def voter_parameters(
 # with the categories it shows (the trimmed mean of Score always at 6), its winner at every
 # trim from 0 to MAX_TRIM by TRIM_STEP.
 TRIM_ROWS = (("coarse_2", 2), ("coarse_3", 3), ("trimmed", 6))
-assert all(name in TRIM_METHODS for name, _ in TRIM_ROWS)
+assert all(name in DRAW_METHODS for name, _ in TRIM_ROWS)
 TRIMS = tuple(range(0, MAX_TRIM + 1, TRIM_STEP))
 
 
@@ -673,6 +692,7 @@ class TrimRequest(BaseModel):
     burial: float = Field(0.0, ge=0, le=1)
     compromise: float = Field(0.0, ge=0, le=1)
     tilt: float = Field(0.0, ge=0, le=MAX_TILT)
+    draws: bool = False  # an exact tie of the trimmed means is a draw (_drawn)
 
     @field_validator("deviation")
     @classmethod
@@ -685,12 +705,15 @@ def trim_winners(request: TrimRequest):
     """The winner of each row of TRIM_ROWS at every trim of TRIMS for the voters with
     the median `median`, sincere or strategic as the sliders say: {"trims": [...], "rows":
     [{"name": ..., "levels": ..., "winners": [...]}], "ms": ...}. At MAX_TRIM a row is the
-    median, majority judgment on its ballot."""
+    median, majority judgment on its ballot. With `draws` a winner below -1 is a draw
+    (voting.draw) of the trimmed means, but for majority judgment."""
     start = time.perf_counter()
     spread = _spread_rule(request.spread_power) if request.distribution == "beta" else None
     model = Model(request.distribution, request.deviation, spread)
     methods = [_score_ballot_settings(_trim_settings(MARGINS[name], trim), levels, request.power)
                for name, levels in TRIM_ROWS for trim in TRIMS]
+    if request.draws:
+        methods = [_drawn(method) for method in methods]
     shares = {name: getattr(request, name) for name in STRATEGIES}
     method = strategic(_Side(tuple(methods)), shares, request.tilt)
     x, y = request.median
