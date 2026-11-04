@@ -16,6 +16,7 @@ uv run yee-search find runs/first nanson among=top2       # those of them that h
 uv run yee-search grids                               # does the coarse training grid order methods as a fine one?
 uv run yee-search conditional --out runs/cond         # every Conditional(c, A, B) of the small methods, from their maps
 ./night.sh 06:00                                      # a night: the Conditionals, then gp from their best, then the report
+./night.sh 06:00 4 plain                              # the same over methods simple to explain only (--plain)
 ```
 
 What is scored, on which configurations and how the searches work: `docs/search.pdf`

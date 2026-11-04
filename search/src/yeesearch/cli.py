@@ -25,11 +25,17 @@ def gp(out: Path = typer.Option(..., help="directory of the run; an existing one
        seed_from: Path | None = typer.Option(None, help="a directory of yee-search conditional: the best methods of its validation.json "
                                                  "(of each ranking) join the first generation of a new run, with "
                                                  "the library's known methods and random ones; ignored when the run "
-                                                 "continues one in --out")):
+                                                 "continues one in --out"),
+       plain: bool = typer.Option(False, help="only the plain vocabulary (grammar.restrict_to_plain), without the "
+                                              "rivals of the training set; give it again to continue such a run")):
     """Genetic programming over the grammar, against burial by 30 % of the voters."""
+    from yeesearch import grammar
     from yeesearch.gp import run
 
-    run(out, hours, population, workers, seed, timeout, generations, _time(until) if until else None, seed_from)
+    if plain:
+        grammar.restrict_to_plain()
+    run(out, hours, population, workers, seed, timeout, generations, _time(until) if until else None, seed_from,
+        "free" if plain else "train")
 
 
 def _time(text: str) -> datetime:
@@ -85,16 +91,20 @@ def conditional(out: Path = typer.Option(..., help="directory of the search; the
                 estimate: bool = typer.Option(False, help="only count the Conditionals and time them"),
                 summary: bool = typer.Option(False, help="only write summary.md again from a finished search"),
                 pixel_median: str = typer.Option("geometric", help='"geometric" as the web UI starts, or "marginal"'),
-                maps: Path | None = typer.Option(None, help="directory of the maps (default: OUT/maps)")):
+                maps: Path | None = typer.Option(None, help="directory of the maps (default: OUT/maps)"),
+                plain: bool = typer.Option(False, help="only the plain vocabulary (grammar.restrict_to_plain)")):
     """Every Conditional(c, A, B) of the primitives (the grammar up to --max-size blocks,
     the known methods, the best of the GP runs), scored from their maps."""
+    from yeesearch import grammar
     from yeesearch.conditional import run, summary_again
 
+    if plain:
+        grammar.restrict_to_plain()
     if summary:
         summary_again(out, top_test)
         return
     run(out, Path("runs"), max_size, same_size, combine, deeper, deeper_conditions, top_train, top_test, workers,
-        estimate, pixel_median, maps)
+        estimate, pixel_median, maps, plain)
 
 
 @app.command()

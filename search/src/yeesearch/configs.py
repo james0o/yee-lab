@@ -6,7 +6,7 @@ other instances of it than the training set: rotated about the centre of the squ
 spread wider or narrower, with other voters."""
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cached_property, lru_cache
 
 import numpy as np
@@ -175,6 +175,12 @@ def train_set() -> list[Config]:
     return _train() + _inside(focus_configs())
 
 
+def free_set() -> list[Config]:
+    """The training set with no rivals (Config.rival): for the plain vocabulary, none of
+    whose methods comes near the rival, which would then be all that J measures."""
+    return [replace(config, rival=None) for config in train_set()]
+
+
 def validation_set() -> list[Config]:
     """20 random configurations (seed 2) and the families turned a quarter, other voters."""
     return _inside(random_configs(2, 20)
@@ -203,4 +209,4 @@ def wide_set() -> list[Config]:
                                                                    dark_horse={"gap": 0.07, "far": 0.32}))
 
 
-SETS = {"train": train_set, "validation": validation_set, "test": test_set, "wide": wide_set}
+SETS = {"train": train_set, "free": free_set, "validation": validation_set, "test": test_set, "wide": wide_set}

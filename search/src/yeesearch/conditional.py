@@ -53,7 +53,7 @@ from yeelab.build import Conditional
 from yeelab.build.blocks import CombinedCondition, Threshold, WinnerComparison
 
 from yeesearch.evaluate import BURIED, NODE_COST, PIXEL_MEDIAN, SINCERE, Scorer, objective, trimmed
-from yeesearch.grammar import NEST, THRESHOLDS, complexity, size
+from yeesearch.grammar import NEST, THRESHOLDS, complexity, from_block, plain_leaves, size
 from yeesearch.pool import parse
 from yeesearch.primitives import MEASURES, MapStore, enumerated, found, known, side
 
@@ -70,7 +70,8 @@ BATCH = 1024  # conditions in one matrix product
 BEST = 6  # of f and of g of a condition, whose pairs are tried
 KEEP = 4  # pairs of a condition kept
 POOL = 50_000  # the best Conditionals kept over all conditions, of each ranking
-BASELINES = ("star", "star_two_round", "mj", "search_1", "search_2", "search_3", "search_4", "d20")
+BASELINES = ("star", "star_two_round", "mj", "search_1", "search_2", "search_3", "search_4", "search_5", "search_6",
+             "search_7", "search_8", "d20")
 EXTRA = ()  # methods of yeelab.build.methods outside the grammar taken as primitives (D20 is in it since 2026-10-28)
 
 # ---------------------------------------------------------------- trees
@@ -203,11 +204,14 @@ class Space:
 # ---------------------------------------------------------------- the library
 
 
-def library(runs: Path, max_size: int) -> list[str]:
+def library(runs: Path, max_size: int, only_plain: bool = False) -> list[str]:
     """The sources of the primitives: the grammar enumerated, the known methods (and
-    EXTRA, which the grammar cannot build), the best of the GP runs."""
+    EXTRA, which the grammar cannot build), the best of the GP runs; with `only_plain`,
+    the leaves of the plain vocabulary."""
     from yeelab.build.methods import METHODS
 
+    if only_plain:
+        return list(plain_leaves())
     extra = [repr(METHODS[name]) for name in EXTRA]
     return list(dict.fromkeys(enumerated(max_size) + list(known()) + extra + found(runs)))
 
@@ -450,10 +454,11 @@ def condition_size(condition, sizes: dict) -> int:
 
 
 def simple(search: Search) -> Conditions:
-    """The conditions `elects` of every item and `above` of every measure and threshold."""
+    """The conditions `elects` of every item and `above` of every measure the grammar has
+    and threshold."""
     items = search.space.items
-    trees = [("elects", item) for item in items] + [("above", m, t) for m in range(len(MEASURES))
-                                                    for t in THRESHOLDS]
+    measures = [m for m, measure in enumerate(MEASURES) if from_block(measure, "measure") is not None]
+    trees = [("elects", item) for item in items] + [("above", m, t) for m in measures for t in THRESHOLDS]
     sizes = dict(zip(items, search.space.sizes))
     return Conditions(search, trees, [condition_size(tree, sizes) for tree in trees])
 
@@ -585,18 +590,20 @@ def candidates(space: Space, conditions: Conditions, pool: Pool, count: int, cos
 
 def run(out: Path, runs: Path = Path("runs"), max_size: int = 8, same_size: int | None = None, combine: int = 1000,
         deeper: int = 300, deeper_conditions: int = 5000, top_train: int = 200, top_test: int = 20,
-        workers: int = 4, estimate: bool = False, pixel_median: str = PIXEL_MEDIAN, maps: Path | None = None):
+        workers: int = 4, estimate: bool = False, pixel_median: str = PIXEL_MEDIAN, maps: Path | None = None,
+        only_plain: bool = False):
     """The search, written to `out`: the maps of the library (maps/), the best of the
     training (train.json), of the validation (validation.json), the test report and a
     summary (summary.md). With `estimate`, only the numbers of conditions and Conditionals
     and how long they take. `pixel_median` as evaluate.Scorer; `maps` the directory of the
-    maps (out/maps), which every pixel median shares."""
+    maps (out/maps), which every pixel median shares; `only_plain`: the library is the
+    plain vocabulary (grammar.restrict_to_plain, by the caller)."""
     log = console.print
     started = time.perf_counter()
     out.mkdir(parents=True, exist_ok=True)
     maps = out / "maps" if maps is None else maps
     store = MapStore(maps / f"{TRAIN_SET}-{TRAIN_SIZE}", TRAIN_SET, TRAIN_SIZE)
-    sources = library(runs, max_size)
+    sources = library(runs, max_size, only_plain)
     store.compute(sources, workers, log=log)
     items, alias = distinct(store, sources)
     space = Space(store, items, pixel_median=pixel_median)

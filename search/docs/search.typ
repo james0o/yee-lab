@@ -329,6 +329,21 @@ scored exactly. They are ranked five ways: by $J$, without the cost of the compl
 ("raw", to see whether a Conditional helps at all), the methods of the library alone, and
 two levels by $J$ and raw.
 
+= The plain vocabulary <ch-plain>
+
+With `--plain` both searches use only methods that are simple to explain, each one a leaf: FPTP,
+Two Round, the Condorcet winner, DAC, D20, MJ, the trimmed means of the six scores and of Coarse(3)
+at a trim of 0, 5, ..., 45 or 49 (a trim of 0 is Score), and Coarse(2), whose trim changes nothing:
+of two scores the trimmed mean orders the candidates as the mean does. Only a Conditional joins
+them, at most two inside each other (`grammar.PLAIN_NESTING`). Its condition is a comparison of two
+methods, whether a method elects someone, Top or Lead of the first choices or of the mean score
+against a threshold, or those combined. The Condorcet winner elects no one in a cycle, so it needs
+such a Conditional around it, a cycle being as bad as always.
+
+The hard rule of the rivals is left out, on the set `free`: on the web UI's two setups no plain
+method comes near `search_6`, so the rule would be all that $J$ measures. The setups still weigh
+three configurations each.
+
 = Choosing the methods <ch-select>
 
 Of millions of methods, the best on a few configurations is partly chance. So the best 200
@@ -348,6 +363,7 @@ uv run yee-search conditional --out runs/cond --maps runs/2026-10-27-conditional
 uv run yee-search gp --out runs/night --until 06:00 --seed-from runs/cond
 uv run yee-search report runs/night        # its best and the known methods on the test set
 ./night.sh 06:00 4                         # all three, until 06:00, with 4 workers
+./night.sh 06:00 4 plain                   # the same over the plain vocabulary (@ch-plain)
 ```
 
 A run of the search of Conditionals writes `library.json`, `train.json`,

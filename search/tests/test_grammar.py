@@ -6,7 +6,11 @@ from yeelab.build.methods import METHODS
 
 from yeesearch import grammar
 from yeesearch.gp import crossover, hoist, point_mutation, seeds, subtree_mutation
-from yeesearch.grammar import RULES, TYPES, Node, build_method, check, from_block, positions, random_tree
+from yeesearch.evaluate import NEEDS, Prepared
+from yeesearch.configs import SETS
+from yeesearch.grammar import (COARSE_BALLOTS, PLAIN_NESTING, RULES, TRIMS, TYPES, Node, build_method, check, from_block,
+                               nesting, plain_leaves, positions, random_tree)
+from yeelab.build import Burial, Highest, Tally
 from yeesearch.pool import parse
 
 
@@ -81,3 +85,62 @@ def test_every_among_is_paid_for_each_time_it_occurs():
     once = parse(f"Unbeaten(Margins(Pairwise()), among={star!r} | Highest(Tally(Plurality())))")
     assert grammar.among_count(twice) == 4  # star's among counted in each copy
     assert grammar.complexity(twice) - grammar.complexity(once) == 2 * grammar.AMONG  # as many blocks, two among= more
+
+
+@pytest.fixture
+def plain():
+    rules, depths, nest = dict(RULES), dict(grammar.MIN_DEPTH), grammar.MAX_NESTING
+    grammar.restrict_to_plain()
+    yield
+    RULES.clear()
+    RULES.update(rules)
+    grammar.MIN_DEPTH.clear()
+    grammar.MIN_DEPTH.update(depths)
+    grammar.MAX_NESTING = nest
+
+
+def test_the_plain_vocabulary_has_only_its_leaves_joined_by_conditionals(plain):
+    rng = random.Random(0)
+    allowed = {"plurality", "score", "tally", "top", "lead", "threshold", "same", "both", "elects", "conditional",
+               "fptp", "two_round", "condorcet", "dac", "d20", "mj", "coarse_2", "trimmed"}
+    assert set(RULES) == allowed
+    trees = grammar.ramped(rng, 200, range(3, 9))
+    assert all(check(tree) and nesting(tree) <= PLAIN_NESTING for tree in trees)
+    assert any(nesting(tree) == PLAIN_NESTING for tree in trees)
+    for tree in trees:
+        assert parse(repr(build_method(tree))).same_as(build_method(tree))
+        assert from_block(build_method(tree)) == tree
+
+
+def test_plain_trees_of_known_methods(plain):
+    assert from_block(METHODS["score"]) == Node("trimmed", (6, 0))
+    assert from_block(METHODS["trimmed"]) == Node("trimmed", (6, 25))
+    assert from_block(METHODS["coarse_3"]) == Node("trimmed", (3, 25))
+    assert from_block(METHODS["mj"]) == Node("mj")
+    for name in ("star", "borda", "koth", "irv", "schulze", "search_1"):
+        assert from_block(METHODS[name]) is None
+    deep = Node("conditional", (), (Node("same", (True,), (Node("fptp"), Node("dac"))), Node("mj"), Node("dac")))
+    assert not grammar.valid(Node("conditional", (), (Node("elects", (), (Node("condorcet"),)), deep,
+                                                      Node("conditional", (), (deep.children[0], deep, Node("mj"))))))
+
+
+def test_every_plain_leaf_reads_the_cached_shares():
+    assert len(plain_leaves()) == 7 + 2 * len(TRIMS)
+    for source in plain_leaves():
+        assert Burial(parse(source), 0.3).needs <= NEEDS
+
+
+def test_a_trim_changes_nothing_on_a_ballot_of_two_scores():
+    prepared = Prepared.of(SETS["validation"]()[0], 8)
+    ballot = COARSE_BALLOTS[2]
+    plain_map = prepared.winners(Highest(Tally(ballot)))
+    for trim in (10, 30, 45):
+        trimmed_map = prepared.winners(Highest(Tally(ballot, trim=trim)))
+        for scenario, winners in plain_map.items():
+            assert (winners == trimmed_map[scenario]).all()
+
+
+def test_the_training_set_without_rivals_differs_in_nothing_else():
+    train, free = SETS["train"](), SETS["free"]()
+    assert any(config.rival for config in train) and not any(config.rival for config in free)
+    assert [config.name for config in train] == [config.name for config in free]

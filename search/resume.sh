@@ -6,10 +6,15 @@
 #
 # The run goes on from what it had written to the disk and stops by itself at the time
 # given (nothing happens after it); a run already going on in the directory is left alone.
+# A third argument "plain" goes on with a run of the plain vocabulary (night.sh ... plain).
 # Its output is appended to resume.log in the run's directory.
 cd "$(dirname "$0")" || exit 1
 out=$1
 until=$2
+plain=""
+if [ "$3" = plain ]; then
+    plain=--plain
+fi
 mkdir -p "$out"
 sleep 60  # let the system settle after the start
 inhibit=""
@@ -17,4 +22,4 @@ if systemd-inhibit --what=sleep:idle true 2>/dev/null; then  # no sleeping while
     inhibit="systemd-inhibit --what=sleep:idle"
 fi
 echo "$(date '+%F %T') the computer started: going on with the run" >> "$out/resume.log"
-exec $inhibit "$HOME/.local/bin/uv" run --frozen yee-search gp --out "$out" --until "$until" >> "$out/resume.log" 2>&1
+exec $inhibit "$HOME/.local/bin/uv" run --frozen yee-search gp --out "$out" --until "$until" $plain >> "$out/resume.log" 2>&1

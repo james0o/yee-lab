@@ -135,14 +135,16 @@ def child(rng: random.Random, population: list[Individual], taken: set[str]) -> 
 
 
 def run(out: Path, hours: float, population: int = 1000, workers: int = 4, seed: int = 0, timeout: float = 60.0,
-        generations: int | None = None, until: datetime | None = None, seed_from: Path | None = None):
+        generations: int | None = None, until: datetime | None = None, seed_from: Path | None = None,
+        train_set: str = "train"):
     """Evolve for `hours`, or until the time `until`, or `generations`, writing to the
     directory `out`: evals.jsonl every method scored on the training set, validation.jsonl
     the hall of fame on the validation set, generations.jsonl the progress, hall.json the
     hall of fame after every generation. A run started again in the same directory, by hand
     or after a power cut (resume.sh), starts from the best methods it has scored and does
     not score any of them again: what it has written is on the disk after every
-    generation. One run at a time works in a directory (lock). `seed_from`: see seeds()."""
+    generation. One run at a time works in a directory (lock). `seed_from`: see seeds();
+    `train_set` the set of configurations J is computed on."""
     out.mkdir(parents=True, exist_ok=True)
     seconds = (until - datetime.now()).total_seconds() if until is not None else 3600 * hours
     if seconds <= 0:
@@ -157,13 +159,13 @@ def run(out: Path, hours: float, population: int = 1000, workers: int = 4, seed:
     done = len(read_jsonl(out / "generations.jsonl"))  # generations of the run before it stopped
     rng = random.Random(seed + done)  # another draw when it goes on
     archive, validation = Archive(out / "evals.jsonl"), Archive(out / "validation.jsonl")
-    workers_ = Workers(workers, timeout, prepared=(("train", TRAIN_SIZE), ("validation", VALIDATION_SIZE)))
+    workers_ = Workers(workers, timeout, prepared=((train_set, TRAIN_SIZE), ("validation", VALIDATION_SIZE)))
     progress = append_jsonl(out / "generations.jsonl")
     stopped = False
     try:
         nodes = _resumed(archive, population) or seeds(seed_from)
         nodes += _random(rng, population - len(nodes))
-        current = _distinct(rng, workers_, archive, _scored(workers_, archive, nodes), population)
+        current = _distinct(rng, workers_, archive, _scored(workers_, archive, nodes, train_set), population, train_set)
         generation, stalled = done, 0
         best_so_far = cycle_best = min(one.J for one in current)  # cycle: since the last restart
         while time.monotonic() < deadline and (generations is None or generation - done < generations):
@@ -182,8 +184,9 @@ def run(out: Path, hours: float, population: int = 1000, workers: int = 4, seed:
                     taken.add(text)
                     nodes.append(node)
             fresh = sum(source(node) not in archive for node in nodes)
-            scored = _scored(workers_, archive, nodes)
-            current = _distinct(rng, workers_, archive, scored if restart else current[:ELITE] + scored, population)
+            scored = _scored(workers_, archive, nodes, train_set)
+            current = _distinct(rng, workers_, archive, scored if restart else current[:ELITE] + scored, population,
+                                train_set)
             best = min(current, key=lambda one: one.J)
             if best.J < cycle_best - 1e-12:
                 cycle_best, stalled = best.J, 0
@@ -238,7 +241,7 @@ def _random(rng: random.Random, count: int, taken: set[str] = frozenset()) -> li
 
 
 def _distinct(rng: random.Random, workers: Workers, archive: Archive, individuals: list[Individual],
-              population: int) -> list[Individual]:
+              population: int, train_set: str = "train") -> list[Individual]:
     """The individuals with only the best of those that err alike, made up to `population`
     by new random trees that err unlike them, in at most REFILLS rounds."""
     kept, seen = [], set()
@@ -250,7 +253,7 @@ def _distinct(rng: random.Random, workers: Workers, archive: Archive, individual
         missing = population - len(kept)
         if missing <= 0:
             break
-        for one in _scored(workers, archive, _random(rng, missing, {one.source for one in kept})):
+        for one in _scored(workers, archive, _random(rng, missing, {one.source for one in kept}), train_set):
             if one.behaviour not in seen:
                 seen.add(one.behaviour)
                 kept.append(one)
@@ -275,9 +278,9 @@ def _write_hall(path: Path, hall: list[dict], validation: Archive):
     os.replace(written, path)
 
 
-def _scored(workers: Workers, archive: Archive, nodes: list[Node]) -> list[Individual]:
+def _scored(workers: Workers, archive: Archive, nodes: list[Node], train_set: str) -> list[Individual]:
     sources = [source(node) for node in nodes]
-    results = workers.methods(sources, "train", TRAIN_SIZE, archive)
+    results = workers.methods(sources, train_set, TRAIN_SIZE, archive)
     return [Individual(node, text, results[text]["J"], _behaviour(results[text]))
             for node, text in zip(nodes, sources)]
 

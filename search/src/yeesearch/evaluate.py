@@ -44,7 +44,7 @@ from yeelab.margin import regions
 from yeelab.margin.metrics import FOCUS_ROUND, _area_weights, focus_distance
 
 from yeesearch.configs import Config
-from yeesearch.grammar import D20, SCORE_BALLOTS, TIE_WEIGHTS, complexity, needs as grammar_needs
+from yeesearch.grammar import COARSE_BALLOTS, D20, SCORE_BALLOTS, TIE_WEIGHTS, TRIMS, complexity, needs as grammar_needs
 
 NEEDS = grammar_needs()  # the shares cached for every configuration
 
@@ -318,6 +318,8 @@ def warm(prepared: list[Prepared]):
                        *(Unbeaten(ScoreComparisons(ballot, tie_weight=weight)) for weight in TIE_WEIGHTS)):
             errors(method, prepared)
     errors(D20, prepared)
+    for ballot in COARSE_BALLOTS.values():
+        errors(Highest(Tally(ballot, trim=TRIMS[1])), prepared)
 
 
 def trimmed(values, trim: float = TRIM, weights=None) -> np.ndarray:

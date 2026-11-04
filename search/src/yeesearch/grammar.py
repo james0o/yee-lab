@@ -21,15 +21,22 @@ the constructors accept, nearly always (build() checks). The types:
 Undecided() is left out: a method must try to elect someone everywhere. The score ballots
 are a small fixed set (SCORE_BALLOTS), so that the shares of the voters cached for all
 methods stay few (needs()). D20 (yeelab.build.methods.d20) is a method of its own, a
-leaf: weak alone, it may tell where others are right inside a Conditional."""
+leaf: weak alone, it may tell where others are right inside a Conditional.
+
+restrict_to_plain() narrows the grammar to the plain vocabulary, for a search of methods
+that can be explained: PLAIN_NAMED and the trimmed means, each a leaf, joined only by
+Conditionals at most MAX_NESTING deep, whose conditions compare those leaves or read Top
+and Lead of the first choices or of the mean score."""
 
 import random
 from dataclasses import dataclass, field, fields
+from functools import cache
 
-from yeelab.build import (D21, AntiPlurality, BordaCount, Conditional, DescendingCoalitions, Eliminate, Highest, Lead,
+from yeelab.build import (D21, AntiPlurality, BordaCount, Coarse, Conditional, DescendingCoalitions, Eliminate, Highest, Lead,
                           Margins, Pairwise, Plurality, Score, ScoreComparisons, Smith, StrongestPaths, Tally, Top,
                           Unbeaten, Union, Weakest, Winner)
 from yeelab.build.blocks import Block, CombinedCondition, Threshold, WinnerComparison
+from yeelab.build.methods import METHODS
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Ballots, Graded, Scored, ScoredPairwise
 
 SCORE_POWER = 1.5  # as yeelab.build.methods.SCORE_POWER
@@ -40,8 +47,13 @@ THRESHOLDS = (0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.55, 0.6, 0.7)
 FINALISTS = (2, 3)  # of the n highest totals
 MAJORITIES = (0.5, 0.55, 0.6)  # of the Smith set
 D20 = Highest(Tally(D21(max_positive=2, max_negative=0, ordinal=True)))  # two votes for the first two
+COARSE_BALLOTS = {levels: Coarse(levels, power=SCORE_POWER) for levels in (2, 3)}  # of the plain vocabulary
+TRIMS = (*range(0, 50, 5), 49)  # of a Tally in the plain vocabulary; the median itself is MJ, a method of its own
+PLAIN_NAMED = ("fptp", "two_round", "condorcet", "dac", "d20", "mj")  # of yeelab.build.methods
+PLAIN_NESTING = 2  # Conditionals inside each other in the plain vocabulary
 MAX_DEPTH = 12  # 9 and 40 before 2026-10-28: room for Conditionals in Conditionals
 MAX_NODES = 60
+MAX_NESTING = MAX_NODES  # of Conditionals: no limit but MAX_NODES, unless restrict_to_plain()
 
 
 @dataclass(frozen=True)
@@ -104,6 +116,16 @@ RULES = {rule.name: rule for rule in [
     _rule("union", "among", "method method", (), lambda p, c: Union(c[0], c[1])),
 ]}
 TYPES = frozenset().union(*(rule.fills for rule in RULES.values()))
+# Coarse(2) has two scores, whose trimmed mean orders the candidates as the mean does: a trim would change nothing
+TRIMMED_BALLOTS = {6: SCORE_BALLOTS[6], 3: COARSE_BALLOTS[3]}
+PLAIN_RULES = {rule.name: rule for rule in [
+    *(RULES[name] for name in ("plurality", "tally", "top", "lead", "threshold", "same", "both", "elects", "conditional")),
+    _rule("score", "ballot score", "", ((6,),), lambda p, c: SCORE_BALLOTS[p[0]]),
+    *(_rule(name, "method", "", (), lambda p, c, method=METHODS[name]: method) for name in PLAIN_NAMED),
+    _rule("coarse_2", "method", "", (), lambda p, c: Highest(Tally(COARSE_BALLOTS[2]))),
+    _rule("trimmed", "method", "", (tuple(TRIMMED_BALLOTS), TRIMS),
+          lambda p, c: Highest(Tally(TRIMMED_BALLOTS[p[0]], trim=p[1]))),
+]}
 
 
 def _min_depths() -> dict[str, int]:
@@ -120,6 +142,26 @@ def _min_depths() -> dict[str, int]:
 
 
 MIN_DEPTH = _min_depths()
+
+
+def restrict_to_plain():
+    """The grammar of this process from now on, in place for all who imported it, is the
+    plain vocabulary (PLAIN_RULES). The workers that score methods do not need to know."""
+    global MAX_NESTING
+    RULES.clear()
+    RULES.update(PLAIN_RULES)
+    MIN_DEPTH.clear()
+    MIN_DEPTH.update(_min_depths())
+    MAX_NESTING = PLAIN_NESTING
+
+
+@cache
+def plain_leaves() -> dict[str, "Node"]:
+    """{repr of the method: its tree} of every leaf of the plain vocabulary."""
+    leaves = [Node(name) for name, rule in PLAIN_RULES.items() if "method" in rule.fills and not rule.children
+              and not rule.params]
+    leaves += [Node("trimmed", (levels, trim)) for levels in TRIMMED_BALLOTS for trim in TRIMS]
+    return {repr(PLAIN_RULES[leaf.rule].build(leaf.params, ())): leaf for leaf in leaves}
 
 
 @dataclass(frozen=True)
@@ -162,6 +204,11 @@ def nodes(node: Node) -> int:
 
 def depth(node: Node) -> int:
     return 1 + max((depth(child) for child in node.children), default=0)
+
+
+def nesting(node: Node) -> int:
+    """The most Conditionals inside each other, in a branch or a condition."""
+    return (node.rule == "conditional") + max((nesting(child) for child in node.children), default=0)
 
 
 def size(block) -> int:
@@ -242,16 +289,20 @@ def needs() -> frozenset:
     for ballot in SCORE_BALLOTS.values():
         shares |= {ballot.scored, Graded(ballot.scored), Ballots(ballot.scored)}
         shares |= {ScoredPairwise(ballot.scored, weight) for weight in TIE_WEIGHTS}
+    for ballot in COARSE_BALLOTS.values():
+        shares |= {ballot.scored, Graded(ballot.scored), Ballots(ballot.scored)}
     return frozenset(shares)
 
 # ---------------------------------------------------------------- random trees
 
 
-def random_tree(rng: random.Random, slot: str = "method", max_depth: int = 6, full: bool = False) -> Node:
+def random_tree(rng: random.Random, slot: str = "method", max_depth: int = 6, full: bool = False,
+                room: int | None = None) -> Node:
     """A random tree for a slot of type `slot`, at most `max_depth` deep, or as deep as
     the least tree of the type: "grow" draws any rule that fits, "full" only rules with
-    children while they fit."""
-    filling = [name for name, rule in RULES.items() if slot in rule.fills]
+    children while they fit. `room`: Conditionals it may still nest, MAX_NESTING at the root."""
+    room = MAX_NESTING if room is None else room
+    filling = [name for name, rule in RULES.items() if slot in rule.fills and (name != "conditional" or room > 0)]
     max_depth = max(max_depth, min(MIN_DEPTH[name] for name in filling))
     fitting = [name for name in filling if MIN_DEPTH[name] <= max_depth]
     if full:
@@ -259,7 +310,8 @@ def random_tree(rng: random.Random, slot: str = "method", max_depth: int = 6, fu
         fitting = inner or fitting
     rule = RULES[rng.choice(fitting)]
     params = tuple(rng.choice(values) for values in rule.params)
-    return Node(rule.name, params, tuple(random_tree(rng, t, max_depth - 1, full) for t in rule.children))
+    room -= rule.name == "conditional"
+    return Node(rule.name, params, tuple(random_tree(rng, t, max_depth - 1, full, room) for t in rule.children))
 
 
 def ramped(rng: random.Random, count: int, depths=range(3, 7)) -> list[Node]:
@@ -279,7 +331,7 @@ def valid(node: Node) -> bool:
         build_method(node)
     except Invalid:
         return False
-    return nodes(node) <= MAX_NODES and depth(node) <= MAX_DEPTH
+    return nodes(node) <= MAX_NODES and depth(node) <= MAX_DEPTH and nesting(node) <= MAX_NESTING
 
 # ---------------------------------------------------------------- positions and edits
 
@@ -356,6 +408,8 @@ def _from_block(block, slot: str) -> Node:  # noqa: C901 -- one case per block
                         (_from_block(block.first, "condition"), _from_block(block.second, "condition")))
         case Winner() if slot == "if":
             return Node("elects", (), (_from_block(block, "method"),))
+        case Winner() if "trimmed" in RULES and repr(block) in plain_leaves():
+            return plain_leaves()[repr(block)]
         case Highest() if repr(block) == repr(D20):
             return Node("d20")
         case Highest():
