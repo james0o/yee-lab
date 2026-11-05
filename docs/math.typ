@@ -1186,14 +1186,16 @@ scores). `Score` meets all ten at every power of the slider, `ScoreAvg` and
 points than with $p = 1$, `ScoreHybrid` 10.8% fewer, `ScoreCluster` 0.2% more,
 `ScoreDH` 7.5% more and `ScoreAvg` 22.9% more (@sec-score-data).
 
-*Coarse counts* (`Coarse(n)`, `coarse_3`, `coarse_2`). The voter marks the ballot of
+*Coarse counts* (`Coarse(Score(6, fixed=True), levels=n)`, `coarse_3`, `coarse_2`). The voter marks the ballot of
 $L = 6$ levels, and the count groups its scores: $s |-> floor(s n slash 6)$ for $n = 3$
 (0–1, 2–3, 4–5) or $n = 2$ (0–2, 3–5), the divisors of 6, so that the groups have the
-same size. That is a ballot of $n$ levels whose score rises where the score of six
+same size. Four levels are also available, mapping scores 0–5 to 0, 0, 1, 2, 2, 3.
+That is a ballot of $n$ levels whose score rises where the score of six
 levels crosses a group, at $t_i^p = 0.3$ and $0.7$ for $n = 3$,
 against $0.25$ and $0.75$ of @eq-range with $L = 3$: nearly `Score(3)` with another
 power, its winner differs on about 3 % of the square at $p = 1.5$. For $n = 2$ the one
-threshold is $t_i^p = 0.5$, that of $L = 2$: `Coarse(2)` is `Score(2)`, approval voting. Its
+threshold is $t_i^p = 0.5$, that of $L = 2$: `Coarse(Score(6, fixed=True), levels=2)` is
+`Score(2)`, approval voting. Its
 shares are those of six levels summed over each group (`score.COARSE`,
 `tests/test_coarse.py`); the categories slider does not change $n$, the power slider
 does. The methods `coarse_3` and `coarse_2` of the web UI take the trimmed mean of the
@@ -4196,4 +4198,3 @@ $56 %$ over $R$.
 The API returns all three, $100 e$, $100 e_"random"$ and $100 sqrt(e slash e_"random")$, in
 percent, for both areas (`metrics.diagram` and `metrics.region`), and `null` where nothing
 is decided in the area; with them the border of $R$ (`overlays.focus`) for the UI to draw.
-

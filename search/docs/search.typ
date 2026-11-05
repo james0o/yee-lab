@@ -332,8 +332,8 @@ two levels by $J$ and raw.
 = The plain vocabulary <ch-plain>
 
 With `--plain` both searches use only methods that are simple to explain, each one a leaf: FPTP,
-Two Round, the Condorcet winner, DAC, D20, MJ, the trimmed means of the six scores and of Coarse(3)
-at a trim of 0, 5, ..., 45 or 49 (a trim of 0 is Score), and Coarse(2), whose trim changes nothing:
+Two Round, the Condorcet winner, DAC, D20, MJ, the trimmed means of the six scores and of Coarse(..., levels=3)
+at a trim of 0, 5, ..., 45 or 49 (a trim of 0 is Score), and Coarse(..., levels=2), whose trim changes nothing:
 of two scores the trimmed mean orders the candidates as the mean does. Only a Conditional joins
 them, at most two inside each other (`grammar.PLAIN_NESTING`). Its condition is a comparison of two
 methods, whether a method elects someone, Top or Lead of the first choices or of the mean score

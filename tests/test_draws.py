@@ -112,9 +112,10 @@ def test_a_draw_loses_as_a_random_one_of_its_own():
 def test_coarse_ballots_draw_over_areas():
     """Approvals counted with a trim of 25 draw over a part of the default diagram;
     elsewhere the winners are those of the trimmed mean."""
-    method = Drawn(Tally(Coarse(2, power=1.5), trim=25))
+    coarse_2 = Coarse(Score(6, power=1.5, fixed=True), levels=2)
+    method = Drawn(Tally(coarse_2, trim=25))
     _, winner, margin = winners(method, CANDIDATES, MODEL, 64)
-    _, usual, _ = winners(Highest(Tally(Coarse(2, power=1.5), trim=25)), CANDIDATES, MODEL, 64)
+    _, usual, _ = winners(Highest(Tally(coarse_2, trim=25)), CANDIDATES, MODEL, 64)
     draws = winner < CYCLE
     assert 0.05 < draws.mean() < 0.5
     np.testing.assert_array_equal(winner[~draws], usual[~draws])
@@ -143,7 +144,10 @@ def test_api_draws_in_the_chart_of_winners_by_trim():
     median = [0.45, 0.45]
     answer = client.post("/api/trims", json={"candidates": CANDIDATES, "median": median, "power": 1.5,
                                              "draws": True}).json()
-    for row, ballot in zip(answer["rows"], (Coarse(2, power=1.5), Coarse(3, power=1.5), Score(6, power=1.5))):
+    for row, ballot in zip(answer["rows"], (
+            Coarse(Score(6, power=1.5, fixed=True), levels=2),
+            Coarse(Score(6, power=1.5, fixed=True), levels=3),
+            Score(6, power=1.5))):
         assert (row["name"], row["levels"]) in TRIM_ROWS
         for trim in (0, 25, 40, 49):
             method = Drawn(Tally(ballot, trim=trim))
@@ -154,6 +158,6 @@ def test_api_draws_in_the_chart_of_winners_by_trim():
     # and the voters vote as the sliders say
     burying = client.post("/api/trims", json={"candidates": CANDIDATES, "median": median, "power": 1.5,
                                               "draws": True, "burial": 0.4}).json()
-    method = strategic(Drawn(Tally(Coarse(2, power=1.5), trim=40)), {"burial": 0.4})
+    method = strategic(Drawn(Tally(Coarse(Score(6, power=1.5, fixed=True), levels=2), trim=40)), {"burial": 0.4})
     expected = method.evaluate(voters(method.needs, CANDIDATES, MODEL, medians=median))[0][0, 1]
     assert burying["rows"][0]["winners"][TRIMS.index(40)] == expected

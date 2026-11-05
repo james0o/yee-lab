@@ -794,7 +794,10 @@ def test_api_gives_the_winners_of_a_pixel_by_trim():
         answer = answer.json()
         assert answer["trims"] == list(TRIMS) == list(range(51))
         assert [(row["name"], row["levels"]) for row in answer["rows"]] == list(TRIM_ROWS)
-        for row, ballot in zip(answer["rows"], (Coarse(2, power=1.5), Coarse(3, power=1.5), Score(6, power=1.5))):
+        ballots = (Coarse(Score(6, power=1.5, fixed=True), levels=2),
+                   Coarse(Score(6, power=1.5, fixed=True), levels=3),
+                   Score(6, power=1.5))
+        for row, ballot in zip(answer["rows"], ballots):
             for trim in (0, 10, 25, 49, 50):
                 method = Highest(Tally(ballot, trim=trim) if trim < 50 else Tally(ballot, statistic="median"))
                 method = strategic(method, shares, 0.0)
