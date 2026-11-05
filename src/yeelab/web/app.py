@@ -29,6 +29,7 @@ from yeelab.margin.regions import voters as voters_at
 from yeelab.margin.shares import PIXELS, Model
 from yeelab.normal import sigma_from_deviation
 from yeelab.ranking_cells import SPREAD, beta_params
+from yeelab.score import FINE
 
 # Methods follow a drag within ~5-30 ms; IRV needs every ranking cell and takes up to
 # ~0.1 s for 8 candidates (see docs/math.typ).
@@ -86,7 +87,9 @@ def _score_ballot_settings(block, levels: int, power: float):
     """Replace adjustable Score settings while preserving fixed levels and block structure."""
     if type(block) is Score:
         return Score(block.levels if block.fixed else levels, power=power, fixed=block.fixed)
-    if type(block) is Coarse or (type(block) is D21 and not block.ordinal):  # fixed levels
+    if type(block) is Coarse:
+        return Coarse(Score(FINE, power=power, fixed=True), levels=block.levels)
+    if type(block) is D21 and not block.ordinal:  # fixed levels
         return replace(block, power=power)
     if not is_dataclass(block):
         return block

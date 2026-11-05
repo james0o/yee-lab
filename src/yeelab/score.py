@@ -94,11 +94,11 @@ distances r_i = |v - c_i|, in one of eight ways (`rule`):
             others, every voter all of them; negative_after and the power do not count.
             With two levels it is the approval of the max_positive closest
     COARSE  RANGE's ballot of FINE = 6 levels, 0 to 5, at the power `power`, counted
-            in `levels` groups of FINE / levels scores each: the score
-            floor(s * levels / FINE) of RANGE's s. levels divides FINE: 3 is the
-            groups 0-1, 2-3 and 4-5, and 2 the groups 0-2 and 3-5, the approval of
-            the scores 3 to 5, which is RANGE's approval ballot. The voter marks one
-            ballot of six scores, and only the count is coarser
+            in `levels` groups: the score floor(s * levels / FINE) of RANGE's s.
+            levels is 2, 3, 4 or 6: 3 is the groups 0-1, 2-3 and 4-5, and 2 the
+            groups 0-2 and 3-5, the approval of the scores 3 to 5, which is RANGE's
+            approval ballot. With 4 levels the groups map to scores 0, 0, 1, 2, 2, 3.
+            The voter marks one ballot of six scores, and only the count is coarser.
 
 Nothing changes when all distances are scaled. With two levels every rule is an approval
 ballot: the voter approves the candidates with the top score, from the closest alone to
@@ -208,9 +208,9 @@ def _check(rule, delta, mu=MU, kappa=KAPPA, power=POWER, votes=VOTES, levels=Non
         raise ValueError("votes must be whole numbers (max_positive, max_negative, negative_after) with "
                          f"max_positive >= 1, max_negative >= 0 and negative_after from 0 to max_positive, "
                          f"got {votes!r}")
-    if rule == COARSE and levels is not None and not (levels < FINE and FINE % levels == 0):
-        raise ValueError(f"a COARSE ballot counts the {FINE} scores of RANGE in groups of the same size: "
-                         f"its levels must divide {FINE} and be below it, got {levels}")
+    if rule == COARSE and levels is not None and levels not in (2, 3, 4, FINE):
+        raise ValueError(f"a COARSE ballot counts the {FINE} scores of RANGE into 2, 3, 4 or {FINE} groups, "
+                         f"got {levels}")
     if rule in (D21, D21_ORDINAL) and levels is not None and levels != (3 if votes[1] else 2):
         raise ValueError(f"a D21 ballot has {3 if votes[1] else 2} levels with {votes[1]} minus votes, "
                          f"got {levels}")

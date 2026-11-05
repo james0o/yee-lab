@@ -5,6 +5,7 @@ from yeelab.build.blocks import (
     AntiPlurality,
     BordaCount,
     Coarse,
+    CoarseTrim,
     D21,
     DescendingCoalitions,
     Conditional,
@@ -71,8 +72,13 @@ TESTED = frozenset(globals())  # the names above the wall: the tests check only 
 
 # the highest trimmed mean of score_ballot's six scores counted in three groups (0-1, 2-3,
 # 4-5) and in two (0-2, 3-5): the same ballot, a coarser count (tests/test_coarse.py)
-coarse_3 = Highest(Tally(Coarse(3, power=SCORE_POWER), trim=TRIM))
-coarse_2 = Highest(Tally(Coarse(2, power=SCORE_POWER), trim=TRIM))
+coarse_score_ballot = Score(6, power=SCORE_POWER, fixed=True)
+coarse_3_ballot = Coarse(coarse_score_ballot, levels=3)
+coarse_2_ballot = Coarse(coarse_score_ballot, levels=2)
+coarse_3 = Highest(Tally(coarse_3_ballot, trim=TRIM))
+coarse_2 = Highest(Tally(coarse_2_ballot, trim=TRIM))
+coarse_3_trim = CoarseTrim(coarse_3_ballot)
+coarse_2_trim = CoarseTrim(coarse_2_ballot)
 
 # found by the search (search/, run 2026-10-26: 0.4 sincere + 0.6 burial by 30 %), best
 # three on its test set; the web UI lists them in a row of their own (FOUND). Each is a

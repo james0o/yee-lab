@@ -10,7 +10,7 @@ Every block has one type of output:
                      BordaCount(),
                      Score(levels, power=...), ScoreAvg(levels), ScoreDH(levels, delta=...),
                      ScoreHybrid(levels, delta=...), ScoreCluster(levels, mu=..., kappa=...),
-                     Coarse(levels, power=...),
+                     Coarse(Score(6, fixed=True), levels=...),
                      D21(max_positive=..., max_negative=..., negative_after=..., power=...),
                      D21(max_positive=..., max_negative=..., ordinal=True),
                      Mix(first, second, share=...)
@@ -30,7 +30,8 @@ Every block has one type of output:
     Measure          Top(totals), Lead(totals)          a number from 0 to 1 at every point
     Condition        winner == winner, winner != winner,  true or false at every point,
                      measure > t, measure < t,          for Conditional
-                     condition & condition, condition | condition
+                     condition & condition, condition | condition,
+                     CoarseTrim(coarse).has_winner(method)
 
 A ranked ballot gives weight(k, C) points to the candidate at position k (0 = closest)
 of C; both count only the remaining candidates, and a higher total is better. A score
@@ -46,8 +47,9 @@ does that for the candidates closer than halfway, on the upper half of the scale
 Score's for the others, on the lower half; ScoreCluster(levels, mu=..., kappa=...)
 gives Score's scores unless that splits a cluster of candidates at nearly the same
 distance, at a cost of mu, kappa setting how far a cluster must stand apart.
-Coarse(levels, power=...) is Score(6, power=...)'s ballot counted in `levels` groups of
-its scores, levels 2 or 3. With two levels each is an approval ballot. D21(max_positive=..., max_negative=..., negative_after=...,
+Coarse(ballot, levels=...) is a fixed Score(6) ballot counted in `levels` groups of
+its scores, levels 2, 3, 4 or 6. With two levels each is an approval ballot.
+D21(max_positive=..., max_negative=..., negative_after=...,
 power=...) is Janeček's D21, plus votes, minus votes and none, from Score's ballots of
 three and two levels: at most max_positive plus votes to the closest candidates, at most
 max_negative minus votes to the farthest, and a minus vote only after negative_after plus
@@ -113,6 +115,10 @@ plus 1), so that a threshold means the same for any ballot and number of candida
 is FPTP where someone has 55 % of the first choices, else the two-round system. & and |
 combine conditions.
 
+CoarseTrim(coarse).has_winner(method) is true where some trim from 0 to (but not
+including) 50 elects the same winner as method. The trim sweep is exact over the
+piecewise trimmed-mean totals and its condition can be used by Conditional.
+
 DescendingCoalitions() is descending acquiescing coalitions (DAC): every set of
 candidates scores the share of the voters who rank all of it above all others, and from
 the highest score down each set makes the candidates outside it ineligible, unless
@@ -138,6 +144,7 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Literal
 
 import numpy as np
+from numba import njit
 
 from yeelab.build.judgment import majority_totals
 from yeelab.build.rounds import drop_below_mean, drop_lowest
@@ -613,31 +620,36 @@ class ScoreCluster(Score):
         return f"{type(self).__name__}({self.levels}, mu={self.mu!r}, kappa={self.kappa!r})"
 
 
-@dataclass(frozen=True, repr=False)
+@dataclass(frozen=True, repr=False, init=False)
 class Coarse(Score):
-    """Score(6)'s ballot at the power `power`, scores 0 to 5, counted in `levels` groups
-    of the same size (score.COARSE): the score floor(s * levels / 6) of Score(6)'s s.
-    Coarse(3) is the groups 0-1, 2-3 and 4-5, and Coarse(2) the groups 0-2 and 3-5,
-    Score(2)'s approval ballot. The voter marks the one ballot of six scores; only the
-    count is coarser. Its thresholds are those of Score(6) between the groups, not those
-    of Score(levels): for Coarse(3) at 0.3 and 0.7 of the way to the power, not 0.25 and
-    0.75. levels is the count's and the UI's categories slider does not change it
-    (fixed); the power slider does.
+    """A fixed Score(6) ballot grouped into fewer scores using score.COARSE.
 
-    The total is that of Score: the mean score of the groups as a part of the top one."""
+    The ballot must be an explicit Score(6, fixed=True). Coarse scores are
+    floor(score * levels / 6); for example, four levels map scores 0..5 to
+    0, 0, 1, 2, 2, 3. The voter marks the six-score ballot once; only the
+    count is coarser.
+    """
 
     fixed: bool = field(default=True, init=False)
     rule = COARSE
 
+    def __init__(self, ballot: Score, *, levels: int):
+        if type(ballot) is not Score or ballot.levels != FINE or not ballot.fixed:
+            raise TypeError("Coarse expects a fixed Score(6) ballot, "
+                            f"got {type(ballot).__name__} {ballot!r}")
+        object.__setattr__(self, "levels", levels)
+        object.__setattr__(self, "power", ballot.power)
+        object.__setattr__(self, "fixed", True)
+        self.__post_init__()
+
     def __post_init__(self):
         super().__post_init__()
-        if not (self.levels < FINE and FINE % self.levels == 0):
-            raise ValueError(f"Coarse counts the {FINE} scores of Score({FINE}) in groups of the same size: "
-                             f"levels must divide {FINE} and be below it, 2 or 3, got {self.levels!r}")
+        if self.levels not in (2, 3, 4, 6):
+            raise ValueError(f"Coarse levels must be one of 2, 3, 4 or 6, got {self.levels!r}")
 
     def __repr__(self):
-        power = f", power={self.power!r}" if self.power != POWER else ""
-        return f"Coarse({self.levels}{power})"
+        ballot = Score(FINE, power=self.power, fixed=True)
+        return f"Coarse({ballot!r}, levels={self.levels})"
 
 
 @dataclass(frozen=True, repr=False)
@@ -1209,6 +1221,188 @@ class Condition(Block):
         if not isinstance(other, Condition):
             return NotImplemented
         return CombinedCondition(self, other, "or")
+
+
+@njit(cache=True, nogil=True, error_model="numpy")
+def _trimmed_sweep_point(grades: np.ndarray, candidate: int, tie_break: float) -> tuple[bool, float]:
+    """Exact existential trim sweep for one point, compiled for large voter grids."""
+    candidates, levels = grades.shape
+    steps = levels - 1
+    if candidates == 1:
+        return True, np.inf
+
+    at_most = np.empty((candidates, steps), dtype=np.float64)
+    breakpoints = np.empty(2 + 2 * candidates * steps, dtype=np.float64)
+    breakpoints[0] = 0.0
+    breakpoints[1] = 0.5
+    index = 2
+    for c in range(candidates):
+        total = 0.0
+        for k in range(levels):
+            total += grades[c, k]
+            if k < steps:
+                value = total / grades[c].sum()
+                at_most[c, k] = value
+                breakpoints[index] = min(max(value, 0.0), 0.5)
+                breakpoints[index + 1] = min(max(1.0 - value, 0.0), 0.5)
+                index += 2
+    breakpoints.sort()
+
+    best_gap = -np.inf
+    found = False
+    intercept = np.empty(candidates, dtype=np.float64)
+    slope = np.empty(candidates, dtype=np.float64)
+    for segment in range(len(breakpoints) - 1):
+        lower = breakpoints[segment]
+        upper = breakpoints[segment + 1]
+        if upper <= lower:
+            continue
+        middle = (lower + upper) / 2
+
+        for c in range(candidates):
+            middle_count = 0
+            high_count = 0
+            sum_middle = 0.0
+            sum_all = 0.0
+            for k in range(steps):
+                value = at_most[c, k]
+                sum_all += value
+                if value < middle:
+                    continue
+                if value > 1.0 - middle:
+                    high_count += 1
+                else:
+                    middle_count += 1
+                    sum_middle += value
+            intercept[c] = (-(1.0 - tie_break) * (sum_middle + high_count)
+                            - tie_break * sum_all)
+            slope[c] = ((1.0 - tie_break) * (middle_count + 2 * high_count)
+                        + 2.0 * tie_break * sum_all)
+
+        roots = np.empty(2 + candidates * (candidates - 1) // 2, dtype=np.float64)
+        roots[0] = lower
+        roots[1] = upper
+        root_count = 2
+        for first in range(candidates):
+            for second in range(first + 1, candidates):
+                difference_slope = slope[first] - slope[second]
+                if difference_slope != 0:
+                    root = -(intercept[first] - intercept[second]) / difference_slope
+                    if lower < root < upper:
+                        roots[root_count] = root
+                        root_count += 1
+        roots = np.sort(roots[:root_count])
+
+        for point_index in range(root_count):
+            trim = roots[point_index]
+            if trim < 0.5:
+                winner = 0
+                highest = intercept[0] + slope[0] * trim
+                runner_up = -np.inf
+                for c in range(1, candidates):
+                    value = intercept[c] + slope[c] * trim
+                    if value > highest:
+                        highest = value
+                        winner = c
+                value = intercept[candidate] + slope[candidate] * trim
+                runner_up = -np.inf
+                for c in range(candidates):
+                    if c != candidate:
+                        runner_up = max(runner_up, intercept[c] + slope[c] * trim)
+                gap = value - runner_up
+                gap /= (1.0 - 2.0 * trim) * steps
+                best_gap = max(best_gap, gap)
+                found |= winner == candidate
+
+            if point_index + 1 < root_count:
+                next_trim = roots[point_index + 1]
+                if next_trim > trim:
+                    sample = (trim + next_trim) / 2
+                    if sample < 0.5:
+                        winner = 0
+                        highest = intercept[0] + slope[0] * sample
+                        for c in range(1, candidates):
+                            value = intercept[c] + slope[c] * sample
+                            if value > highest:
+                                highest = value
+                                winner = c
+                        value = intercept[candidate] + slope[candidate] * sample
+                        runner_up = -np.inf
+                        for c in range(candidates):
+                            if c != candidate:
+                                runner_up = max(runner_up, intercept[c] + slope[c] * sample)
+                        gap = (value - runner_up) / ((1.0 - 2.0 * sample) * steps)
+                        best_gap = max(best_gap, gap)
+                        found |= winner == candidate
+
+        if upper == 0.5:
+            # Use the one-sided limit for the margin, but not as a possible trim.
+            limits = -slope / 2.0
+            runner_up = -np.inf
+            for c in range(candidates):
+                if c != candidate:
+                    runner_up = max(runner_up, limits[c])
+            best_gap = max(best_gap, limits[candidate] - runner_up)
+
+    return found, abs(best_gap)
+
+
+def _trimmed_sweep(grades: np.ndarray, candidate: int) -> tuple[bool, float]:
+    """Whether candidate wins for some trim in [0, 50), and its closest score gap."""
+    return _trimmed_sweep_point(grades, candidate, TRIM_TIE_BREAK)
+
+
+@dataclass(frozen=True)
+class CoarseTrim:
+    """The family of trimmed-mean methods for one coarse score ballot."""
+
+    ballot: Coarse
+
+    def __post_init__(self):
+        _expect(self, self.ballot, Coarse, "a Coarse ballot")
+
+    def has_winner(self, method: Winner) -> Condition:
+        """A condition true where some trim elects the winner of `method`."""
+        _expect(self, method, Winner, "a Winner")
+        method._one_seat()
+        return TrimmedWinnerCondition(self.ballot, method)
+
+    def __repr__(self):
+        return f"CoarseTrim({self.ballot!r})"
+
+
+@dataclass(frozen=True)
+class TrimmedWinnerCondition(Condition):
+    ballot: Coarse
+    method: Winner
+
+    def __post_init__(self):
+        _expect(self, self.ballot, Coarse, "a Coarse ballot")
+        _expect(self, self.method, Winner, "a Winner")
+        self.method._one_seat()
+
+    @property
+    def needs(self) -> frozenset[Share]:
+        return self.ballot.needs_graded | self.method.needs
+
+    def evaluate(self, voters: Voters) -> tuple[np.ndarray, np.ndarray]:
+        target, method_margin = self.method.evaluate(voters)
+        grades = self.ballot.grades(voters)
+        flat_grades = grades.reshape((-1, *grades.shape[-2:]))
+        flat_target = np.asarray(target).reshape(-1)
+        exists = np.zeros(flat_target.shape, dtype=bool)
+        margins = np.full(flat_target.shape, np.inf)
+        for index, (point_grades, candidate) in enumerate(zip(flat_grades, flat_target)):
+            if candidate != CYCLE:
+                exists[index], margins[index] = _trimmed_sweep(point_grades, int(candidate))
+        margins = np.minimum(margins.reshape(voters.shape), method_margin)
+        return exists.reshape(voters.shape), margins
+
+    def __bool__(self):
+        raise TypeError("A trimmed-winner condition must be evaluated by Conditional")
+
+    def __repr__(self):
+        return f"{CoarseTrim(self.ballot)!r}.has_winner({self.method!r})"
 
 
 @dataclass(frozen=True)

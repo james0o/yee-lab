@@ -2,7 +2,7 @@
 
     from yeelab.build import (AntiPlurality, BordaCount, Bullet, Burial, Compromise, D21, DescendingCoalitions,
                               Conditional, Eliminate,
-                              Highest, Lead, Margins, Mix, Pairwise, Plurality, Score,
+                              Highest, Lead, Margins, Mix, Pairwise, Plurality, Score, Coarse, CoarseTrim,
                               ScoreAvg, ScoreCluster, ScoreComparisons, ScoreDH, ScoreHybrid,
                               Smith, StrongestPaths, Tally, Top, Unbeaten, Weakest)
 
@@ -83,6 +83,7 @@ from yeelab.build.blocks import (
     BordaCount,
     CandidateTotals,
     Coarse,
+    CoarseTrim,
     D21,
     DescendingCoalitions,
     Drawn,
@@ -119,7 +120,8 @@ from yeelab.build.voters import (FIRST, PAIRWISE, PROFILE, Ballots, Graded, Scor
                                  Voters)
 
 __all__ = [
-    "AntiPlurality", "Ballot", "Ballots", "BordaCount", "Bullet", "Burial", "CandidateTotals", "Coarse", "Compromise",
+    "AntiPlurality", "Ballot", "Ballots", "BordaCount", "Bullet", "Burial", "CandidateTotals", "Coarse", "CoarseTrim",
+    "Compromise",
     "D21", "DescendingCoalitions", "Drawn",
     "Conditional", "Eliminate", "Highest", "Lead", "Margins", "Measure", "Mix", "PairDiffs", "PairShares",
     "Pairwise", "Plurality", "Score", "ScoreComparisons", "ScoreAvg", "ScoreCluster", "ScoreDH",

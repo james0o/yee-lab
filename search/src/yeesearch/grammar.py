@@ -47,7 +47,10 @@ THRESHOLDS = (0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.55, 0.6, 0.7)
 FINALISTS = (2, 3)  # of the n highest totals
 MAJORITIES = (0.5, 0.55, 0.6)  # of the Smith set
 D20 = Highest(Tally(D21(max_positive=2, max_negative=0, ordinal=True)))  # two votes for the first two
-COARSE_BALLOTS = {levels: Coarse(levels, power=SCORE_POWER) for levels in (2, 3)}  # of the plain vocabulary
+COARSE_BALLOTS = {
+    levels: Coarse(Score(6, power=SCORE_POWER, fixed=True), levels=levels)
+    for levels in (2, 3)
+}  # of the plain vocabulary
 TRIMS = (*range(0, 50, 5), 49)  # of a Tally in the plain vocabulary; the median itself is MJ, a method of its own
 PLAIN_NAMED = ("fptp", "two_round", "condorcet", "dac", "d20", "mj")  # of yeelab.build.methods
 PLAIN_NESTING = 2  # Conditionals inside each other in the plain vocabulary
@@ -116,7 +119,7 @@ RULES = {rule.name: rule for rule in [
     _rule("union", "among", "method method", (), lambda p, c: Union(c[0], c[1])),
 ]}
 TYPES = frozenset().union(*(rule.fills for rule in RULES.values()))
-# Coarse(2) has two scores, whose trimmed mean orders the candidates as the mean does: a trim would change nothing
+# Coarse(..., levels=2) has two scores, whose trimmed mean orders the candidates as the mean does: a trim would change nothing
 TRIMMED_BALLOTS = {6: SCORE_BALLOTS[6], 3: COARSE_BALLOTS[3]}
 PLAIN_RULES = {rule.name: rule for rule in [
     *(RULES[name] for name in ("plurality", "tally", "top", "lead", "threshold", "same", "both", "elects", "conditional")),
