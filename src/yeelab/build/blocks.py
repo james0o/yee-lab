@@ -1224,132 +1224,154 @@ class Condition(Block):
 
 
 @njit(cache=True, nogil=True, error_model="numpy")
-def _trimmed_sweep_point(grades: np.ndarray, candidate: int, tie_break: float) -> tuple[bool, float]:
-    """Exact existential trim sweep for one point, compiled for large voter grids."""
-    candidates, levels = grades.shape
+def _line(at_most: np.ndarray, state: np.ndarray, d: int, tie_break: float) -> tuple[float, float]:
+    """(A, B) of candidate d's trimmed mean (A s + B) / (levels - 1), s = 1 / (1 - 2a), on
+    trims a where its thresholds F(k) (at_most[d]) stay where `state` puts them: 0 inside
+    the trim, 1 below a, 2 above 1 - a (_trimmed_sweep)."""
+    intercept = slope = 0.0
+    for k in range(at_most.shape[1]):
+        f = at_most[d, k]
+        intercept -= tie_break * f
+        slope += 2.0 * tie_break * f
+        if state[d, k] == 0:
+            intercept -= (1.0 - tie_break) * f
+            slope += 1.0 - tie_break
+        elif state[d, k] == 2:
+            intercept -= 1.0 - tie_break
+            slope += 2.0 * (1.0 - tie_break)
+    return intercept + slope / 2.0, -slope / 2.0
+
+
+@njit(cache=True, nogil=True, error_model="numpy")
+def _trimmed_sweep(grades: np.ndarray, targets: np.ndarray, tie_break: float) -> tuple[np.ndarray, np.ndarray]:
+    """For every point p of grades (P, C, levels): whether some trim a from 0 up to 1/2
+    (not included) elects targets[p] by the trimmed mean (_trimmed, a tie to the lowest
+    index), and the margin: |the most targets[p] leads the best other trimmed mean by at
+    any trim|, 0 where that lead crosses 0. Where targets[p] is no candidate (CYCLE, a
+    draw), or a candidate has no voters, it is not found and the margin inf.
+
+    Times (1 - 2a) (levels - 1), a trimmed mean is linear in a wherever no threshold F(k)
+    of any candidate crosses a or 1 - a (_trimmed), so the trimmed mean itself is linear
+    in s = 1 / (1 - 2a): A s + B. On a stretch between two crossings, the candidate wins
+    where its line is above every other, an intersection of half-lines (O(C)); its
+    largest lead is the maximum of the least of C - 1 lines, which is the least over the
+    pairs of lines of the maximum of the two (a linear program in two variables, O(C^2)),
+    and only computed where it can exceed the lead found so far. On the last stretch, up
+    to a = 1/2, every A is 0: each trimmed mean is its median score, and the tie-break."""
+    points, candidates, levels = grades.shape
     steps = levels - 1
-    if candidates == 1:
-        return True, np.inf
-
-    at_most = np.empty((candidates, steps), dtype=np.float64)
-    breakpoints = np.empty(2 + 2 * candidates * steps, dtype=np.float64)
-    breakpoints[0] = 0.0
-    breakpoints[1] = 0.5
-    index = 2
-    for c in range(candidates):
-        total = 0.0
-        for k in range(levels):
-            total += grades[c, k]
-            if k < steps:
-                value = total / grades[c].sum()
-                at_most[c, k] = value
-                breakpoints[index] = min(max(value, 0.0), 0.5)
-                breakpoints[index + 1] = min(max(1.0 - value, 0.0), 0.5)
-                index += 2
-    breakpoints.sort()
-
-    best_gap = -np.inf
-    found = False
-    intercept = np.empty(candidates, dtype=np.float64)
-    slope = np.empty(candidates, dtype=np.float64)
-    for segment in range(len(breakpoints) - 1):
-        lower = breakpoints[segment]
-        upper = breakpoints[segment + 1]
-        if upper <= lower:
+    found = np.zeros(points, dtype=np.bool_)
+    margins = np.full(points, np.inf)
+    at_most = np.empty((candidates, steps))
+    state = np.zeros((candidates, steps), dtype=np.int8)
+    times = np.empty(candidates * steps)
+    which = np.empty(candidates * steps, dtype=np.int64)  # d * steps + k of each crossing
+    lines_a = np.empty(candidates)
+    lines_b = np.empty(candidates)
+    diff_a = np.empty(candidates)
+    diff_b = np.empty(candidates)
+    at_low = np.empty(candidates)
+    at_high = np.empty(candidates)
+    for p in range(points):
+        c = targets[p]
+        if c < 0 or c >= candidates:
             continue
-        middle = (lower + upper) / 2
-
-        for c in range(candidates):
-            middle_count = 0
-            high_count = 0
-            sum_middle = 0.0
-            sum_all = 0.0
+        if candidates == 1:
+            found[p] = True
+            continue
+        n = 0
+        valid = True
+        for d in range(candidates):
+            whole = 0.0
+            for k in range(levels):
+                whole += grades[p, d, k]
+            if not whole > 0:  # no voters, or not a number
+                valid = False
+            total = 0.0
             for k in range(steps):
-                value = at_most[c, k]
-                sum_all += value
-                if value < middle:
-                    continue
-                if value > 1.0 - middle:
-                    high_count += 1
-                else:
-                    middle_count += 1
-                    sum_middle += value
-            intercept[c] = (-(1.0 - tie_break) * (sum_middle + high_count)
-                            - tie_break * sum_all)
-            slope[c] = ((1.0 - tie_break) * (middle_count + 2 * high_count)
-                        + 2.0 * tie_break * sum_all)
-
-        roots = np.empty(2 + candidates * (candidates - 1) // 2, dtype=np.float64)
-        roots[0] = lower
-        roots[1] = upper
-        root_count = 2
-        for first in range(candidates):
-            for second in range(first + 1, candidates):
-                difference_slope = slope[first] - slope[second]
-                if difference_slope != 0:
-                    root = -(intercept[first] - intercept[second]) / difference_slope
-                    if lower < root < upper:
-                        roots[root_count] = root
-                        root_count += 1
-        roots = np.sort(roots[:root_count])
-
-        for point_index in range(root_count):
-            trim = roots[point_index]
-            if trim < 0.5:
-                winner = 0
-                highest = intercept[0] + slope[0] * trim
-                runner_up = -np.inf
-                for c in range(1, candidates):
-                    value = intercept[c] + slope[c] * trim
-                    if value > highest:
-                        highest = value
-                        winner = c
-                value = intercept[candidate] + slope[candidate] * trim
-                runner_up = -np.inf
-                for c in range(candidates):
-                    if c != candidate:
-                        runner_up = max(runner_up, intercept[c] + slope[c] * trim)
-                gap = value - runner_up
-                gap /= (1.0 - 2.0 * trim) * steps
-                best_gap = max(best_gap, gap)
-                found |= winner == candidate
-
-            if point_index + 1 < root_count:
-                next_trim = roots[point_index + 1]
-                if next_trim > trim:
-                    sample = (trim + next_trim) / 2
-                    if sample < 0.5:
-                        winner = 0
-                        highest = intercept[0] + slope[0] * sample
-                        for c in range(1, candidates):
-                            value = intercept[c] + slope[c] * sample
-                            if value > highest:
-                                highest = value
-                                winner = c
-                        value = intercept[candidate] + slope[candidate] * sample
-                        runner_up = -np.inf
-                        for c in range(candidates):
-                            if c != candidate:
-                                runner_up = max(runner_up, intercept[c] + slope[c] * sample)
-                        gap = (value - runner_up) / ((1.0 - 2.0 * sample) * steps)
-                        best_gap = max(best_gap, gap)
-                        found |= winner == candidate
-
-        if upper == 0.5:
-            # Use the one-sided limit for the margin, but not as a possible trim.
-            limits = -slope / 2.0
-            runner_up = -np.inf
-            for c in range(candidates):
-                if c != candidate:
-                    runner_up = max(runner_up, limits[c])
-            best_gap = max(best_gap, limits[candidate] - runner_up)
-
-    return found, abs(best_gap)
-
-
-def _trimmed_sweep(grades: np.ndarray, candidate: int) -> tuple[bool, float]:
-    """Whether candidate wins for some trim in [0, 50), and its closest score gap."""
-    return _trimmed_sweep_point(grades, candidate, TRIM_TIE_BREAK)
+                total += grades[p, d, k]
+                f = total / whole
+                at_most[d, k] = f
+                state[d, k] = 0
+                if f != 0.5:  # F(k) leaves the trim at a = F(k) below 1/2, at 1 - F(k) above
+                    time = f if f < 0.5 else 1.0 - f
+                    j = n
+                    while j > 0 and times[j - 1] > time:  # insertion: a few dozen at most
+                        times[j] = times[j - 1]
+                        which[j] = which[j - 1]
+                        j -= 1
+                    times[j] = time
+                    which[j] = d * steps + k
+                    n += 1
+        if not valid:
+            continue
+        for d in range(candidates):
+            lines_a[d], lines_b[d] = _line(at_most, state, d, tie_break)
+        hit = False
+        best = -np.inf
+        lower = 0.0
+        s_low = 1.0
+        i = 0
+        while True:
+            while i < n and times[i] <= lower:  # the crossings at the start of the stretch
+                d, k = which[i] // steps, which[i] % steps
+                state[d, k] = 1 if at_most[d, k] < 0.5 else 2
+                lines_a[d], lines_b[d] = _line(at_most, state, d, tie_break)
+                i += 1
+            last = i == n
+            upper = 0.5 if last else times[i]
+            if upper > lower:
+                s_high = np.inf if last else 1.0 / (1.0 - 2.0 * upper)
+                # c wins on [low, high] of s, where its line is above every other
+                low, high, possible = s_low, s_high, not hit
+                end_low = end_high = bound = np.inf
+                for d in range(candidates):
+                    if d == c:
+                        continue
+                    da = 0.0 if last else lines_a[c] - lines_a[d]
+                    db = lines_b[c] - lines_b[d]
+                    diff_a[d], diff_b[d] = da, db
+                    if possible:
+                        if da > 0:
+                            low = max(low, -db / da)
+                        elif da < 0:
+                            high = min(high, -db / da)
+                        elif db < 0 or (db == 0 and d < c):
+                            possible = False
+                    at_low[d] = da * s_low + db
+                    at_high[d] = db if last else da * s_high + db
+                    end_low = min(end_low, at_low[d])
+                    end_high = min(end_high, at_high[d])
+                    bound = min(bound, max(at_low[d], at_high[d]))
+                if possible and low == high:  # one trim: a lower index ahead of c wins the tie
+                    for d in range(c):
+                        if diff_a[d] * low + diff_b[d] <= 0:
+                            possible = False
+                hit = hit or (possible and low <= high)
+                # the largest lead of c on the stretch: at an end, or where two lines cross
+                stretch = max(end_low, end_high)
+                if bound > stretch and bound > best * steps:  # else no crossing inside leads more
+                    stretch = bound
+                    for d in range(candidates):
+                        if d == c:
+                            continue
+                        for e in range(d + 1, candidates):
+                            if e == c:
+                                continue
+                            pair = max(min(at_low[d], at_low[e]), min(at_high[d], at_high[e]))
+                            if diff_a[d] != diff_a[e]:
+                                s = (diff_b[e] - diff_b[d]) / (diff_a[d] - diff_a[e])
+                                if s_low < s < s_high:
+                                    pair = max(pair, diff_a[d] * s + diff_b[d])
+                            stretch = min(stretch, pair)
+                best = max(best, stretch / steps)
+                s_low = s_high
+            if last:
+                break
+            lower = upper
+        found[p] = hit
+        margins[p] = abs(best)
+    return found, margins
 
 
 @dataclass(frozen=True)
@@ -1388,15 +1410,9 @@ class TrimmedWinnerCondition(Condition):
     def evaluate(self, voters: Voters) -> tuple[np.ndarray, np.ndarray]:
         target, method_margin = self.method.evaluate(voters)
         grades = self.ballot.grades(voters)
-        flat_grades = grades.reshape((-1, *grades.shape[-2:]))
-        flat_target = np.asarray(target).reshape(-1)
-        exists = np.zeros(flat_target.shape, dtype=bool)
-        margins = np.full(flat_target.shape, np.inf)
-        for index, (point_grades, candidate) in enumerate(zip(flat_grades, flat_target)):
-            if candidate != CYCLE:
-                exists[index], margins[index] = _trimmed_sweep(point_grades, int(candidate))
-        margins = np.minimum(margins.reshape(voters.shape), method_margin)
-        return exists.reshape(voters.shape), margins
+        flat = np.ascontiguousarray(grades.reshape((-1, *grades.shape[-2:])), dtype=np.float64)
+        exists, margins = _trimmed_sweep(flat, np.asarray(target, dtype=np.int64).reshape(-1), TRIM_TIE_BREAK)
+        return exists.reshape(voters.shape), np.minimum(margins.reshape(voters.shape), method_margin)
 
     def __bool__(self):
         raise TypeError("A trimmed-winner condition must be evaluated by Conditional")

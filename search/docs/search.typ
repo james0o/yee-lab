@@ -344,6 +344,32 @@ The hard rule of the rivals is left out, on the set `free`: on the web UI's two 
 method comes near `search_6`, so the rule would be all that $J$ measures. The setups still weigh
 three configurations each.
 
+= The coarse vocabulary <ch-coarse>
+
+With `--coarse` both searches use the six scores counted in fewer groups, `Coarse(..., levels=n)`
+for $n$ = 2, 3 or 6 (6 being the six scores themselves), and the methods burial moves little.
+The leaves are FPTP, Two Round, the Condorcet winner, the mean of Coarse 2 and the trimmed means
+of Coarse 3 and 6 at a trim of 0, 5, ..., 45 or 49; with `--extra` D20, DAC and KOTH too. A
+runoff (`coarse_runoff`) is the Condorcet winner of the score comparisons of a coarse ballot,
+equal scores abstaining or ranked (tie weight 0 or 1), among the candidates who draw at the top
+of a trimmed mean (`Drawn`), the two or three best of one, or the winners of two leaves. The
+ballot of the runoff need not be that of the trim: Coarse 2 at a trim of 20 % draws the
+candidates fewer than a fifth of the voters disapprove of, and Coarse 6 decides among them. A
+runoff is never among the candidates of another, nor a Conditional.
+
+Conditionals join them, at most two inside each other, as in @ch-plain. A condition compares two
+methods, asks whether one elects someone, or is `has_winner`: some trim of Coarse 3 or 6 elects
+the winner of a method (`CoarseTrim(...).has_winner(method)`, computed exactly over all trims,
+a microsecond or a few a point); and those combined by & and |, `has_winner` never negated
+inside them, as no block negates it. So `Conditional(has_winner(3, two_round), two_round, X)`
+keeps the two-round winner where a trimmed mean of the three groups agrees with it. Top and Lead
+are not in it. The search of Conditionals takes these leaves and the runoffs among a draw or the
+best of a trimmed mean as its library (not those among two leaves, left to the genetic
+programming), and `has_winner` of each leaf as conditions, from maps of their own that are no
+primitives (`primitives.Holds`). The rivals are left out (the set `free`), as in @ch-plain. The
+genetic programming remembers conditions as it remembers methods (`evaluate.Memo`), so a child
+that keeps its parent's `has_winner` does not compute it again.
+
 = Choosing the methods <ch-select>
 
 Of millions of methods, the best on a few configurations is partly chance. So the best 200
@@ -364,6 +390,7 @@ uv run yee-search gp --out runs/night --until 06:00 --seed-from runs/cond
 uv run yee-search report runs/night        # its best and the known methods on the test set
 ./night.sh 06:00 4                         # all three, until 06:00, with 4 workers
 ./night.sh 06:00 4 plain                   # the same over the plain vocabulary (@ch-plain)
+./night.sh 06:00 4 coarse                  # the coarse vocabulary (@ch-coarse); coarse-extra with D20, DAC, KOTH
 ```
 
 A run of the search of Conditionals writes `library.json`, `train.json`,

@@ -26,16 +26,27 @@ leaf: weak alone, it may tell where others are right inside a Conditional.
 restrict_to_plain() narrows the grammar to the plain vocabulary, for a search of methods
 that can be explained: PLAIN_NAMED and the trimmed means, each a leaf, joined only by
 Conditionals at most MAX_NESTING deep, whose conditions compare those leaves or read Top
-and Lead of the first choices or of the mean score."""
+and Lead of the first choices or of the mean score.
 
+restrict_to_coarse() narrows it to the coarse vocabulary: Score(6)'s ballot counted in 2, 3
+or 6 groups (COARSE_BALLOTS) and the methods burial does not move much. Its leaves are
+COARSE_NAMED (and EXTRA_NAMED with extra=True), Coarse 2's mean and the trimmed means of
+Coarse 3 and 6; coarse_runoff is the Condorcet winner of the score comparisons of a coarse
+ballot among the candidates tied at the top of a trimmed mean (Drawn), its two or three
+best, or the winners of two leaves (no runoff, no Conditional), a ballot of any level for
+the runoff whatever the level of the trim; the conditions are same, elects, & and | of them, and has_winner: some
+trim of Coarse 3 or 6 elects the winner of a method (CoarseTrim). Conditionals at most
+PLAIN_NESTING deep."""
+
+import itertools
 import random
 from dataclasses import dataclass, field, fields
 from functools import cache
 
-from yeelab.build import (D21, AntiPlurality, BordaCount, Coarse, Conditional, DescendingCoalitions, Eliminate, Highest, Lead,
-                          Margins, Pairwise, Plurality, Score, ScoreComparisons, Smith, StrongestPaths, Tally, Top,
-                          Unbeaten, Union, Weakest, Winner)
-from yeelab.build.blocks import Block, CombinedCondition, Threshold, WinnerComparison
+from yeelab.build import (D21, AntiPlurality, BordaCount, Coarse, CoarseTrim, Conditional, DescendingCoalitions, Drawn,
+                          Eliminate, Highest, Lead, Margins, Pairwise, Plurality, Score, ScoreComparisons, Smith,
+                          StrongestPaths, Tally, Top, Unbeaten, Union, Weakest, Winner)
+from yeelab.build.blocks import Block, CombinedCondition, Threshold, TrimmedWinnerCondition, WinnerComparison
 from yeelab.build.methods import METHODS
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Ballots, Graded, Scored, ScoredPairwise
 
@@ -47,13 +58,17 @@ THRESHOLDS = (0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.55, 0.6, 0.7)
 FINALISTS = (2, 3)  # of the n highest totals
 MAJORITIES = (0.5, 0.55, 0.6)  # of the Smith set
 D20 = Highest(Tally(D21(max_positive=2, max_negative=0, ordinal=True)))  # two votes for the first two
+COARSE_LEVELS = (2, 3, 6)  # of the coarse ballots: Score(6)'s six scores in groups, and all six
 COARSE_BALLOTS = {
     levels: Coarse(Score(6, power=SCORE_POWER, fixed=True), levels=levels)
-    for levels in (2, 3)
-}  # of the plain vocabulary
+    for levels in COARSE_LEVELS
+}  # of the plain vocabulary (2 and 3) and of the coarse one
 TRIMS = (*range(0, 50, 5), 49)  # of a Tally in the plain vocabulary; the median itself is MJ, a method of its own
 PLAIN_NAMED = ("fptp", "two_round", "condorcet", "dac", "d20", "mj")  # of yeelab.build.methods
-PLAIN_NESTING = 2  # Conditionals inside each other in the plain vocabulary
+PLAIN_NESTING = 2  # Conditionals inside each other in the plain vocabulary, and in the coarse one
+COARSE_NAMED = ("fptp", "two_round", "condorcet")  # of yeelab.build.methods: burial moves neither fptp nor two_round much
+EXTRA_NAMED = ("d20", "dac", "koth")  # of the coarse vocabulary with extra=True
+COARSE_TRIMMED = (3, 6)  # levels of the trimmed means and of has_winner: Coarse 2's trim changes nothing
 MAX_DEPTH = 12  # 9 and 40 before 2026-10-28: room for Conditionals in Conditionals
 MAX_NODES = 60
 MAX_NESTING = MAX_NODES  # of Conditionals: no limit but MAX_NODES, unless restrict_to_plain()
@@ -129,15 +144,34 @@ PLAIN_RULES = {rule.name: rule for rule in [
     _rule("trimmed", "method", "", (tuple(TRIMMED_BALLOTS), TRIMS),
           lambda p, c: Highest(Tally(TRIMMED_BALLOTS[p[0]], trim=p[1]))),
 ]}
+COARSE_RULES = {rule.name: rule for rule in [  # "leaf": a method of no other method, one of the two of a union
+    *(RULES[name] for name in ("same", "both", "elects")),
+    _rule("conditional", "method", "if method method", (), lambda p, c: Conditional(c[0], c[1], c[2])),
+    *(_rule(name, "method leaf", "", (), lambda p, c, method=METHODS[name]: method) for name in COARSE_NAMED),
+    _rule("coarse_mean", "method leaf", "", (), lambda p, c: Highest(Tally(COARSE_BALLOTS[2]))),
+    _rule("coarse_trimmed", "method leaf", "", (COARSE_TRIMMED, TRIMS),
+          lambda p, c: Highest(Tally(COARSE_BALLOTS[p[0]], trim=p[1]))),
+    _rule("coarse_runoff", "method", "among", (COARSE_LEVELS, TIE_WEIGHTS),
+          lambda p, c: Unbeaten(ScoreComparisons(COARSE_BALLOTS[p[0]], tie_weight=p[1]), among=c[0])),
+    _rule("drawn", "among", "", (COARSE_LEVELS, TRIMS), lambda p, c: Drawn(Tally(COARSE_BALLOTS[p[0]], trim=p[1]))),
+    _rule("coarse_finalists", "among", "", (COARSE_LEVELS, TRIMS, FINALISTS),
+          lambda p, c: Highest(Tally(COARSE_BALLOTS[p[0]], trim=p[1]), n=p[2])),
+    _rule("union", "among", "leaf leaf", (), lambda p, c: Union(c[0], c[1])),
+    _rule("has_winner", "condition if", "method", (COARSE_TRIMMED,),
+          lambda p, c: CoarseTrim(COARSE_BALLOTS[p[0]]).has_winner(c[0])),
+]}
+EXTRA_RULES = {name: _rule(name, "method leaf", "", (), lambda p, c, method=METHODS[name]: method)
+               for name in EXTRA_NAMED}
 
 
 def _min_depths() -> dict[str, int]:
     """The least depth of a tree of each rule, a leaf being 1."""
     depth = {name: 1 for name, rule in RULES.items() if not rule.children}
+    types = frozenset().union(*(rule.fills for rule in RULES.values()))
     by_type = {}
     while len(depth) < len(RULES):
         by_type = {t: min(d for name, d in depth.items() if t in RULES[name].fills)
-                   for t in TYPES if any(t in RULES[name].fills for name in depth)}
+                   for t in types if any(t in RULES[name].fills for name in depth)}
         for name, rule in RULES.items():
             if name not in depth and all(t in by_type for t in rule.children):
                 depth[name] = 1 + max(by_type[t] for t in rule.children)
@@ -147,15 +181,25 @@ def _min_depths() -> dict[str, int]:
 MIN_DEPTH = _min_depths()
 
 
-def restrict_to_plain():
-    """The grammar of this process from now on, in place for all who imported it, is the
-    plain vocabulary (PLAIN_RULES). The workers that score methods do not need to know."""
+def _restrict(rules: dict):
     global MAX_NESTING
     RULES.clear()
-    RULES.update(PLAIN_RULES)
+    RULES.update(rules)
     MIN_DEPTH.clear()
     MIN_DEPTH.update(_min_depths())
     MAX_NESTING = PLAIN_NESTING
+
+
+def restrict_to_plain():
+    """The grammar of this process from now on, in place for all who imported it, is the
+    plain vocabulary (PLAIN_RULES). The workers that score methods do not need to know."""
+    _restrict(PLAIN_RULES)
+
+
+def restrict_to_coarse(extra: bool = False):
+    """As restrict_to_plain(), the coarse vocabulary (COARSE_RULES), and with `extra` D20,
+    DAC and KOTH as leaves too (EXTRA_RULES)."""
+    _restrict(COARSE_RULES | (EXTRA_RULES if extra else {}))
 
 
 @cache
@@ -165,6 +209,31 @@ def plain_leaves() -> dict[str, "Node"]:
               and not rule.params]
     leaves += [Node("trimmed", (levels, trim)) for levels in TRIMMED_BALLOTS for trim in TRIMS]
     return {repr(PLAIN_RULES[leaf.rule].build(leaf.params, ())): leaf for leaf in leaves}
+
+
+@cache
+def coarse_leaves() -> dict[str, "Node"]:
+    """{repr of the block: its tree} of every leaf of the coarse vocabulary, extra ones
+    too: the methods and the candidates of a runoff (among)."""
+    leaves = {}
+    for rule in (COARSE_RULES | EXTRA_RULES).values():
+        if not rule.children:
+            for params in itertools.product(*rule.params):
+                leaves.setdefault(repr(rule.build(params, ())), Node(rule.name, params))
+    return leaves
+
+
+def coarse_probes(sources: list[str]) -> list[str]:
+    """The conditions has_winner, of each level of COARSE_TRIMMED, of the sources that are
+    methods among the leaves of the coarse vocabulary: the conditions it adds to the search
+    of Conditionals (yeesearch.conditional)."""
+    rules, leaves, out = COARSE_RULES | EXTRA_RULES, coarse_leaves(), []
+    for source in sources:
+        leaf = leaves.get(source)
+        if leaf is not None and "method" in rules[leaf.rule].fills:
+            method = rules[leaf.rule].build(leaf.params, ())
+            out += [repr(CoarseTrim(COARSE_BALLOTS[levels]).has_winner(method)) for levels in COARSE_TRIMMED]
+    return out
 
 
 @dataclass(frozen=True)
@@ -294,6 +363,7 @@ def needs() -> frozenset:
         shares |= {ScoredPairwise(ballot.scored, weight) for weight in TIE_WEIGHTS}
     for ballot in COARSE_BALLOTS.values():
         shares |= {ballot.scored, Graded(ballot.scored), Ballots(ballot.scored)}
+        shares |= {ScoredPairwise(ballot.scored, weight) for weight in TIE_WEIGHTS}
     return frozenset(shares)
 
 # ---------------------------------------------------------------- random trees
@@ -413,6 +483,17 @@ def _from_block(block, slot: str) -> Node:  # noqa: C901 -- one case per block
             return Node("elects", (), (_from_block(block, "method"),))
         case Winner() if "trimmed" in RULES and repr(block) in plain_leaves():
             return plain_leaves()[repr(block)]
+        case Winner() if "coarse_runoff" in RULES and repr(block) in coarse_leaves():
+            leaf = coarse_leaves()[repr(block)]
+            if leaf.rule in RULES and slot in RULES[leaf.rule].fills:
+                return leaf
+            raise _Unknown(repr(block))
+        case Unbeaten(diffs=ScoreComparisons(ballot=Coarse() as ballot), against=None) if (
+                "coarse_runoff" in RULES and block.among is not None and COARSE_BALLOTS.get(ballot.levels) == ballot):
+            return Node("coarse_runoff", (ballot.levels, float(block.diffs.tie_weight)),
+                        (_from_block(block.among, "among"),))
+        case TrimmedWinnerCondition() if "has_winner" in RULES:
+            return Node("has_winner", (block.ballot.levels,), (_from_block(block.method, "method"),))
         case Highest() if repr(block) == repr(D20):
             return Node("d20")
         case Highest():

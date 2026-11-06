@@ -3503,6 +3503,29 @@ $ mu = abs("top" - t) quad "or" quad mu = abs("lead" - t) . $
 where someone has 55% of the first choices and the two-round winner elsewhere, with the
 smaller of $abs("top" - 0.55)$ and the margin of the method it elects.
 
+*Some trim.* `CoarseTrim(coarse).has_winner(method)`, for a `Coarse` ballot, is true where
+some trim $0 <= a < 1 slash 2$ elects the winner $w$ of `method` by the trimmed mean
+(@sec-trimmed, with its tie-break $epsilon$, a tie going to the lower index), and false
+where `method` elects no one. It is found exactly, not by trying trims. Between the
+trims where some threshold $S_i (k)$ enters or leaves the trim, at $a = S_i (k)$ or
+$a = 1 - S_i (k)$, the sum of @eq-trimmed times $1 - 2a$ is linear in $a$, so with
+$s = 1 slash (1 - 2a)$ every total is linear in $s$, $A_i s + B_i$. On such a stretch
+$w$ wins on an interval of $s$, where its line is above every other, an intersection of
+half-lines; the condition is true if one of them is not empty. Its margin is how much
+$w$ leads at best, or how much it is behind at least,
+
+$ mu = abs(max_a (T_w - max_(i != w) T_i)), $
+
+0 where that crosses 0, where the condition flips; on each stretch the maximum of the
+least of the lines $T_w - T_i$ is the least over the pairs of lines of the maximum of the
+two, a linear program in two variables. On the last stretch, up to $a = 1 slash 2$, no
+threshold is inside the trim, every $A_i = 0$, and the total is the median score with
+the tie-break. A point costs $O(C^2 L)$ for $C$ candidates of $L$ levels, a microsecond
+or a few (`tests/test_coarse.py` checks it against fine samples of the trims).
+`Conditional(CoarseTrim(Coarse(Score(6, fixed=True), levels=3)).has_winner(two_round),
+two_round, coarse_3)` elects the two-round winner where some trim of the three groups
+agrees with it, and `coarse_3` elsewhere.
+
 *Smith set.* `Smith(Margins(Pairwise()))` chooses the Smith set $S$: the smallest set of
 candidates who each beat every candidate outside it, the Condorcet winner alone where
 there is one. A candidate is in $S$ if it reaches every other one along links

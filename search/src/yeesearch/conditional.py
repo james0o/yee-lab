@@ -21,6 +21,8 @@ or false at every point, sincerely and buried:
     same    X == Y, X and Y primitives; X != Y is the same with A and B swapped
     and     two of the best `above` and `same` conditions, each maybe negated (below,
             differ): with A and B swapped that is every & and | of them
+    holds   with the coarse vocabulary, some trim of Coarse 3 or 6 elects the winner of X,
+            X a primitive that is a leaf (grammar.coarse_probes); never negated in an &
 
 The same products rank the Conditionals without the cost of their size too ("raw"), to
 see whether a Conditional is better at all or only too large; and the primitives alone
@@ -34,7 +36,8 @@ over the configurations of middle difficulty (Search) and scores its best exactl
 A method is a tree: a primitive's source, or ("if", condition, method, method); a
 condition ("elects", method), ("above" | "below", measure, threshold), ("same" |
 "differ", method, method) or ("and", condition, condition), the measure an index of
-primitives.MEASURES. Many Conditionals fit the training configurations by chance, so
+primitives.MEASURES; or ("holds", source of the condition), whose map the library has
+apart from its primitives (Space.probes). Many Conditionals fit the training configurations by chance, so
 the best of the training are scored on the validation set, and the best of those on the
 test set by running their blocks (yeesearch.report)."""
 
@@ -49,11 +52,13 @@ import numpy as np
 from rich.console import Console
 from rich.table import Table
 
-from yeelab.build import Conditional
+from yeelab.build import Conditional, ScoreComparisons, Unbeaten
 from yeelab.build.blocks import CombinedCondition, Threshold, WinnerComparison
 
 from yeesearch.evaluate import BURIED, NODE_COST, PIXEL_MEDIAN, SINCERE, Scorer, objective, trimmed
-from yeesearch.grammar import NEST, THRESHOLDS, complexity, from_block, plain_leaves, size
+from yeesearch import grammar
+from yeesearch.grammar import (COARSE_BALLOTS, COARSE_LEVELS, NEST, THRESHOLDS, TIE_WEIGHTS, coarse_leaves,
+                               coarse_probes, complexity, from_block, plain_leaves, size)
 from yeesearch.pool import parse
 from yeesearch.primitives import MEASURES, MapStore, enumerated, found, known, side
 
@@ -86,6 +91,8 @@ def block(tree):
         return Conditional(block(tree[1]), block(tree[2]), block(tree[3]))
     if kind == "elects":
         return block(tree[1])
+    if kind == "holds":
+        return parse(tree[1])
     if kind in ("above", "below"):
         return Threshold(MEASURES[tree[1]], tree[2], above=kind == "above")
     if kind in ("same", "differ"):
@@ -109,6 +116,11 @@ def negated(condition):
     return (flip[condition[0]], *condition[1:])
 
 
+def signs(condition) -> tuple:
+    """The condition and its negation, that of `holds` only itself (no block negates it)."""
+    return (condition,) if condition[0] == "holds" else (condition, negated(condition))
+
+
 def as_tree(value):
     """A tree back from JSON, where its tuples are lists."""
     return tuple(as_tree(part) for part in value) if isinstance(value, list) else value
@@ -122,9 +134,10 @@ class Space:
     loses at every point (evaluate.Scorer), to score any tree of them."""
 
     def __init__(self, store: MapStore, items: list, maps: np.ndarray | None = None,
-                 pixel_median: str = PIXEL_MEDIAN):
+                 pixel_median: str = PIXEL_MEDIAN, probes: list[str] = ()):
         """`pixel_median`: where each point of the voter grid is drawn, which the maps do
-        not depend on (evaluate.Scorer)."""
+        not depend on (evaluate.Scorer); `probes`: sources of conditions (primitives.Holds)
+        whose maps the conditions `holds` read, not primitives themselves."""
         self.store, self.configs, self.side = store, store.configs, side(store.grid)
         self.pixel_median = pixel_median
         self.items = list(items)
@@ -134,6 +147,13 @@ class Space:
             if not ok.all():
                 raise ValueError(f"maps failed or missing: {[s for s, o in zip(self.items, ok) if not o][:3]}")
         self.maps = maps
+        self.probes = list(probes)
+        self.probe_index = {probe: k for k, probe in enumerate(self.probes)}
+        self.probe_maps = np.zeros((0, *maps.shape[1:]), np.int8)
+        if self.probes:
+            self.probe_maps, ok = store.stacked(self.probes)
+            if not ok.all():
+                raise ValueError(f"maps failed or missing: {[s for s, o in zip(self.probes, ok) if not o][:3]}")
         self.measures = store.measures()
         scorers = [Scorer(config, store.grid, pixel_median) for config in self.configs]
         width = max(config.n_candidates for config in self.configs) + 1
@@ -150,7 +170,7 @@ class Space:
         new = [tree for tree in trees if tree not in self.index]
         maps = np.concatenate([self.maps, np.array([self.map_of(tree) for tree in new]).reshape(
             -1, *self.maps.shape[1:])])
-        return Space(self.store, self.items + new, maps, self.pixel_median)
+        return Space(self.store, self.items + new, maps, self.pixel_median, self.probes)
 
     def losses(self, maps: np.ndarray) -> np.ndarray:
         """What the winners of maps (..., 2, K, G, G) add to the relative error of their
@@ -172,6 +192,8 @@ class Space:
         """The winners (2, K, G, G) of a method tree."""
         if tree in self.index:
             return self.maps[self.index[tree]]
+        if tree in self.probe_index:
+            return self.probe_maps[self.probe_index[tree]]
         if isinstance(tree, str):
             raise KeyError(f"no maps of {tree}")
         return np.where(self.mask_of(tree[1]), self.map_of(tree[2]), self.map_of(tree[3]))
@@ -179,7 +201,7 @@ class Space:
     def mask_of(self, condition) -> np.ndarray:
         """Where (2, K, G, G) a condition tree is true."""
         kind = condition[0]
-        if kind == "elects":
+        if kind in ("elects", "holds"):
             return self.map_of(condition[1]) >= 0
         if kind in ("above", "below"):
             value = self.measures[condition[1]]
@@ -204,14 +226,24 @@ class Space:
 # ---------------------------------------------------------------- the library
 
 
-def library(runs: Path, max_size: int, only_plain: bool = False) -> list[str]:
+def library(runs: Path, max_size: int, vocabulary: str | None = None) -> list[str]:
     """The sources of the primitives: the grammar enumerated, the known methods (and
-    EXTRA, which the grammar cannot build), the best of the GP runs; with `only_plain`,
-    the leaves of the plain vocabulary."""
+    EXTRA, which the grammar cannot build), the best of the GP runs; with the `vocabulary`
+    "plain", the leaves of the plain vocabulary; "coarse", the methods among the leaves
+    of the coarse vocabulary (as restricted: with or without the extra ones) and the
+    runoffs of each coarse ballot and tie weight among the candidates of every leaf
+    `among` (a trimmed mean's draw or best), not those among two methods."""
     from yeelab.build.methods import METHODS
 
-    if only_plain:
+    if vocabulary == "plain":
         return list(plain_leaves())
+    if vocabulary == "coarse":
+        leaves = {source: node for source, node in coarse_leaves().items() if node.rule in grammar.RULES}
+        methods = [source for source, node in leaves.items() if "method" in grammar.RULES[node.rule].fills]
+        runoffs = [repr(Unbeaten(ScoreComparisons(COARSE_BALLOTS[levels], tie_weight=weight), among=parse(source)))
+                   for source, node in leaves.items() if "among" in grammar.RULES[node.rule].fills
+                   for levels in COARSE_LEVELS for weight in TIE_WEIGHTS]
+        return methods + runoffs
     extra = [repr(METHODS[name]) for name in EXTRA]
     return list(dict.fromkeys(enumerated(max_size) + list(known()) + extra + found(runs)))
 
@@ -295,6 +327,8 @@ class Search:
         self.total = self.L.sum(axis=1, dtype=np.float64).astype(np.float32)
         self.flat = np.ascontiguousarray(flat[:, self.columns])  # the maps on the active points
         self.measures = space.measures.reshape(len(MEASURES), -1)[:, self.columns]
+        self.probe_flat = np.ascontiguousarray(
+            space.probe_maps.reshape(len(space.probes), flat.shape[1])[:, self.columns])
 
     def losses(self, maps: np.ndarray) -> np.ndarray:
         """What the winners of maps (..., 2, K, G, G) add to the search's J at every point."""
@@ -309,6 +343,8 @@ class Search:
         kind = condition[0]
         if kind == "elects":
             return self.flat[self.space.index[condition[1]]] >= 0
+        if kind == "holds":
+            return self.probe_flat[self.space.probe_index[condition[1]]] >= 0
         if kind in ("same", "differ"):
             same = self.flat[self.space.index[condition[1]]] == self.flat[self.space.index[condition[2]]]
             return same if kind == "same" else ~same
@@ -446,6 +482,8 @@ def condition_size(condition, sizes: dict) -> int:
     kind = condition[0]
     if kind == "elects":
         return sizes[condition[1]]
+    if kind == "holds":
+        return complexity(parse(condition[1]))
     if kind in ("above", "below"):
         return 1 + complexity(MEASURES[condition[1]])
     if kind in ("same", "differ"):
@@ -454,11 +492,12 @@ def condition_size(condition, sizes: dict) -> int:
 
 
 def simple(search: Search) -> Conditions:
-    """The conditions `elects` of every item and `above` of every measure the grammar has
-    and threshold."""
+    """The conditions `elects` of every item, `above` of every measure the grammar has
+    and threshold, and `holds` of every probe of the space."""
     items = search.space.items
     measures = [m for m, measure in enumerate(MEASURES) if from_block(measure, "measure") is not None]
     trees = [("elects", item) for item in items] + [("above", m, t) for m in measures for t in THRESHOLDS]
+    trees += [("holds", probe) for probe in search.space.probes]
     sizes = dict(zip(items, search.space.sizes))
     return Conditions(search, trees, [condition_size(tree, sizes) for tree in trees])
 
@@ -470,8 +509,8 @@ def combined(search: Search, best: list) -> Conditions:
     trees = []
     for i, first in enumerate(best):
         for second in best[i + 1:]:
-            for one in (first, negated(first)):
-                for other in (second, negated(second)):
+            for one in signs(first):
+                for other in signs(second):
                     trees.append(("and", one, other))
     return Conditions(search, trees, [condition_size(tree, sizes) for tree in trees])
 
@@ -545,7 +584,9 @@ def nested_conditions(search: Search, stages: dict, alias: dict) -> Conditions:
     trees = _best_conditions(stages, NESTED_TOP)
     same, _, best = stages["same"]
     for name in AGREEING:
-        k = search.space.index[alias.get(repr(METHODS[name]), repr(METHODS[name]))]
+        k = search.space.index.get(alias.get(repr(METHODS[name]), repr(METHODS[name])))
+        if k is None:  # not in the library (D20 in the coarse vocabulary without extra)
+            continue
         mine = np.flatnonzero((same.pairs == k).any(axis=1))
         trees += [same[int(m)] for m in mine[np.argsort(best[mine], kind="stable")[:NESTED_EACH]]]
     trees = list(dict.fromkeys(trees))
@@ -591,22 +632,25 @@ def candidates(space: Space, conditions: Conditions, pool: Pool, count: int, cos
 def run(out: Path, runs: Path = Path("runs"), max_size: int = 8, same_size: int | None = None, combine: int = 1000,
         deeper: int = 300, deeper_conditions: int = 5000, top_train: int = 200, top_test: int = 20,
         workers: int = 4, estimate: bool = False, pixel_median: str = PIXEL_MEDIAN, maps: Path | None = None,
-        only_plain: bool = False):
+        vocabulary: str | None = None):
     """The search, written to `out`: the maps of the library (maps/), the best of the
     training (train.json), of the validation (validation.json), the test report and a
     summary (summary.md). With `estimate`, only the numbers of conditions and Conditionals
     and how long they take. `pixel_median` as evaluate.Scorer; `maps` the directory of the
-    maps (out/maps), which every pixel median shares; `only_plain`: the library is the
-    plain vocabulary (grammar.restrict_to_plain, by the caller)."""
+    maps (out/maps), which every pixel median shares; `vocabulary`: "plain" or "coarse",
+    the library is that vocabulary (grammar.restrict_to_plain or restrict_to_coarse, by
+    the caller), the coarse one with the conditions has_winner (holds)."""
     log = console.print
     started = time.perf_counter()
     out.mkdir(parents=True, exist_ok=True)
     maps = out / "maps" if maps is None else maps
     store = MapStore(maps / f"{TRAIN_SET}-{TRAIN_SIZE}", TRAIN_SET, TRAIN_SIZE)
-    sources = library(runs, max_size, only_plain)
-    store.compute(sources, workers, log=log)
+    sources = library(runs, max_size, vocabulary)
+    probes = coarse_probes(sources) if vocabulary == "coarse" else []
+    store.compute(sources + probes, workers, log=log)
     items, alias = distinct(store, sources)
-    space = Space(store, items, pixel_median=pixel_median)
+    probes = [probe for probe in probes if all(rows.get(probe, -1) >= 0 for rows in store.rows)]
+    space = Space(store, items, pixel_median=pixel_median, probes=probes)
     search = Search(space)
     log(f"library: {len(sources)} methods, {len(items)} of them distinct on {len(store.configs)} configurations "
         f"of {TRAIN_SET} (grid {TRAIN_SIZE}); {len(search.columns)} of {search.active.size} points differ")
@@ -620,7 +664,7 @@ def run(out: Path, runs: Path = Path("runs"), max_size: int = 8, same_size: int 
     tick = time.perf_counter()
     search.run(timing)
     per_condition = (time.perf_counter() - tick) / max(len(timing), 1)
-    log(f"conditions: {len(first)} elects and above, {len(same)} same"
+    log(f"conditions: {len(first)} elects, above and holds, {len(same)} same"
         f"{'' if same_size is None else f' (at most {same_size} blocks)'}, "
         f"{combine * (combine - 1) * 2} and; {pairs:,} pairs A != B; {per_condition * 1e3:.2f} ms a condition "
         f"({per_condition / pairs * 1e9:.3f} ns a Conditional, against ~0.35 s a method evaluated)")

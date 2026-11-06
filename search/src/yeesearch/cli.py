@@ -27,15 +27,33 @@ def gp(out: Path = typer.Option(..., help="directory of the run; an existing one
                                                  "the library's known methods and random ones; ignored when the run "
                                                  "continues one in --out"),
        plain: bool = typer.Option(False, help="only the plain vocabulary (grammar.restrict_to_plain), without the "
-                                              "rivals of the training set; give it again to continue such a run")):
+                                              "rivals of the training set; give it again to continue such a run"),
+       coarse: bool = typer.Option(False, help="only the coarse vocabulary (grammar.restrict_to_coarse), without "
+                                               "the rivals; give it again to continue such a run"),
+       extra: bool = typer.Option(False, help="with --coarse, D20, DAC and KOTH too")):
     """Genetic programming over the grammar, against burial by 30 % of the voters."""
-    from yeesearch import grammar
     from yeesearch.gp import run
 
+    vocabulary = _vocabulary(plain, coarse, extra)
+    run(out, hours, population, workers, seed, timeout, generations, _time(until) if until else None, seed_from,
+        "free" if vocabulary else "train")
+
+
+def _vocabulary(plain: bool, coarse: bool, extra: bool) -> str | None:
+    """Restricts the grammar of this process to the vocabulary asked for, and names it."""
+    from yeesearch import grammar
+
+    if plain and coarse:
+        raise typer.BadParameter("--plain or --coarse, not both")
+    if extra and not coarse:
+        raise typer.BadParameter("--extra goes with --coarse")
     if plain:
         grammar.restrict_to_plain()
-    run(out, hours, population, workers, seed, timeout, generations, _time(until) if until else None, seed_from,
-        "free" if plain else "train")
+        return "plain"
+    if coarse:
+        grammar.restrict_to_coarse(extra)
+        return "coarse"
+    return None
 
 
 def _time(text: str) -> datetime:
@@ -92,19 +110,20 @@ def conditional(out: Path = typer.Option(..., help="directory of the search; the
                 summary: bool = typer.Option(False, help="only write summary.md again from a finished search"),
                 pixel_median: str = typer.Option("geometric", help='"geometric" as the web UI starts, or "marginal"'),
                 maps: Path | None = typer.Option(None, help="directory of the maps (default: OUT/maps)"),
-                plain: bool = typer.Option(False, help="only the plain vocabulary (grammar.restrict_to_plain)")):
+                plain: bool = typer.Option(False, help="only the plain vocabulary (grammar.restrict_to_plain)"),
+                coarse: bool = typer.Option(False, help="only the coarse vocabulary (grammar.restrict_to_coarse), "
+                                                        "with the conditions has_winner"),
+                extra: bool = typer.Option(False, help="with --coarse, D20, DAC and KOTH too")):
     """Every Conditional(c, A, B) of the primitives (the grammar up to --max-size blocks,
     the known methods, the best of the GP runs), scored from their maps."""
-    from yeesearch import grammar
     from yeesearch.conditional import run, summary_again
 
-    if plain:
-        grammar.restrict_to_plain()
+    vocabulary = _vocabulary(plain, coarse, extra)
     if summary:
         summary_again(out, top_test)
         return
     run(out, Path("runs"), max_size, same_size, combine, deeper, deeper_conditions, top_train, top_test, workers,
-        estimate, pixel_median, maps, plain)
+        estimate, pixel_median, maps, vocabulary)
 
 
 @app.command()

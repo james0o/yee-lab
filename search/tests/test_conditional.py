@@ -3,13 +3,14 @@ import itertools
 import numpy as np
 import pytest
 
-from yeelab.build import Burial
+from yeelab.build import Burial, CoarseTrim
 from yeelab.build.methods import METHODS
 
 from yeesearch.conditional import (COSTS, Conditions, SamePairs, Search, Space, block, combined, condition_size,
                                    distinct, simple)
 from yeesearch.evaluate import NODE_COST, SHARE, Prepared, errors, objective
-from yeesearch.grammar import build_method, complexity, size
+from yeesearch.grammar import COARSE_BALLOTS, build_method, coarse_probes, complexity, size
+from yeesearch.pool import parse
 from yeesearch.primitives import MapStore, config_maps, enumerated, trees
 
 GRID = 8
@@ -135,3 +136,29 @@ def test_enumeration_is_every_tree_by_its_blocks():
             assert size(build_method(node)) == blocks
     assert len(enumerated(5)) == 1 + 24 + 30 + 15
     assert len(set(enumerated(6))) == len(enumerated(6))
+
+
+def test_a_has_winner_condition_composes_from_its_map(tmp_path, prepared):
+    """The map of a condition (primitives.Holds) gives the Conditional of `holds` as the
+    blocks run, sincere and buried; the condition is no primitive of the search, only a
+    condition of it, never negated in an &."""
+    probes = coarse_probes([TWO, FPTP])
+    assert probes == [repr(CoarseTrim(COARSE_BALLOTS[levels]).has_winner(METHODS[name]))
+                      for name in ("two_round", "fptp") for levels in (3, 6)]
+    store = MapStore(tmp_path, "train", GRID, count=COUNT)
+    for k in range(COUNT):
+        store.add(k, SOURCES + probes, config_maps("train", k, GRID, SOURCES + probes, measures=True))
+    space = Space(store, SOURCES, probes=probes)
+    tree = ("if", ("holds", probes[0]), TWO, CONDORCET)
+    method = block(tree)
+    composed = space.map_of(tree)
+    for k, p in enumerate(prepared):
+        np.testing.assert_array_equal(composed[0, k], p.winner(method))
+        np.testing.assert_array_equal(composed[1, k], p.winner(Burial(method, SHARE)))
+    search = Search(space)
+    first = simple(search)
+    assert ("holds", probes[0]) in first.trees and probes[0] not in search.space.items
+    assert condition_size(("holds", probes[0]), {}) == complexity(parse(probes[0]))
+    both = combined(search, [("holds", probes[0]), ("same", FPTP, TWO)])
+    assert both.trees == [("and", ("holds", probes[0]), ("same", FPTP, TWO)),
+                          ("and", ("holds", probes[0]), ("differ", FPTP, TWO))]

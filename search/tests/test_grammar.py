@@ -6,11 +6,12 @@ from yeelab.build.methods import METHODS
 
 from yeesearch import grammar
 from yeesearch.gp import crossover, hoist, point_mutation, seeds, subtree_mutation
-from yeesearch.evaluate import NEEDS, Prepared
+from yeesearch.evaluate import NEEDS, Memo, Prepared, scenarios
 from yeesearch.configs import SETS
 from yeesearch.grammar import (COARSE_BALLOTS, PLAIN_NESTING, RULES, TRIMS, TYPES, Node, build_method, check, from_block,
                                nesting, plain_leaves, positions, random_tree)
-from yeelab.build import Burial, Highest, Tally
+from yeelab.build import (Burial, CoarseTrim, Conditional, Drawn, Highest, ScoreComparisons, Tally, Unbeaten,
+                          Winner)
 from yeesearch.pool import parse
 
 
@@ -144,3 +145,78 @@ def test_the_training_set_without_rivals_differs_in_nothing_else():
     train, free = SETS["train"](), SETS["free"]()
     assert any(config.rival for config in train) and not any(config.rival for config in free)
     assert [config.name for config in train] == [config.name for config in free]
+
+
+@pytest.fixture(params=[False, True], ids=["coarse", "coarse-extra"])
+def coarse(request):
+    rules, depths, nest = dict(RULES), dict(grammar.MIN_DEPTH), grammar.MAX_NESTING
+    grammar.restrict_to_coarse(extra=request.param)
+    yield request.param
+    RULES.clear()
+    RULES.update(rules)
+    grammar.MIN_DEPTH.clear()
+    grammar.MIN_DEPTH.update(depths)
+    grammar.MAX_NESTING = nest
+
+
+def test_the_coarse_vocabulary_joins_its_leaves_by_conditionals_and_runoffs(coarse):
+    """Its random methods use only its rules, a runoff is among a draw, the best of a
+    trimmed mean or two leaves, a Conditional is never among the candidates of a runoff,
+    and every tree prints as an expression that gives the same tree back."""
+    allowed = {"same", "both", "elects", "conditional", "fptp", "two_round", "condorcet", "coarse_mean",
+               "coarse_trimmed", "coarse_runoff", "drawn", "coarse_finalists", "union", "has_winner"}
+    assert set(RULES) == allowed | ({"d20", "dac", "koth"} if coarse else set())
+    trees = grammar.ramped(random.Random(0), 200, range(3, 9))
+    used = {node.rule for tree in trees for _, node, _ in positions(tree)}
+    assert used == set(RULES)
+    for tree in trees:
+        assert check(tree) and nesting(tree) <= PLAIN_NESTING
+        for _, node, _ in positions(tree):
+            if node.rule == "coarse_runoff":
+                assert node.children[0].rule in ("drawn", "coarse_finalists", "union")
+            if node.rule == "union":
+                assert not any(child.rule in ("conditional", "coarse_runoff") for child in node.children)
+        method = build_method(tree)
+        assert parse(repr(method)).same_as(method)
+        assert from_block(method) == tree
+
+
+def test_coarse_trees_of_known_methods(coarse):
+    assert from_block(METHODS["two_round"]) == Node("two_round")
+    assert from_block(METHODS["coarse_3"]) == Node("coarse_trimmed", (3, 25))
+    trim = CoarseTrim(COARSE_BALLOTS[3]).has_winner(METHODS["two_round"])
+    assert from_block(Conditional(trim, METHODS["two_round"], METHODS["condorcet"])) == Node(
+        "conditional", (), (Node("has_winner", (3,), (Node("two_round"),)), Node("two_round"), Node("condorcet")))
+    runoff = Unbeaten(ScoreComparisons(COARSE_BALLOTS[6], tie_weight=1.0), among=Drawn(Tally(COARSE_BALLOTS[2], trim=20)))
+    assert from_block(runoff) == Node("coarse_runoff", (6, 1.0), (Node("drawn", (2, 20)),))
+    for name in ("star", "mj", "score", "search_1"):  # Score(6) itself is not a coarse ballot
+        assert from_block(METHODS[name]) is None
+    assert (from_block(METHODS["d20"]) is not None) == coarse
+
+
+def test_every_coarse_leaf_and_probe_reads_the_cached_shares():
+    leaves = grammar.coarse_leaves()
+    named = len(grammar.COARSE_NAMED) + len(grammar.EXTRA_NAMED)
+    assert len(leaves) == named + 1 + len(TRIMS) * (2 + 3 + 3 * 2)
+    probes = grammar.coarse_probes(list(leaves))
+    assert len(probes) == 2 * (named + 1 + 2 * len(TRIMS))
+    runoff = Unbeaten(ScoreComparisons(COARSE_BALLOTS[2], tie_weight=0.0), among=Drawn(Tally(COARSE_BALLOTS[6], trim=40)))
+    for source in [*leaves, *probes, repr(runoff)]:
+        block = parse(source)
+        assert (Burial(block, 0.3) if isinstance(block, Winner) else block).needs <= NEEDS
+
+
+def test_remembered_conditions_give_the_same_winners():
+    """A method with has_winner gives the same winners through the Memo of subtrees, the
+    condition remembered, as run on its own."""
+    prepared = Prepared.of(SETS["validation"]()[0], 8)
+    two_round, ballot = METHODS["two_round"], COARSE_BALLOTS[3]
+    methods = [Conditional(CoarseTrim(ballot).has_winner(two_round), two_round, Highest(Tally(ballot, trim=25))),
+               Conditional(CoarseTrim(ballot).has_winner(two_round), METHODS["condorcet"], two_round)]
+    memo = Memo()
+    for method in methods:
+        remembered = prepared.winners(method, memo=memo)
+        alone = {name: prepared.winner(each) for name, each in scenarios(method).items()}
+        for name in alone:
+            assert (remembered[name] == alone[name]).all()
+    assert memo.hits > 0

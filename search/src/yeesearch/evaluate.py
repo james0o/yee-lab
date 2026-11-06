@@ -37,7 +37,7 @@ from functools import cached_property
 import numpy as np
 
 from yeelab.build import Burial, Highest, ScoreComparisons, Tally, Unbeaten, Winner
-from yeelab.build.blocks import Block
+from yeelab.build.blocks import Block, Condition
 from yeelab.build.strategic import POLL, burying
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Voters
 from yeelab.margin import regions
@@ -222,8 +222,29 @@ class _Remembered(Winner):
         return repr(self.inner)
 
 
+@dataclass(frozen=True, eq=False)
+class _RememberedCondition(Condition):
+    """A Condition whose evaluate() goes through a Memo: CoarseTrim's has_winner sweeps
+    every trim, and the children of a genetic program keep their parents' conditions."""
+
+    inner: Condition
+    key: str = field(repr=False)
+    memo: Memo = field(repr=False)
+
+    @property
+    def needs(self):
+        return self.inner.needs
+
+    def evaluate(self, voters):
+        return self.memo.get(("condition", self.key), lambda: self.inner.evaluate(voters))
+
+    def __repr__(self):
+        return repr(self.inner)
+
+
 def remembering(block, memo: Memo):
-    """The block with every Winner in it (and itself, if one) going through `memo`, by its repr."""
+    """The block with every Winner and Condition in it (and itself, if one) going through
+    `memo`, by its repr."""
     key = repr(block)
     changes = {item.name: remembering(value, memo) for item in fields(block)
                if isinstance(value := getattr(block, item.name), Block)}
@@ -231,7 +252,9 @@ def remembering(block, memo: Memo):
         block = copy(block)
         for name, value in changes.items():
             object.__setattr__(block, name, value)
-    return _Remembered(block, key, memo) if isinstance(block, Winner) else block
+    if isinstance(block, Winner):
+        return _Remembered(block, key, memo)
+    return _RememberedCondition(block, key, memo) if isinstance(block, Condition) else block
 
 
 @dataclass
@@ -320,6 +343,8 @@ def warm(prepared: list[Prepared]):
     errors(D20, prepared)
     for ballot in COARSE_BALLOTS.values():
         errors(Highest(Tally(ballot, trim=TRIMS[1])), prepared)
+        for weight in TIE_WEIGHTS:
+            errors(Unbeaten(ScoreComparisons(ballot, tie_weight=weight)), prepared)
 
 
 def trimmed(values, trim: float = TRIM, weights=None) -> np.ndarray:

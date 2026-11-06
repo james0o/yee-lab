@@ -16,11 +16,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from yeelab.build import Coarse, CoarseTrim, Conditional, Highest, METHODS, Plurality, Score, Tally, Voters
+from yeelab.build.blocks import TRIM_TIE_BREAK, _trimmed, _trimmed_sweep
 from yeelab.build.voters import Graded, Scored
 from yeelab.build.methods import TRIM
 from yeelab.margin.regions import regions
 from yeelab.margin.shares import Model, graded_shares, unscored_shares
 from yeelab.score import COARSE, FINE, scored
+from yeelab.voting import CYCLE
 from yeelab.web.app import app
 
 CANDIDATES = np.array([[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]])
@@ -93,6 +95,42 @@ def test_coarse_trim_has_winner_is_an_exact_conditional():
     assert winner.shape == margin.shape == (2,)
     assert (margin >= 0).all()
     np.testing.assert_array_equal(condition.evaluate(voters)[0], [True, False])
+
+
+def _sampled_sweep(grades, targets, trims):
+    """Whether the trimmed mean (blocks._trimmed) elects each target at one of `trims`,
+    and the largest lead of the target over the others among them."""
+    totals = np.stack([_trimmed(grades, trim, None) for trim in trims])  # (T, P, C)
+    points = np.arange(len(targets))
+    chosen = totals[:, points, targets]
+    others = totals.copy()
+    others[:, points, targets] = -np.inf
+    return (totals.argmax(axis=-1) == targets).any(axis=0), (chosen - others.max(axis=-1)).max(axis=0)
+
+
+@pytest.mark.parametrize("levels", [3, 4, 6])
+def test_the_trim_sweep_is_exact(levels):
+    """_trimmed_sweep finds every winner a fine sample of the trims finds, and only those
+    that win where the sample is too coarse to see: about where its lead is 0. Its margin
+    is the largest lead, at least that of the sample and close to it (the sample comes
+    near the trim 50 too: a threshold F(k) just below 1/2 leaves the trim only there). No winner (CYCLE, a
+    draw) is not found."""
+    rng = np.random.default_rng(levels)
+    grades = rng.dirichlet(np.full(levels, 0.7), size=(3000, 5))
+    grades[rng.random(grades.shape) < 0.1] = 0.0  # thresholds at 0 and 1, outside every trim
+    grades[grades.sum(axis=-1) == 0] = 1.0
+    grades[:300, 1] = grades[:300, 0]  # equal candidates: exact ties, the lower index wins
+    targets = rng.integers(0, 5, len(grades))
+    found, margin = _trimmed_sweep(grades, targets, TRIM_TIE_BREAK)
+    trims = np.concatenate((np.linspace(0, 50, 5001)[:-1], 50 - np.logspace(-2, -9, 15)))  # and near the median
+    sampled, lead = _sampled_sweep(grades, targets, trims)
+    assert (found >= sampled).all()
+    assert np.abs(margin[found != sampled]).max(initial=0) < 1e-3
+    assert (margin >= 0).all() and (margin >= np.abs(lead) - 1e-12)[sampled].all()
+    np.testing.assert_allclose(margin[found], lead[found], atol=1e-3)
+    assert not found[:300][targets[:300] == 1].any()
+    none, margin = _trimmed_sweep(grades[:2], np.array([CYCLE, -4]), TRIM_TIE_BREAK)
+    assert not none.any() and np.isinf(margin).all()
 
 
 def test_the_ui_fixes_the_levels_and_takes_the_power():

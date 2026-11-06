@@ -8,7 +8,8 @@ measures Top and Lead that the threshold conditions read, sincerely and buried.
 Burial is pointwise: its poll names the frontrunners at every point from the sincere first
 choices, whatever the method, and the method then runs on the buried voters of the point.
 So Burial(Conditional(c, A, B)) elects where(c buried, A buried, B buried), and the maps of
-the primitives give the maps of any Conditional of them, without running a block.
+the primitives give the maps of any Conditional of them, without running a block. A
+source may be a condition too (Holds): where it holds, its map elects 0.
 
 The maps of a set are kept in a directory (MapStore), a file for every configuration and
 batch of methods, so that a stopped computation goes on where it stopped; a worker holds
@@ -24,9 +25,10 @@ import numpy as np
 from pebble import ProcessExpired
 
 from yeelab.build import AntiPlurality, BordaCount, Lead, Plurality, Tally, Top, Winner
-from yeelab.build.blocks import Measure
+from yeelab.build.blocks import Condition, Measure
 from yeelab.build.methods import METHODS
 from yeelab.margin import regions
+from yeelab.voting import CYCLE
 
 from yeesearch.configs import SETS
 from yeesearch.evaluate import SHARE, Prepared, scenarios
@@ -128,6 +130,27 @@ class Measured(Winner):
         return value, np.full(value.shape, np.inf)
 
 
+@dataclass(frozen=True, eq=False)
+class Holds(Winner):
+    """A condition in the place of a winner, 0 where it holds and CYCLE where not, so that
+    its map is that of a method (a source of the library is the repr of a Condition, the
+    has_winner of grammar.coarse_probes) and Burial(Holds(condition), share) gives it on
+    the buried voters, polled as for any method."""
+
+    condition: Condition
+
+    @property
+    def needs(self):
+        return self.condition.needs
+
+    def evaluate(self, voters):
+        holds, margin = self.condition.evaluate(voters)
+        return np.where(holds, 0, CYCLE), margin
+
+    def __repr__(self):
+        return repr(self.condition)
+
+
 def winners(prepared: Prepared, method) -> np.ndarray:
     """The winners of the method (2, G, G) on a prepared configuration: sincerely and
     buried (SCENARIO_NAMES), remembering the subtrees (Prepared.winners); for a Measured,
@@ -149,7 +172,8 @@ def config_maps(set_name: str, index: int, grid: int, sources: list[str], measur
     failed = []
     for k, source in enumerate(sources):
         try:
-            maps[k] = winners(prepared, parse(source))
+            method = parse(source)
+            maps[k] = winners(prepared, Holds(method) if isinstance(method, Condition) else method)
         except Exception:  # noqa: BLE001 -- a method that fails anywhere is left out of the library
             failed.append(k)
     out = {"maps": maps, "failed": failed}
