@@ -120,3 +120,21 @@ def test_a_method_behind_its_rival_ranks_below_every_one_that_is_not():
     level = objective(METHODS["fptp"], errors | {"poll": [0.1] * 20 + [0.2, 0.1]})  # as good as the rivals
     assert level["behind"] == 0
     assert level["J"] < 1 < result["J"]
+
+
+def test_a_batch_elects_what_each_configuration_does_on_its_own():
+    """The configurations in rows of points (Batch), those with the same number of
+    candidates together, give the winners of each configuration alone, sincere and buried."""
+    from yeesearch.evaluate import Batch, Memo
+
+    configs = [CONFIG, Config("four", ((0.3, 0.3), (0.7, 0.35), (0.5, 0.7), (0.45, 0.4)), 0.2),
+               Config("other five", ((0.2, 0.6), (0.7, 0.7), (0.5, 0.45), (0.6, 0.3), (0.35, 0.3)), 0.3)]
+    prepared = [Prepared.of(config, 8) for config in configs]
+    batch = Batch(prepared)
+    assert sorted(len(group.members) for group in batch.groups) == [1, 2]
+    for name in ("fptp", "irv", "dac", "koth", "star", "mj", "nanson", "search_6", "search_8"):
+        together = batch.winners(METHODS[name], memo=Memo())
+        for p, found in zip(prepared, together):
+            alone = p.winners(METHODS[name], memo=Memo())
+            for scenario in ("sincere", "poll"):
+                np.testing.assert_array_equal(found[scenario], alone[scenario], err_msg=f"{name} {p.config.name}")

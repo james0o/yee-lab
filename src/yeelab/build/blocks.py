@@ -151,7 +151,7 @@ from yeelab.build.rounds import drop_below_mean, drop_lowest
 from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Graded, Scored, ScoredPairwise, Share, Voters
 from yeelab.score import AVG, CLUSTER, COARSE, DELTA, DHONDT, FINE, HYBRID, KAPPA, MU, POWER, RANGE, VOTES
 from yeelab.score import D21 as D21_RULE, D21_ORDINAL
-from yeelab.voting import CYCLE, descending_coalitions, draw, irv_rounds
+from yeelab.voting import CYCLE, descending_coalitions, draw, irv_rounds, remaining_choices
 
 Result = tuple[np.ndarray, np.ndarray]  # (winner, margin) or (chosen, margin) at every point
 HOW = ("min", "mean", "all")  # what Eliminate drops each round
@@ -367,13 +367,7 @@ class Plurality(Ballot):
         for every remaining candidate, which it ranks all equal."""
         if alive is None:
             return voters.first
-        rankings, probs = voters.rankings, voters.probs
-        n_ballots, n = rankings.shape
-        top = alive[..., rankings].argmax(axis=-1)  # position of the first remaining, (..., R)
-        choice = rankings[np.arange(n_ballots), top].reshape(-1, n_ballots)
-        index = choice + n * np.arange(len(choice))[:, None]  # (point, candidate), flat
-        votes = np.bincount(index.ravel(), probs.reshape(-1), n * len(choice))
-        votes = votes.reshape(*probs.shape[:-1], n)
+        votes = remaining_choices(voters.rankings, voters.probs, alive)  # compiled (voting.py)
         if voters.bullet is None:
             return votes
         out = np.where(alive, 0.0, voters.bullet).sum(axis=-1, keepdims=True)
@@ -409,13 +403,7 @@ class AntiPlurality(Ballot):
         n_ballots, n = rankings.shape
         if alive is None:
             alive = np.ones((*probs.shape[:-1], n), dtype=bool)
-        reversed_rankings = rankings[:, ::-1]
-        last_position = alive[..., reversed_rankings].argmax(axis=-1)
-        last = reversed_rankings[np.arange(n_ballots), last_position].reshape(-1, n_ballots)
-        flat_probs = probs.reshape(-1, n_ballots)
-        count = len(flat_probs)
-        index = last + n * np.arange(count)[:, None]
-        last_votes = np.bincount(index.ravel(), flat_probs.ravel(), n * count).reshape(*probs.shape[:-1], n)
+        last_votes = remaining_choices(rankings, probs, alive, last=True)  # compiled (voting.py)
         totals = probs.sum(axis=-1, keepdims=True) - last_votes
         if voters.bullet is not None:
             bullet = np.where(alive, voters.bullet, 0.0)

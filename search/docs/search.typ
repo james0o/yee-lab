@@ -241,21 +241,31 @@ the test, and random ones with a candidate near a wall and wide voters.
 = Making the scoring fast <ch-fast>
 
 Scoring a method runs its blocks on the voters of every configuration, sincerely and buried
-at every pair of frontrunners (about five a configuration): a few hundred small numpy
-calls on a grid of 324 points, where the calls cost more than the arithmetic. What the
-search does about it:
+at every pair of frontrunners (about five a configuration). On a grid of 324 points that is
+a few hundred small numpy calls for every configuration, where the calls cost more than the
+arithmetic. What the search does about it:
 
 - The shares of the voters every method of the grammar can read are computed once for every
-  configuration and kept (`Prepared`), each method getting only those it reads; what burial
-  takes from a score ballot is remembered too (`MemoGrid`).
-- What every subtree that elects or chooses candidates gives is remembered for each
-  configuration and pair of frontrunners (`Memo`, 256 MB a process, the least recently used
-  going first): a child of the genetic programming keeps most of its parent, an enumeration
-  most of the smaller methods. A block runs its children on the voters it got, so a subtree
-  gives the same wherever it is. About half of the work of a genetic programming is so
-  saved: 214 ms a method became 105 ms on 18 configurations, sincerely and buried, with the
-  same errors to the last digit, and the maps of the library of @ch-conditional are 2--4 ms a
-  method and configuration.
+  configuration and kept (`Prepared`), and so are those of the voters who bury, at every pair
+  of frontrunners (`Prepared.buried`): they do not depend on the method. The tables of all
+  score ballots of a configuration are kept while it is prepared, so each is built once.
+- The configurations with the same number of candidates are one row of points (`Batch`):
+  their sincere voters one after another, and likewise their buried ones, of every pair of
+  frontrunners. A method decides each point on its own, so it is evaluated once on each row,
+  8 calls for the 20 training configurations instead of about 115, and elects at every point
+  what it elects on the configuration alone. The rankings of a row are those of all its
+  configurations, each configuration's voters having none of the others'.
+- What every subtree that elects or chooses candidates gives is remembered for each row
+  (`Memo`, 256 MB a process, the least recently used going first): a child of the genetic
+  programming keeps most of its parent, an enumeration most of the smaller methods. A block
+  runs its children on the voters it got, so a subtree gives the same wherever it is.
+- The maps of the library of @ch-conditional and the report score one configuration at a
+  time (`Prepared.winners`), remembering what burial takes from a score ballot (`MemoGrid`).
+
+On 300 consecutive methods of a genetic programming run a method takes about 50--70 ms
+instead of 150 ms, with the same errors to the last digit, and a worker is ready in half
+the time; what is left is mostly arithmetic (majority judgment, the pairwise blocks).
+
 - The compiled kernels run in the worker's own thread, not handed to a thread pool chunk by
   chunk.
 - The workers (4 by default, a process each) score methods in parallel, each with a time

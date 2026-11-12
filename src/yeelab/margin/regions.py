@@ -30,6 +30,7 @@ part of the way, from where the usual diagram draws a point towards g(m) (`shift
 web UI steps through these to move the diagram between the two.
 """
 
+from functools import lru_cache
 from itertools import combinations
 
 import contourpy
@@ -37,6 +38,7 @@ import numpy as np
 
 from yeelab.build import (FIRST, METHODS, PAIRWISE, PROFILE, Ballots, Graded, Scored, ScoredPairwise, Share, Striped,
                           Voters, Winner)
+from yeelab.build.shared import shared
 from yeelab.margin.geometric import PIXEL_MEDIAN, PixelMedian, geometric_medians, rim
 from yeelab.margin.shares import (
     Model,
@@ -202,7 +204,8 @@ def winners(method: str | Winner, candidates, model: Model, size: int):
     or a built method itself."""
     rule = MARGINS[method] if isinstance(method, str) else method
     coords = grid(size, model.pixels)[0]
-    return coords, *rule.evaluate(voters(rule.needs, candidates, model, size))
+    # shared: a part the method holds several times is evaluated once (build/shared.py)
+    return coords, *shared(rule).evaluate(voters(rule.needs, candidates, model, size))
 
 
 def _ring(points):
@@ -252,6 +255,7 @@ def nearest(candidates, points):
     return squared.argmin(axis=-1), closest[..., 1] - closest[..., 0]
 
 
+@lru_cache(maxsize=16)  # a drag asks for the same one two or three times in every request
 def geometric_grid(model: Model, size: int, shift: float = 1.0):
     """(keep (G,), points (K, K, 2)) of the grid(size) with pixels at their geometric
     median: the grid points of the medians marked in `keep` are drawn at `points`. The
@@ -271,6 +275,8 @@ def geometric_grid(model: Model, size: int, shift: float = 1.0):
         usual[[0, -1]] = coords[[0, -1]]  # the outermost medians are drawn up to the walls
         usual = np.stack(np.meshgrid(usual, usual, indexing="ij"), axis=-1)
         points = usual + shift * (points - usual)
+    keep.setflags(write=False)  # kept: for reading only
+    points.setflags(write=False)
     return keep, points
 
 

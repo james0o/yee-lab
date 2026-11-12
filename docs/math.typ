@@ -3338,6 +3338,20 @@ remain are therefore compiled with numba:
 - the rounds of DAC, on the scores of all sets of candidates as bit masks (@sec-dac);
 - which candidates a round of Baldwin or Nanson drops (`build/rounds.py`); their Borda
   scores (@eq-borda-pairwise) are one `einsum` of numpy per round;
+- the first, or the last, choices among the remaining candidates of an elimination that
+  starts from a set of finalists (`voting.remaining_choices`): the choice of every ranking
+  is worked out once for each set of remaining candidates, which neighbouring points
+  share, and each point adds its shares up in the order of the rankings;
+- the comparison with the Voronoi diagram (@ch-metrics): the losses of the winner and of a
+  random candidate and the distance to the focus region, in one pass over the grid without
+  an array of every candidate at every point (`metrics._agreement`).
+
+A method that holds the same method several times, in a condition and in the branch it
+chooses, or as a finalist of two runoffs, evaluates it once: every part that elects or
+chooses candidates remembers what it gave for the voters it was asked about
+(`build/shared.py`), by the expression that builds it. The grid of pixels at their
+geometric median (@ch-geometric) is kept by the voters and the size, since one request
+asks for it for the regions, the metrics and the borders of the Voronoi diagram.
 
 The kernels release the interpreter lock but are not parallel themselves; `threads.py`
 runs chunks of their work (edges, pixels) in a pool of threads. A kernel with numba's

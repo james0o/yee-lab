@@ -33,20 +33,24 @@ from collections import OrderedDict
 from copy import copy
 from dataclasses import dataclass, field, fields, replace
 from functools import cached_property
+from itertools import count
 
 import numpy as np
 
-from yeelab.build import Burial, Highest, ScoreComparisons, Tally, Unbeaten, Winner
+from yeelab.build import Burial, Winner
 from yeelab.build.blocks import Block, Condition
 from yeelab.build.strategic import POLL, burying
-from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Voters
-from yeelab.margin import regions
+from yeelab.build.voters import FIRST, PAIRWISE, PROFILE, Ballots, Voters
+from yeelab.margin import regions, shares
 from yeelab.margin.metrics import FOCUS_ROUND, _area_weights, focus_distance
 
 from yeesearch.configs import Config
-from yeesearch.grammar import COARSE_BALLOTS, D20, SCORE_BALLOTS, TIE_WEIGHTS, TRIMS, complexity, needs as grammar_needs
+from yeesearch.grammar import complexity, needs as grammar_needs
 
 NEEDS = grammar_needs()  # the shares cached for every configuration
+# a configuration is read on every score ballot of the grammar in turns: each one's table is
+# built once if all of them are kept (yeelab keeps fewer, which built each several times)
+shares.keep_ballots(max(shares.BALLOT_TABLES, 2 + sum(isinstance(share, Ballots) for share in NEEDS)))
 
 SHARE = 0.3  # of the voters who bury
 SCENARIOS = ("sincere", "poll")  # "poll": burying against the frontrunners of Burial's default poll
@@ -266,12 +270,28 @@ class Prepared:
     size: int
     voters: Voters
     scorer: Scorer
+    _buried: dict = field(default_factory=dict, repr=False)  # of buried(): by the share
 
     @classmethod
-    def of(cls, config: Config, size: int) -> "Prepared":
+    def of(cls, config: Config, size: int, bury: float | None = None) -> "Prepared":
+        """With `bury`, the voters burying by that share too (buried), now, while the
+        tables of the configuration's score ballots are still kept (shares.keep_ballots)."""
         voters = regions.voters(NEEDS, config.array, config.model, size)
         voters = replace(voters, ballots={key: MemoGrid(grid) for key, grid in voters.ballots.items()})
-        return cls(config, size, voters, Scorer(config, size))
+        prepared = cls(config, size, voters, Scorer(config, size))
+        if bury is not None:
+            prepared.buried(bury)
+        return prepared
+
+    def buried(self, share: float = SHARE) -> list[tuple[np.ndarray, Voters]]:
+        """(points, voters) of every pair of frontrunners (pairs): the voters of its points,
+        in a row, with every share of the grammar where `share` of them bury against the
+        pair, the score comparisons moved too (settled). The same for every method, so a
+        Batch evaluates the methods on them."""
+        if share not in self._buried:
+            self._buried[share] = [(at, settled(burying(self.voters.at(at), share, a, b)))
+                                   for _, a, b, at in self.pairs]
+        return self._buried[share]
 
     def winner(self, method) -> np.ndarray:
         """The method's winner at every point: on the cached voters where they have every
@@ -316,14 +336,151 @@ class Prepared:
         return {"sincere": sincere, "poll": buried}
 
 
+def settled(voters: Voters) -> Voters:
+    """Strategic voters with nothing left to move: their score comparisons moved now
+    (Voters.compared, which moves them when a method asks), and without the ballots those
+    came from."""
+    compared = voters.scored_pairwise and {key: voters.compared(key) for key in voters.scored_pairwise}
+    return replace(voters, scored_pairwise=compared, frontrunners=None, bury=0.0, compromise=0.0, ballots=None,
+                   cells=None)
+
+
+def in_a_row(voters: Voters) -> Voters:
+    """The voters of a grid of points with the points in a row, (G, G, ...) to (G * G, ...),
+    without the ballots of strategic voters."""
+    points = len(voters.shape)
+
+    def flat(values):
+        if values is None:
+            return None
+        if isinstance(values, dict):
+            return {key: flat(value) for key, value in values.items()}
+        return values.reshape(-1, *values.shape[points:])
+
+    return replace(voters, ballots=None, cells=None,
+                   **{name: flat(getattr(voters, name))
+                      for name in ("first", "pairwise", "probs", "unscored", "scored_pairwise", "graded")})
+
+
+def joined(parts: list[Voters]) -> Voters:
+    """Voters of points in a row, of the same candidates in number, one after another as the
+    voters of one row of points. A method decides every point on its own, so it elects at
+    each what it elects there alone. The rankings are those of any part, each once, and a
+    part's voters have none of the others'."""
+    def stacked(name):
+        values = [getattr(part, name) for part in parts]
+        if values[0] is None:
+            return None
+        if isinstance(values[0], dict):
+            return {key: np.concatenate([value[key] for value in values]) for key in values[0]}
+        return np.concatenate(values)
+
+    changed = {name: stacked(name) for name in ("first", "pairwise", "unscored", "scored_pairwise", "graded")}
+    if parts[0].probs is not None:
+        column = {}  # of each ranking
+        columns = [[column.setdefault(tuple(ranking), len(column)) for ranking in part.rankings.tolist()]
+                   for part in parts]
+        probs = np.zeros((sum(len(part.probs) for part in parts), len(column)), dtype=parts[0].probs.dtype)
+        start = 0
+        for part, own in zip(parts, columns):
+            rows = probs[start:start + len(part.probs)]
+            for k, c in enumerate(own):  # a ranking can be there twice: buried, it is another one's
+                rows[:, c] += part.probs[:, k]
+            start += len(part.probs)
+        changed.update(rankings=np.array(list(column), dtype=parts[0].rankings.dtype), probs=probs)
+    return replace(parts[0], **changed)
+
+
+@dataclass
+class _Group:
+    """The configurations of a Batch with the same number of candidates: their voters in
+    one row of points, sincere and buried, and of each configuration (index among the
+    prepared, where its sincere points are, the shape of its grid, where its buried points
+    are, the points of the grid those are of, in their order)."""
+
+    sincere: Voters
+    buried: Voters
+    members: list[tuple[int, slice, tuple[int, ...], slice, np.ndarray]]
+
+
+class Batch:
+    """Prepared configurations as a few rows of points, to evaluate a method on all of
+    them in a few calls: most of the time of a method on the small grids of the search is
+    not the arithmetic but calling it, a hundred times for 20 configurations (each sincerely
+    and at every pair of frontrunners). The configurations with the same number of
+    candidates are one group (joined): its voters voting sincerely are one row, and those
+    burying, at every pair of frontrunners of every configuration (Prepared.buried), another.
+    A method decides each point on its own, so the winners are those of Prepared.winners."""
+
+    _ids = count()
+    _kept: dict = {}  # of(): by the configurations and the share
+
+    def __init__(self, prepared: list[Prepared], share: float = SHARE):
+        self.prepared, self.share, self.key = list(prepared), share, next(Batch._ids)
+        by_size: dict[int, list[int]] = {}
+        for index, p in enumerate(self.prepared):
+            by_size.setdefault(p.config.n_candidates, []).append(index)
+        self.groups = []
+        for indices in by_size.values():
+            sincere, buried, members = [], [], []
+            start = buried_start = 0
+            for index in indices:
+                p = self.prepared[index]
+                voters = in_a_row(p.voters)
+                sincere.append(voters)
+                parts = p.buried(share)
+                buried += [part for _, part in parts]
+                points = np.concatenate([np.flatnonzero(at) for at, _ in parts])
+                members.append((index, slice(start, start + len(voters.first)), p.voters.shape,
+                                slice(buried_start, buried_start + len(points)), points))
+                start += len(voters.first)
+                buried_start += len(points)
+            self.groups.append(_Group(joined(sincere), joined(buried), members))
+        for p in self.prepared:  # the rows hold them now
+            p._buried.pop(share, None)
+
+    @classmethod
+    def of(cls, prepared: list[Prepared], share: float = SHARE) -> "Batch":
+        """The batch of these configurations, made once (a few at most are kept)."""
+        key = (tuple(id(p) for p in prepared), share)
+        batch = cls._kept.get(key)
+        if batch is None:
+            while len(cls._kept) >= 4:
+                del cls._kept[next(iter(cls._kept))]
+            batch = cls._kept[key] = cls(prepared, share)  # holds the configurations, so their ids stay theirs
+        return batch
+
+    def winners(self, method, memo: Memo = MEMO) -> list[dict[str, np.ndarray]]:
+        """{scenario: winner} of SCENARIOS on every configuration, as Prepared.winners gives
+        them, remembering the subtrees (Memo) by the group."""
+        remembered = remembering(method, memo)
+        out: list[dict] = [{} for _ in self.prepared]
+        for g, group in enumerate(self.groups):
+            memo.context = ("batch", self.key, g, "sincere")
+            sincere = remembered.evaluate(group.sincere)[0]
+            memo.context = ("batch", self.key, g, self.share)
+            buried = remembered.evaluate(group.buried)[0]
+            for index, span, shape, buried_span, points in group.members:
+                out[index]["sincere"] = sincere[span].reshape(shape)
+                poll = np.empty(shape, dtype=buried.dtype)
+                poll.ravel()[points] = buried[buried_span]
+                out[index]["poll"] = poll
+        return out
+
+
 def errors(method, prepared: list[Prepared], share: float = SHARE) -> dict[str, list[float]]:
     """{scenario: [relative error on each configuration]}, "weights": [Config.weight of
     each] where one is not 1, and "rivals": [burial error of each one's rival, None
-    without] where one has a rival (objective)."""
+    without] where one has a rival (objective). The winners come from a Batch of the
+    configurations where the cached voters have every share the method reads."""
     out = {name: [] for name in SCENARIOS}
-    for p in prepared:
-        for name, winner in p.winners(method, share).items():
-            out[name].append(p.scorer.relative(winner))
+    if Burial(method, share).needs <= NEEDS:
+        found = Batch.of(prepared, share).winners(method)
+    else:
+        found = [p.winners(method, share) for p in prepared]
+    for p, winners in zip(prepared, found):
+        for name in SCENARIOS:
+            out[name].append(p.scorer.relative(winners[name]))
     weights = [p.config.weight for p in prepared]
     if any(weight != 1 for weight in weights):
         out["weights"] = weights
@@ -334,17 +491,9 @@ def errors(method, prepared: list[Prepared], share: float = SHARE) -> dict[str, 
 
 
 def warm(prepared: list[Prepared]):
-    """Scores a method of every way a score ballot is read, so that the MemoGrids of the
-    configurations remember what burial moves before the first method with a time limit."""
-    for ballot in SCORE_BALLOTS.values():
-        for method in (Highest(Tally(ballot)), Highest(Tally(ballot, statistic="median")),
-                       *(Unbeaten(ScoreComparisons(ballot, tie_weight=weight)) for weight in TIE_WEIGHTS)):
-            errors(method, prepared)
-    errors(D20, prepared)
-    for ballot in COARSE_BALLOTS.values():
-        errors(Highest(Tally(ballot, trim=TRIMS[1])), prepared)
-        for weight in TIE_WEIGHTS:
-            errors(Unbeaten(ScoreComparisons(ballot, tie_weight=weight)), prepared)
+    """Makes the Batch of the configurations, with the voters of each burying at every pair
+    of frontrunners, so that the first method with a time limit does not pay for it."""
+    Batch.of(prepared)
 
 
 def trimmed(values, trim: float = TRIM, weights=None) -> np.ndarray:

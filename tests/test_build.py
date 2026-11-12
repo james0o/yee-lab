@@ -839,3 +839,41 @@ MARGINS = Margins(Pairwise())
 def test_wrong_blocks_and_arguments_fail_when_built(build, error, message):
     with pytest.raises(error, match=re.escape(message)):
         build()
+
+
+def test_remaining_choices_are_the_first_and_the_last_remaining_of_every_ranking():
+    """voting.remaining_choices against the sum over the rankings, also where no one remains."""
+    from itertools import permutations
+
+    from yeelab.voting import remaining_choices
+
+    rng = np.random.default_rng(3)
+    rankings = np.array(list(permutations(range(4))))
+    probs = rng.random((6, 5, len(rankings)))
+    alive = rng.random((6, 5, 4)) < 0.6
+    alive[0, 0] = False
+    for last in (False, True):
+        expected = np.zeros((6, 5, 4))
+        for i, j in np.ndindex(6, 5):
+            for ranking, share in zip(rankings[:, ::-1] if last else rankings, probs[i, j]):
+                kept = [c for c in ranking if alive[i, j, c]]
+                expected[i, j, kept[0] if kept else ranking[0]] += share
+        np.testing.assert_array_equal(remaining_choices(rankings, probs, alive, last), expected)
+
+
+def test_a_shared_method_elects_what_the_method_does():
+    """build.shared: each repeated part evaluated once, the winners and margins the same."""
+    from yeelab.build.methods import METHODS
+    from yeelab.build.shared import repeats, shared
+    from yeelab.build.strategic import Burial
+    from yeelab.margin.regions import voters
+    from yeelab.margin.shares import Model
+
+    candidates = [[0.6, 0.35], [0.25, 0.4], [0.35, 0.3], [0.5, 0.5], [0.3, 0.7]]
+    assert not repeats(METHODS["irv"]) and shared(METHODS["irv"]) is METHODS["irv"]
+    for name in ("black", "search_5", "search_8", "smj_two"):
+        for method in (METHODS[name], Burial(METHODS[name], 0.3)):
+            assert repeats(method)
+            found = voters(method.needs, candidates, Model("beta", 0.2, "rms"), 12)
+            for one, other in zip(shared(method).evaluate(found), method.evaluate(found)):
+                np.testing.assert_array_equal(one, other)

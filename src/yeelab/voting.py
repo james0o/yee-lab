@@ -207,3 +207,64 @@ def irv_rounds(rankings: np.ndarray, probs: np.ndarray,
     threads.in_chunks(lambda a, b: _irv_points(rankings, flat[a:b], ballots[a:b], winner[a:b], margin[a:b]),
                       len(flat), CHUNK)
     return winner.reshape(shape), margin.reshape(shape)
+
+
+MASKED = 10  # candidates at most for the compiled choices of every set of remaining ones
+
+
+@njit(cache=True, nogil=True, error_model="numpy")
+def _remaining_points(rankings, probs, alive, last, out):
+    """remaining_choices for probs (P, R) and alive (P, C) into out (P, C). The choice of
+    every ranking among a set of remaining candidates is worked out once for the set, the
+    first time a point has it: neighbouring points mostly have the same."""
+    n_ballots, n = rankings.shape
+    choice = np.empty((1 << n, n_ballots), dtype=np.int16)
+    known = np.zeros(1 << n, dtype=np.bool_)
+    for p in range(probs.shape[0]):
+        mask = 0
+        for c in range(n):
+            if alive[p, c]:
+                mask |= 1 << c
+        if not known[mask]:
+            for r in range(n_ballots):
+                if last:
+                    pick = rankings[r, n - 1]  # of no one remaining: as argmax of none
+                    for k in range(n - 1, -1, -1):
+                        if alive[p, rankings[r, k]]:
+                            pick = rankings[r, k]
+                            break
+                else:
+                    pick = rankings[r, 0]
+                    for k in range(n):
+                        if alive[p, rankings[r, k]]:
+                            pick = rankings[r, k]
+                            break
+                choice[mask, r] = pick
+            known[mask] = True
+        for c in range(n):
+            out[p, c] = 0.0
+        for r in range(n_ballots):
+            out[p, choice[mask, r]] += probs[p, r]
+
+
+def remaining_choices(rankings: np.ndarray, probs: np.ndarray, alive: np.ndarray, last: bool = False) -> np.ndarray:
+    """votes[..., c] = the share of the voters whose first choice among the candidates
+    marked in alive (..., C) is c, or with `last` whose last one is, for rankings (R, C)
+    and their shares probs (..., R): the votes of a round of an elimination. Where no one
+    remains, a ranking counts for its first (last) candidate. Each point's shares are
+    added in the order of the rankings."""
+    n_ballots, n = rankings.shape
+    shape = probs.shape[:-1]
+    flat = np.ascontiguousarray(probs, dtype=np.float64).reshape(-1, n_ballots)
+    marked = np.ascontiguousarray(np.broadcast_to(alive, (*shape, n)), dtype=np.bool_).reshape(-1, n)
+    out = np.empty((len(flat), n))
+    if n > MASKED:  # too many sets for a table of them: by the arrays
+        order = rankings[:, ::-1] if last else rankings
+        chosen = order[np.arange(n_ballots), marked[:, order].argmax(axis=-1)]
+        index = chosen + n * np.arange(len(flat))[:, None]
+        out = np.bincount(index.ravel(), flat.ravel(), n * len(flat))
+    else:
+        rankings = np.ascontiguousarray(rankings, dtype=np.int64)
+        threads.in_chunks(lambda a, b: _remaining_points(rankings, flat[a:b], marked[a:b], last, out[a:b]),
+                          len(flat), CHUNK)
+    return out.reshape(*shape, n)

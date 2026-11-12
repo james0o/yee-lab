@@ -454,11 +454,25 @@ def _voter_grid(model: Model, medians):
     return _cached_voter_grid(model, np.ascontiguousarray(medians, dtype=np.float64).tobytes())
 
 
-@lru_cache(maxsize=8)  # a few MB each; all score shares of a ballot, and both grids of a drag, share one
-def _cached_ballots(candidates: bytes, model: Model, levels, rule, delta, mu, kappa, power, votes, by_order):
+BALLOT_TABLES = 8  # kept: a few MB each; all score shares of a ballot, and both grids of a drag, share one
+
+
+def _ballot_table(candidates: bytes, model: Model, levels, rule, delta, mu, kappa, power, votes, by_order):
     lines = _grid_lines(model)
     return score.ballot_table(lines, lines, np.frombuffer(candidates).reshape(-1, 2), levels, GRID_SUB, rule, delta,
                               mu=mu, kappa=kappa, power=power, votes=votes, by_order=by_order)
+
+
+_cached_ballots = lru_cache(maxsize=BALLOT_TABLES)(_ballot_table)
+
+
+def keep_ballots(tables: int = BALLOT_TABLES):
+    """Keeps this many ballot tables from now on, and forgets those kept: more than
+    BALLOT_TABLES where one set of candidates is read on more score ballots than that in
+    turns (yee-search prepares a dozen for every configuration), so that each is built
+    once."""
+    global _cached_ballots
+    _cached_ballots = lru_cache(maxsize=tables)(_ballot_table)
 
 
 def ballots(candidates, model: Model, levels: int, rule: score.Rule = score.RANGE, delta: float = score.DELTA,

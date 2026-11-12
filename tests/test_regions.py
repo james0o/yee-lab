@@ -804,3 +804,26 @@ def test_api_gives_the_winners_of_a_pixel_by_trim():
                 winner = method.evaluate(voters(method.needs, CANDIDATES.tolist(), MODELS[0], medians=median))[0]
                 assert row["winners"][trim] == winner[0, 1], (row["name"], trim, shares)
     assert client.post("/api/trims", json={**request, "median": [1.2, 0.5]}).status_code == 422
+
+
+def test_the_compiled_agreement_is_that_of_the_arrays():
+    """metrics._agreement in one pass against the same sums from whole arrays, with cycles,
+    draws and winners that are no candidate."""
+    from yeelab.margin import metrics
+    from yeelab.voting import draw
+
+    rng = np.random.default_rng(5)
+    for n, cycles in ((2, "skip"), (3, "worst"), (5, "skip"), (5, "worst")):
+        candidates = rng.random((n, 2))
+        coords = np.linspace(0, 1, 23)
+        points = np.stack(np.meshgrid(coords, coords ** 1.2, indexing="ij"), axis=-1)
+        winner = rng.integers(0, n, points.shape[:2])
+        pick = rng.random(winner.shape)
+        winner[pick < 0.1] = CYCLE
+        winner[(pick > 0.1) & (pick < 0.2)] = draw(np.arange(n) < 2)
+        winner[(pick > 0.2) & (pick < 0.25)] = n + 2
+        scale = float(np.median(np.linalg.norm(candidates[:, None] - candidates[None], axis=-1)[np.triu_indices(n, 1)]))
+        expected = metrics._agreement_of_arrays(candidates, points, winner, 0.2, scale, cycles)
+        found = voronoi_agreement(candidates, points, winner, 0.2, cycles)
+        for area in expected:
+            assert found[area] == pytest.approx(expected[area], rel=1e-10)

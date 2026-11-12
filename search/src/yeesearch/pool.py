@@ -59,7 +59,8 @@ def _start_worker(prepared: tuple[tuple[str, int], ...] = ()):
 def prepare(set_name: str, size: int) -> list[Prepared]:
     key = (set_name, size)
     if key not in _prepared:
-        _prepared[key] = [Prepared.of(config, config.grid or size) for config in SETS[set_name]()]
+        # each with its buried voters at once, while the tables of its score ballots are kept
+        _prepared[key] = [Prepared.of(config, config.grid or size, bury=SHARE) for config in SETS[set_name]()]
     return _prepared[key]
 
 

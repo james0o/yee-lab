@@ -465,13 +465,19 @@ def _offered(deviation: float) -> float:
     return deviation
 
 
+# The methods the warm-up runs: one for every compiled kernel and kind of share. The others
+# are built from the same blocks, and running all of them took the start a minute longer.
+WARM = [name for name in ("fptp", "irv", "dac", "nanson", "baldwin", "schulze", "koth", "star", "mj", "trimmed",
+                          "system321", "d21", "d20", "coarse_3", "voronoi") if name in DIAGRAMS]
+
+
 def _warm_up():
     """Build the default voters' CDF tables (~0.2 s) and their geometric medians (~0.2 s),
     and load the compiled kernels (compiled on the very first run, then from numba's
     cache) before the first request needs them."""
     for distribution in DISTRIBUTIONS:
         model = Model(distribution, DEVIATION, SPREAD if distribution == "beta" else None)
-        for method in DIAGRAMS:
+        for method in WARM:
             regions(method, CANDIDATES, model, 32)
     regions(DIAGRAMS[0], CANDIDATES, Model("beta", DEVIATION, SPREAD), 32, "geometric")
     # the kernels of the score shares of strategic voters: STAR reads them all
